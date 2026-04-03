@@ -1,0 +1,69 @@
+#!/bin/sh /etc/rc.common
+
+START=95
+STOP=10
+EXTRA_COMMANDS="status"
+EXTRA_HELP="	status	Show runtime status"
+
+NAME="codex-xray"
+BIN="/usr/local/bin/codex-xray-core"
+CONFIG="/etc/xray/codex-xray.json"
+PIDFILE="/var/run/${NAME}.pid"
+MPTCP_STATE_FILE="/var/run/${NAME}.mptcp"
+LOG_DIR="/var/log/xray"
+
+save_mptcp_state() {
+	[ -r /proc/sys/net/mptcp/enabled ] || return 0
+	cat /proc/sys/net/mptcp/enabled > "$MPTCP_STATE_FILE"
+	echo 0 > /proc/sys/net/mptcp/enabled
+}
+
+restore_mptcp_state() {
+	[ -r /proc/sys/net/mptcp/enabled ] || return 0
+	if [ -f "$MPTCP_STATE_FILE" ]; then
+		cat "$MPTCP_STATE_FILE" > /proc/sys/net/mptcp/enabled 2>/dev/null || true
+		rm -f "$MPTCP_STATE_FILE"
+	fi
+}
+
+start() {
+	[ -x "$BIN" ] || {
+		echo "$BIN missing"
+		return 1
+	}
+	[ -f "$CONFIG" ] || {
+		echo "$CONFIG missing"
+		return 1
+	}
+
+	mkdir -p "$LOG_DIR" /etc/xray /var/run
+
+	"$BIN" run -test -config "$CONFIG" >/dev/null 2>&1 || {
+		echo "config check failed"
+		return 1
+	}
+
+	save_mptcp_state
+	start-stop-daemon -S -b -m -p "$PIDFILE" -x "$BIN" -- run -config "$CONFIG"
+}
+
+stop() {
+	start-stop-daemon -K -p "$PIDFILE" -x "$BIN" 2>/dev/null || true
+	rm -f "$PIDFILE"
+	restore_mptcp_state
+}
+
+restart() {
+	stop
+	sleep 1
+	start
+}
+
+status() {
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+		echo "$NAME running"
+		return 0
+	fi
+	echo "$NAME stopped"
+	return 1
+}

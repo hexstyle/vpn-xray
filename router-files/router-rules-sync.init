@@ -1,0 +1,26 @@
+#!/bin/sh /etc/rc.common
+
+START=98
+STOP=07
+USE_PROCD=1
+
+start_service() {
+	procd_open_instance
+	procd_set_param command /bin/sh -c '
+interval="$(uci -q get router_rules.global.sync_interval 2>/dev/null || echo 300)"
+case "$interval" in
+	""|*[!0-9]*) interval=300 ;;
+esac
+[ "$interval" -ge 30 ] 2>/dev/null || interval=300
+while true; do
+	if command -v timeout >/dev/null 2>&1; then
+		ROUTER_RULES_SYNC_ACTOR=background timeout 180 /usr/bin/router-rules sync-apply-current >/tmp/router-rules-sync.log 2>&1 || true
+	else
+		ROUTER_RULES_SYNC_ACTOR=background /usr/bin/router-rules sync-apply-current >/tmp/router-rules-sync.log 2>&1 || true
+	fi
+	sleep "$interval"
+done
+'
+	procd_set_param respawn 10 5 0
+	procd_close_instance
+}

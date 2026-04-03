@@ -1,0 +1,1656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="robots" content="noindex, nofollow">
+  <meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate">
+  <meta http-equiv="pragma" content="no-cache">
+  <meta http-equiv="expires" content="0">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Xray Control</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f2f5f7;
+      --card: #ffffff;
+      --line: #d9e1e7;
+      --line-strong: #c5d2dc;
+      --text: #17212b;
+      --muted: #5f6f7f;
+      --good: #0d8b4b;
+      --bad: #c13838;
+      --warn: #b36c00;
+      --accent: #0b5fff;
+      --accent-2: #0a3fa8;
+      --chip: #eef4fb;
+      --chip-text: #24486f;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #eef4f8 0%, #f7f9fb 100%);
+      color: var(--text);
+    }
+
+    .wrap {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 24px 18px 40px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #0f2d4a 0%, #123f69 58%, #1a5f90 100%);
+      color: #fff;
+      border-radius: 18px;
+      padding: 24px 24px 20px;
+      box-shadow: 0 18px 50px rgba(16, 45, 74, 0.18);
+    }
+
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      line-height: 1.1;
+    }
+
+    .hero p {
+      margin: 0;
+      color: rgba(255,255,255,0.86);
+      max-width: 1080px;
+      line-height: 1.5;
+    }
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      font-size: 13px;
+      color: rgba(255,255,255,0.96);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 10px 24px rgba(23, 33, 43, 0.05);
+    }
+
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+
+    .subcopy {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .status-grid,
+    .compare-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .compare-grid.three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .status-box,
+    .compare-box,
+    .action-item {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      background: #fbfcfd;
+    }
+
+    .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .value {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .hint {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .ok { color: var(--good); }
+    .bad { color: var(--bad); }
+    .warn { color: var(--warn); }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      word-break: break-all;
+    }
+
+    .action-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .action-item h3 {
+      margin: 0 0 6px;
+      font-size: 15px;
+    }
+
+    .action-item p {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .action-row,
+    .form-actions,
+    .button-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 12px;
+      padding: 11px 14px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      background: #ebf1f8;
+      color: #17314d;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    button.primary:hover { background: var(--accent-2); }
+    button.warn-btn { background: #fff2df; color: #8b5300; }
+    button:disabled { opacity: 0.6; cursor: wait; }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 8px 12px;
+      font-size: 14px;
+      align-items: start;
+    }
+
+    .kv div:nth-child(odd) {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field-full {
+      grid-column: 1 / -1;
+    }
+
+    .field label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .field input,
+    .field select,
+    .field textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px 12px;
+      font: inherit;
+      color: var(--text);
+      background: #fff;
+    }
+
+    .field textarea {
+      min-height: 92px;
+      resize: vertical;
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .toggle-label {
+      font-weight: 700;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .toggle-switch {
+      position: relative;
+      display: inline-flex;
+      width: 56px;
+      height: 32px;
+      align-items: center;
+    }
+
+    .toggle-switch input {
+      position: absolute;
+      opacity: 0;
+      inset: 0;
+      margin: 0;
+      cursor: pointer;
+    }
+
+    .toggle-slider {
+      width: 56px;
+      height: 32px;
+      border-radius: 999px;
+      background: #c9d5e0;
+      transition: background 0.15s ease;
+      position: relative;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
+    }
+
+    .toggle-slider::after {
+      content: "";
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+      transition: transform 0.15s ease;
+    }
+
+    .toggle-switch input:checked + .toggle-slider {
+      background: var(--accent);
+    }
+
+    .toggle-switch input:checked + .toggle-slider::after {
+      transform: translateX(24px);
+    }
+
+    .toggle-state {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .readonly-pane {
+      background: #f8fbfd;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: var(--chip);
+      color: var(--chip-text);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .chip.bad {
+      background: #ffe8e8;
+      color: #8e2222;
+    }
+
+    .chip.ok {
+      background: #e7f7ef;
+      color: #115934;
+    }
+
+    .compare-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .compare-table th,
+    .compare-table td {
+      text-align: left;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    .compare-table th {
+      color: var(--muted);
+      width: 34%;
+      font-weight: 700;
+    }
+
+    .compare-table tr:last-child th,
+    .compare-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .compare-value {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .diff-badge {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #e7f7ef;
+      color: #115934;
+    }
+
+    .diff-badge.diff {
+      background: #fff2df;
+      color: #8b5300;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      background: #0d1823;
+      color: #d8e5f2;
+      border-radius: 14px;
+      padding: 14px;
+      min-height: 220px;
+      overflow: auto;
+    }
+
+    .subhead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .subhead p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .flash {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .flash.show { display: block; }
+    .flash.good { background: #e7f7ef; color: #115934; }
+    .flash.bad { background: #ffe8e8; color: #8e2222; }
+    .flash.info { background: #eaf2ff; color: #123f69; }
+
+    .flash.loading::before {
+      content: "";
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      margin-right: 8px;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 50%;
+      vertical-align: -2px;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    details.card summary {
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 18px;
+      list-style: none;
+      margin: -18px;
+      padding: 18px;
+    }
+
+    details.card summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.card[open] summary {
+      margin-bottom: 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    @media (max-width: 1120px) {
+      .grid,
+      .panels,
+      .form-grid,
+      .status-grid,
+      .compare-grid,
+      .compare-grid.three {
+        grid-template-columns: 1fr;
+      }
+
+      .kv {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>Xray Path</h1>
+      <p>
+        One control page for the full path: choose a VPS, let the router reach it over SSH, and keep router + VPS in sync.
+        The physical switch on the router body remains the only ON/OFF control for the path itself and is re-applied automatically.
+      </p>
+      <div class="hero-meta">
+        <div class="pill">Profile: <span id="heroProfile" class="mono">...</span></div>
+        <div class="pill">Target: <span id="heroTarget" class="mono">...</span></div>
+      </div>
+    </section>
+
+    <div id="flash" class="flash"></div>
+
+    <section class="grid">
+      <div class="card">
+        <h2>Selected VPS</h2>
+        <p class="subcopy">
+          Choose an existing VPS or create a new one. The router uses one host field for both SSH and Xray server address.
+          Xray / Reality values are taken from the live VPS when present, or generated automatically for a new server.
+        </p>
+        <div class="form-grid">
+          <div class="field field-full">
+            <label for="profileSelect">Existing Profiles</label>
+            <select id="profileSelect"></select>
+          </div>
+          <div class="field">
+            <label for="profileLabel">Label</label>
+            <input id="profileLabel" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="profileId">Profile ID</label>
+            <input id="profileId" autocomplete="off" spellcheck="false" readonly>
+          </div>
+          <div class="field field-full">
+            <label for="vpsHost">VPS Host / Address</label>
+            <input id="vpsHost" autocomplete="off" spellcheck="false" placeholder="IP or hostname used for SSH and Xray">
+          </div>
+          <div class="field">
+            <label for="authMode">SSH Auth Method</label>
+            <select id="authMode">
+              <option value="password">Login + Password</option>
+              <option value="private_key">SSH Private Key</option>
+              <option value="managed_key">Reuse Router Managed Key</option>
+            </select>
+          </div>
+          <div class="field" id="authUserField">
+            <label for="sshUser">SSH User</label>
+            <input id="sshUser" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field field-full" id="authPasswordField">
+            <label for="sshPassword">SSH Password</label>
+            <input id="sshPassword" type="password" autocomplete="new-password" spellcheck="false" placeholder="Used only for one-time bootstrap. After managed key install it is no longer needed.">
+          </div>
+          <div class="field field-full" id="authPrivateKeyField">
+            <label for="bootstrapKey">SSH Private Key</label>
+            <textarea id="bootstrapKey" class="mono" spellcheck="false" placeholder="Optional. Paste an SSH private key if this profile should bootstrap over key auth. This field is write-only."></textarea>
+          </div>
+          <div class="field">
+            <label for="sshPort">SSH Port</label>
+            <input id="sshPort" autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button id="createProfileBtn" type="button">New VPS</button>
+          <button class="primary" id="checkProfileBtn">Read VPS And Update Profile</button>
+          <button class="warn-btn" id="applyProfileBtn">Sync Router + VPS</button>
+        </div>
+        <div class="readonly-pane" style="margin-top:12px;">
+          <div class="label">Last VPS Read Result</div>
+          <pre id="checkResultOutput">No check run yet.</pre>
+        </div>
+        <details class="readonly-pane" style="margin-top:12px;">
+          <summary class="label" style="cursor:pointer;">Advanced Xray Settings</summary>
+          <div class="form-grid" style="margin-top:12px;">
+            <div class="field">
+              <label for="serverPort">Xray Server Port</label>
+              <input id="serverPort" autocomplete="off" spellcheck="false" readonly>
+            </div>
+            <div class="field">
+              <label for="serverName">Reality Server Name / SNI</label>
+              <input id="serverName" autocomplete="off" spellcheck="false" readonly>
+            </div>
+            <div class="field field-full">
+              <label for="uuid">UUID</label>
+              <input id="uuid" class="mono" autocomplete="off" spellcheck="false" readonly>
+            </div>
+            <div class="field field-full">
+              <label for="publicKey">Reality Public Key</label>
+              <textarea id="publicKey" class="mono" spellcheck="false" readonly></textarea>
+            </div>
+            <div class="field field-full">
+              <label for="privateKey">Reality Private Key</label>
+              <textarea id="privateKey" class="mono" spellcheck="false" readonly></textarea>
+            </div>
+            <div class="field">
+              <label for="shortId">Short ID</label>
+              <input id="shortId" class="mono" autocomplete="off" spellcheck="false" readonly>
+            </div>
+            <div class="field">
+              <label for="flow">Flow</label>
+              <input id="flow" autocomplete="off" spellcheck="false" readonly>
+            </div>
+          </div>
+        </details>
+        <details class="readonly-pane" style="margin-top:12px;">
+          <summary class="label" style="cursor:pointer;">Router SSH Key</summary>
+          <div style="margin-top:12px;">
+            <div id="managedKeyMeta" class="hint">...</div>
+            <pre id="managedPubkeyOutput">Waiting for profile data...</pre>
+          </div>
+        </details>
+      </div>
+
+      <div class="card">
+        <h2>Live State</h2>
+        <p class="subcopy">
+          Live state refreshes automatically. This block shows only the current path state, latest VPS inspection,
+          and whether the saved profile, router and VPS still match.
+        </p>
+        <div class="status-grid">
+          <div class="status-box">
+            <div class="label">Hardware Switch</div>
+            <div id="switchState" class="value">...</div>
+            <div class="hint">Physical ON/OFF switch on the router body. Enforced by the router watchdog service.</div>
+          </div>
+          <div class="status-box">
+            <div class="label">Path State</div>
+            <div id="pathActive" class="value">...</div>
+            <div class="hint">Whether the live transparent path is active right now.</div>
+          </div>
+          <div class="status-box">
+            <div class="label">Last VPS Check</div>
+            <div id="summaryInspect" class="value">...</div>
+            <div class="hint">Latest successful manual VPS read or apply result.</div>
+          </div>
+          <div class="status-box">
+            <div class="label">Remote Public IP</div>
+            <div id="summaryRemoteIp" class="value mono">...</div>
+            <div class="hint">Latest public IP detected from the selected VPS.</div>
+          </div>
+          <div class="status-box">
+            <div class="label">Sync State</div>
+            <div id="summaryDrift" class="value">...</div>
+            <div class="hint">Whether saved profile, router and VPS already match.</div>
+          </div>
+        </div>
+        <div class="readonly-pane" style="margin-top:12px;">
+          <div class="label">Live Snapshot</div>
+          <div class="kv" id="remoteInfoGrid">
+            <div>Inspection status</div><div>Loading...</div>
+          </div>
+        </div>
+        <details class="readonly-pane" style="margin-top:12px;">
+          <summary class="label" style="cursor:pointer;">Detailed Compare</summary>
+          <div style="margin-top:12px;">
+            <div id="syncChips" class="chip-row"></div>
+            <div class="compare-grid three" style="margin-top:12px;">
+              <div class="compare-box">
+                <div class="label">Saved Profile</div>
+                <table class="compare-table"><tbody id="desiredCompare"></tbody></table>
+              </div>
+              <div class="compare-box">
+                <div class="label">Live Router Config</div>
+                <table class="compare-table"><tbody id="routerCompare"></tbody></table>
+              </div>
+              <div class="compare-box">
+                <div class="label">Live VPS Config</div>
+                <table class="compare-table"><tbody id="remoteCompare"></tbody></table>
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="readonly-pane" style="margin-top:12px;">
+          <summary class="label" style="cursor:pointer;">Diagnostics</summary>
+          <div class="form-actions" style="margin-top:12px;">
+            <button class="primary" id="smokeBtn">Run Live Smoke Test</button>
+          </div>
+          <pre id="smokeOutput" style="margin-top:12px;">No smoke test run yet.</pre>
+        </details>
+        <details class="readonly-pane" style="margin-top:12px;">
+          <summary class="label" style="cursor:pointer;">Host Location / IP Details</summary>
+          <pre id="ipinfoOutput" style="margin-top:12px;">No inspection data yet.</pre>
+        </details>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:18px;">
+      <h2>Selective Address Filter</h2>
+      <p class="subcopy">
+        One shared list of domains, IPv4 addresses and CIDRs. On GL in <code>selective</code> mode, literal IP/CIDR entries are routed directly and
+        domain entries are tracked live through <code>dnsmasq -&gt; ipset</code>. The resolved IPv4 snapshot is kept for diagnostics and for
+        consumers like <code>shadowsocks-libev</code> that cannot route by domain.
+      </p>
+      <div class="subhead" style="align-items:flex-start;">
+        <div style="flex:1 1 auto;">
+          <div class="label" style="margin-bottom:8px;">Current Rules State</div>
+          <div id="rulesSummaryChips" class="chip-row"></div>
+        </div>
+        <div class="button-wrap" style="margin-top:0;">
+          <button class="warn-btn" id="rulesSyncBtn">Save List + Sync GitHub</button>
+        </div>
+      </div>
+      <div class="field field-full" style="margin-top:12px;">
+        <label for="rulesModeToggle">Routing Mode On This Router</label>
+        <div class="toggle-row">
+          <span class="toggle-label">Full</span>
+          <label class="toggle-switch" for="rulesModeToggle">
+            <input type="checkbox" id="rulesModeToggle" aria-label="Selective routing mode">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="toggle-label">Selective</span>
+          <span class="toggle-state" id="rulesModeStateText">Applying current mode...</span>
+        </div>
+        <div class="hint" id="rulesModeHint">
+          This switch applies locally on this router only and performs an immediate reset/cutover so the new mode is active right away. It does not sync with GitHub. <code>full</code> keeps the current behavior. <code>selective</code> redirects literal IP/CIDR entries directly and tracks domain entries through <code>dnsmasq -&gt; ipset</code>.
+        </div>
+      </div>
+      <div class="field field-full" style="margin-top:12px;">
+        <label for="rulesText">Shared Rules List</label>
+        <div class="hint" id="rulesEditorHint">
+          Edit the shared operator-facing list here. GitHub remains canonical during conflicts; unique local lines are appended on top during sync.
+        </div>
+        <textarea id="rulesText" class="mono" spellcheck="false" style="min-height:240px;"></textarea>
+      </div>
+      <div class="readonly-pane" style="margin-top:12px;">
+        <div class="label">GitHub Sync / Runtime Status</div>
+        <div id="rulesStatusGrid" style="display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin-top:12px;"></div>
+      </div>
+      <details class="readonly-pane" style="margin-top:12px;">
+        <summary class="label" style="cursor:pointer;">Diagnostics</summary>
+        <pre id="rulesTraceOutput" style="margin-top:12px;">No diagnostics yet.</pre>
+      </div>
+      <details class="readonly-pane" style="margin-top:12px;">
+        <summary class="label" style="cursor:pointer;">Repo Details</summary>
+        <pre id="rulesRepoDetails" style="margin-top:12px;">No repo details yet.</pre>
+      </details>
+    </section>
+
+    <section class="card" style="margin-top:18px;">
+      <div class="subhead">
+        <div>
+          <h2 style="margin:0;">Logs</h2>
+          <p>Recent switch, Xray and error lines. Loaded only on demand.</p>
+        </div>
+        <div class="button-wrap" style="margin-top:0;">
+          <button id="logsBtn">Refresh Logs</button>
+        </div>
+      </div>
+      <pre id="logsOutput">No logs loaded yet.</pre>
+    </section>
+  </div>
+
+  <script>
+    const runtimeApi = "/cgi-bin/xray-admin";
+    const vpsApi = "/cgi-bin/xray-vps";
+    const rulesApi = "/cgi-bin/xray-rules";
+    const state = {
+      runtime: null,
+      vps: null,
+      rules: null,
+      formDirty: false,
+      rulesDirty: false,
+      rulesEditorBaseHead: "",
+      refreshBusy: false,
+      rulesBusy: false,
+      logsBusy: false,
+      foregroundBusy: false,
+      uiReady: false
+    };
+
+    const compareFields = [
+      { key: "server_address", label: "VPS Host / Address", routerKey: "server_address", remoteKey: null },
+      { key: "server_port", label: "Server Port", routerKey: "server_port", remoteKey: "server_port" },
+      { key: "server_name", label: "Server Name / SNI", routerKey: "server_name", remoteKey: "server_name" },
+      { key: "uuid", label: "UUID", routerKey: "uuid", remoteKey: "uuid" },
+      { key: "public_key", label: "Reality Public Key", routerKey: "public_key", remoteKey: "public_key" },
+      { key: "private_key", label: "Reality Private Key", routerKey: null, remoteKey: "private_key" },
+      { key: "short_id", label: "Short ID", routerKey: "short_id", remoteKey: "short_id" },
+      { key: "flow", label: "Flow", routerKey: "flow", remoteKey: "flow" }
+    ];
+
+    function flash(message, kind = "good") {
+      const box = document.getElementById("flash");
+      box.textContent = message;
+      box.className = `flash show ${kind}`;
+    }
+
+    function flashLoading(message) {
+      const box = document.getElementById("flash");
+      box.textContent = message;
+      box.className = "flash show info loading";
+    }
+
+    function clearFlash() {
+      const box = document.getElementById("flash");
+      box.className = "flash";
+      box.textContent = "";
+    }
+
+    function statusText(enabled, onLabel = "running", offLabel = "stopped") {
+      return enabled ? onLabel : offLabel;
+    }
+
+    function applyState(el, enabled, onLabel, offLabel) {
+      el.textContent = statusText(enabled, onLabel, offLabel);
+      el.className = `value ${enabled ? "ok" : "bad"}`;
+    }
+
+    function setBusy(button, busy) {
+      if (button) {
+        button.disabled = busy;
+      }
+    }
+
+    function setControlsBusy(busy) {
+      state.foregroundBusy = busy;
+      [
+        "profileSelect",
+        "createProfileBtn",
+        "checkProfileBtn",
+        "applyProfileBtn",
+        "smokeBtn",
+        "logsBtn",
+        "rulesModeToggle",
+        "rulesSyncBtn",
+        "rulesText"
+      ].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.disabled = busy;
+        }
+      });
+    }
+
+    function setStartupControlsDisabled(disabled) {
+      [
+        "profileSelect",
+        "createProfileBtn",
+        "checkProfileBtn",
+        "applyProfileBtn",
+        "smokeBtn",
+        "rulesModeToggle",
+        "rulesSyncBtn",
+        "rulesText"
+      ].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.disabled = disabled;
+        }
+      });
+    }
+
+    function beginForegroundTask(message, pauseMs = 15000) {
+      setControlsBusy(true);
+      flashLoading(message);
+    }
+
+    function endForegroundTask() {
+      setControlsBusy(false);
+    }
+
+    function parseDiffList(text) {
+      return (text || "").split(",").map((item) => item.trim()).filter(Boolean);
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    async function callApi(base, action = "status", payload = null, options = {}) {
+      const timeoutMs = options.timeoutMs || 8000;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let response;
+      try {
+        if (payload) {
+          const body = new URLSearchParams({ action, ...payload });
+          response = await fetch(base, {
+            method: "POST",
+            credentials: "same-origin",
+            cache: "no-store",
+            headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+            body,
+            signal: controller.signal
+          });
+        } else {
+          response = await fetch(`${base}?action=${encodeURIComponent(action)}`, {
+            method: "GET",
+            credentials: "same-origin",
+            cache: "no-store",
+            signal: controller.signal
+          });
+        }
+        const text = await response.text();
+        try {
+          return JSON.parse(text);
+        } catch (err) {
+          throw new Error(`Invalid JSON from ${base}: ${text.slice(0, 300)}`);
+        }
+      } catch (err) {
+        if (err.name === "AbortError") {
+          throw new Error(`Request timeout after ${Math.round(timeoutMs / 1000)}s`);
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function activeProfile() {
+      if (!state.vps || !Array.isArray(state.vps.profiles)) {
+        return null;
+      }
+      return state.vps.profiles.find((item) => item.id === state.vps.active_profile_id) || state.vps.profiles[0] || null;
+    }
+
+    function formProfileId() {
+      return document.getElementById("profileId").value.trim();
+    }
+
+    function formPayload() {
+      const host = document.getElementById("vpsHost").value.trim();
+      return {
+        profile_id: document.getElementById("profileId").value.trim(),
+        label: document.getElementById("profileLabel").value.trim(),
+        auth_mode: document.getElementById("authMode").value,
+        ssh_host: host,
+        ssh_port: document.getElementById("sshPort").value.trim(),
+        ssh_user: document.getElementById("sshUser").value.trim(),
+        ssh_password: document.getElementById("sshPassword").value,
+        server_address: host,
+        server_port: document.getElementById("serverPort").value.trim(),
+        server_name: document.getElementById("serverName").value.trim(),
+        uuid: document.getElementById("uuid").value.trim(),
+        public_key: document.getElementById("publicKey").value.trim(),
+        private_key: document.getElementById("privateKey").value.trim(),
+        short_id: document.getElementById("shortId").value.trim(),
+        flow: document.getElementById("flow").value.trim(),
+        bootstrap_private_key: document.getElementById("bootstrapKey").value.trim()
+      };
+    }
+
+    function markDirty() {
+      state.formDirty = true;
+    }
+
+    function clearDirty() {
+      state.formDirty = false;
+    }
+
+    function markRulesDirty() {
+      state.rulesDirty = true;
+      updateRulesActionState();
+    }
+
+    function clearRulesDirty() {
+      state.rulesDirty = false;
+      updateRulesActionState();
+    }
+
+    function maybeField(id) {
+      return document.getElementById(id);
+    }
+
+    function setFieldVisible(wrapperId, visible) {
+      const wrap = maybeField(wrapperId);
+      if (wrap) {
+        wrap.style.display = visible ? "" : "none";
+      }
+    }
+
+    function updateAuthUi() {
+      const mode = document.getElementById("authMode").value;
+      setFieldVisible("authUserField", mode === "password" || mode === "private_key");
+      setFieldVisible("authPasswordField", mode === "password");
+      setFieldVisible("authPrivateKeyField", mode === "private_key");
+      if (mode !== "password") {
+        document.getElementById("sshPassword").value = "";
+      }
+      if (mode !== "private_key") {
+        document.getElementById("bootstrapKey").value = "";
+      }
+    }
+
+    function populateProfileSelect() {
+      const select = document.getElementById("profileSelect");
+      const current = state.vps?.active_profile_id || "";
+      const profiles = Array.isArray(state.vps?.profiles) ? state.vps.profiles : [];
+      if (!profiles.length) {
+        select.innerHTML = `<option value="">No saved VPS profiles</option>`;
+        select.value = "";
+        return;
+      }
+      select.innerHTML = profiles.map((profile) => (
+        `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.label || profile.id)} (${escapeHtml(profile.id)})</option>`
+      )).join("");
+      select.value = profiles.some((profile) => profile.id === current) ? current : profiles[0].id;
+    }
+
+    function populateProfileForm(profile, force = false) {
+      if (!profile) return;
+      if (!force && state.formDirty && formProfileId() === (profile.id || "")) {
+        updateAuthUi();
+        return;
+      }
+      document.getElementById("profileId").value = profile.id || "";
+      document.getElementById("profileLabel").value = profile.label || "";
+      document.getElementById("authMode").value = profile.auth_mode || "managed_key";
+      document.getElementById("vpsHost").value = profile.endpoint_host || profile.server_address || profile.ssh_host || "";
+      document.getElementById("sshPort").value = profile.ssh_port || "";
+      document.getElementById("sshUser").value = profile.ssh_user || "";
+      document.getElementById("sshPassword").value = "";
+      document.getElementById("serverPort").value = profile.server_port || "";
+      document.getElementById("serverName").value = profile.server_name || "";
+      document.getElementById("uuid").value = profile.uuid || "";
+      document.getElementById("publicKey").value = profile.public_key || "";
+      document.getElementById("privateKey").value = profile.private_key || "";
+      document.getElementById("shortId").value = profile.short_id || "";
+      document.getElementById("flow").value = profile.flow || "";
+      document.getElementById("bootstrapKey").value = "";
+      clearDirty();
+      updateAuthUi();
+    }
+
+    function formatUnixTime(ts) {
+      if (!ts) return "never";
+      const value = Number(ts);
+      if (!Number.isFinite(value) || value <= 0) return String(ts);
+      try {
+        return new Date(value * 1000).toLocaleString();
+      } catch (err) {
+        return String(ts);
+      }
+    }
+
+    function shortSig(value) {
+      if (!value) return "(none)";
+      const text = String(value);
+      if (text.length <= 24) return text;
+      return `${text.slice(0, 24)}...`;
+    }
+
+    function renderRuntime(data) {
+      document.getElementById("switchState").textContent = data.switch_state || "unknown";
+      document.getElementById("switchState").className = `value ${data.switch_state === "on" ? "ok" : data.switch_state === "off" ? "warn" : "bad"}`;
+      applyState(document.getElementById("pathActive"), data.path_active, "active", "inactive");
+    }
+
+    function renderHeroAndSummary(profile) {
+      const runtime = state.runtime || {};
+      const remote = profile?.remote_cache || {};
+      const routerDiff = parseDiffList(profile?.router_diff || "");
+      const remoteDiff = parseDiffList(profile?.remote_diff || "");
+      const drift = routerDiff.length || remoteDiff.length;
+      document.getElementById("heroProfile").textContent = profile?.label || profile?.id || "...";
+      document.getElementById("heroTarget").textContent = runtime.server_address || profile?.endpoint_host || "...";
+
+      document.getElementById("summaryRemoteIp").textContent = remote.public_ip || "(unknown)";
+      const inspectStatus = remote.status || profile?.last_inspect_status || "never";
+      const inspectText = inspectStatus === "ok"
+        ? `ok · ${formatUnixTime(profile?.last_inspect_at)}`
+        : inspectStatus;
+      document.getElementById("summaryInspect").textContent = inspectText;
+      document.getElementById("summaryInspect").className = `value ${inspectStatus === "ok" ? "ok" : "warn"}`;
+      document.getElementById("summaryDrift").textContent = drift ? "needs sync" : "in sync";
+      document.getElementById("summaryDrift").className = `value ${drift ? "warn" : "ok"}`;
+    }
+
+    function renderManagedKey(profile) {
+      const mode = profile.auth_mode || "managed_key";
+      const parts = [
+        `Auth mode: ${mode}`,
+        `Managed key: ${profile.managed_key_present ? "present" : "missing"}`,
+        `Password saved: ${profile.ssh_password_present ? "yes" : "no"}`,
+        `Bootstrap key: ${profile.bootstrap_key_present ? "present" : "not set"}`,
+        `Managed key path: ${profile.managed_key_path || "(unset)"}`
+      ];
+      document.getElementById("managedKeyMeta").textContent = parts.join(" | ");
+      document.getElementById("managedPubkeyOutput").textContent = profile.managed_pubkey || "(managed key not generated yet)";
+    }
+
+    function renderCheckSummary(profile) {
+      const remote = profile.remote_cache || {};
+      const routerDiff = parseDiffList(profile.router_diff);
+      const remoteDiff = parseDiffList(profile.remote_diff);
+      const lines = [
+        `Last read: ${remote.status || profile.last_inspect_status || "never"}${profile.last_inspect_at ? ` at ${formatUnixTime(profile.last_inspect_at)}` : ""}`,
+        `SSH access from router: ${remote.ssh_ok === "1" ? "ok" : "not confirmed"}`,
+        `Install support: ${remote.install_supported === "1" ? "supported" : "not supported"}`,
+        remote.install_notes ? `Install notes: ${remote.install_notes}` : "",
+        `Remote Xray: ${remote.xray_present === "1" ? "installed" : "not installed"}`,
+        remote.xray_version ? `Remote Xray version: ${remote.xray_version}` : "",
+        remote.public_ip ? `Remote public IP: ${remote.public_ip}` : "",
+        remote.pretty_name ? `Remote OS: ${remote.pretty_name}` : "",
+        routerDiff.length ? `Router drift vs selected profile: ${routerDiff.join(", ")}` : "Router drift vs selected profile: none",
+        remoteDiff.length ? `VPS drift vs selected profile: ${remoteDiff.join(", ")}` : "VPS drift vs selected profile: none"
+      ].filter(Boolean);
+      document.getElementById("checkResultOutput").textContent = lines.join("\n");
+    }
+
+    function renderRemoteInfo(profile) {
+      const remote = profile.remote_cache || {};
+      const rows = [
+        ["Selected host", profile.endpoint_host || "(unknown)"],
+        ["Last read", `${remote.status || profile.last_inspect_status || "never"}${profile.last_inspect_at ? ` at ${formatUnixTime(profile.last_inspect_at)}` : ""}`],
+        ["Router client", state.runtime?.xray_running ? "running" : "stopped"],
+        ["Transparent path", state.runtime?.path_active ? "active" : "inactive"],
+        ["SSH OK", remote.ssh_ok || "0"],
+        ["Public IP", remote.public_ip || "(unknown)"],
+        ["Host / FQDN", [remote.hostname, remote.fqdn].filter(Boolean).join(" | ") || "(unknown)"],
+        ["OS", remote.pretty_name || "(unknown)"],
+        ["Xray", remote.xray_present === "1" ? `present | ${remote.xray_version || "version unknown"}` : "not installed"],
+        ["Xray service", remote.xray_service || "(unknown)"],
+        ["Install support", remote.install_supported === "1" ? `supported: ${remote.install_notes || ""}` : `not supported: ${remote.install_notes || ""}`]
+      ];
+      document.getElementById("remoteInfoGrid").innerHTML = rows.map(([key, value]) => (
+        `<div>${escapeHtml(key)}</div><div class="mono">${escapeHtml(value)}</div>`
+      )).join("");
+
+      let ipinfoPretty = remote.ipinfo_json || "No inspection data yet.";
+      try {
+        const parsed = JSON.parse(remote.ipinfo_json || "{}");
+        const summary = [
+          parsed.ip && `ip: ${parsed.ip}`,
+          parsed.city && `city: ${parsed.city}`,
+          parsed.region && `region: ${parsed.region}`,
+          parsed.country && `country: ${parsed.country}`,
+          parsed.org && `org: ${parsed.org}`,
+          parsed.loc && `loc: ${parsed.loc}`,
+          parsed.timezone && `timezone: ${parsed.timezone}`
+        ].filter(Boolean);
+        if (summary.length) {
+          ipinfoPretty = `${summary.join("\n")}\n\nraw:\n${JSON.stringify(parsed, null, 2)}`;
+        }
+      } catch (err) {
+      }
+      document.getElementById("ipinfoOutput").textContent = ipinfoPretty;
+    }
+
+    function compareValue(value, matches) {
+      const safeValue = value === "" ? "(empty)" : value || "(empty)";
+      return `
+        <div class="compare-value">
+          <div class="mono">${escapeHtml(safeValue)}</div>
+          <span class="diff-badge ${matches ? "" : "diff"}">${matches ? "match" : "differs"}</span>
+        </div>
+      `;
+    }
+
+    function renderCompareTables(profile) {
+      const router = state.vps?.router_current || {};
+      const remote = profile.remote_cache || {};
+      const desiredHtml = compareFields.map((field) => (
+        `<tr><th>${escapeHtml(field.label)}</th><td>${compareValue(profile[field.key] || "", true)}</td></tr>`
+      )).join("");
+      const routerHtml = compareFields.map((field) => {
+        const desired = profile[field.key] || "";
+        if (!field.routerKey) {
+          return `<tr><th>${escapeHtml(field.label)}</th><td>${compareValue("(not stored on router)", true)}</td></tr>`;
+        }
+        const current = router[field.routerKey] || "";
+        return `<tr><th>${escapeHtml(field.label)}</th><td>${compareValue(current, desired === current)}</td></tr>`;
+      }).join("");
+      const remoteHtml = compareFields.map((field) => {
+        const desired = profile[field.key] || "";
+        const current = field.remoteKey ? (remote[field.remoteKey] || "") : "(not applicable on VPS)";
+        const matches = field.remoteKey ? desired === current : true;
+        return `<tr><th>${escapeHtml(field.label)}</th><td>${compareValue(current, matches)}</td></tr>`;
+      }).join("");
+      document.getElementById("desiredCompare").innerHTML = desiredHtml;
+      document.getElementById("routerCompare").innerHTML = routerHtml;
+      document.getElementById("remoteCompare").innerHTML = remoteHtml;
+    }
+
+    function directRouterVsRemoteDiff(profile) {
+      const router = state.vps?.router_current || {};
+      const remote = profile.remote_cache || {};
+      const diffs = [];
+      compareFields.forEach((field) => {
+        if (!field.routerKey || !field.remoteKey) return;
+        const routerValue = router[field.routerKey] || "";
+        const remoteValue = remote[field.remoteKey] || "";
+        if (routerValue !== remoteValue) {
+          diffs.push(field.label);
+        }
+      });
+      return diffs;
+    }
+
+    function renderSyncOverview(profile) {
+      const routerDiff = parseDiffList(profile.router_diff);
+      const remoteDiff = parseDiffList(profile.remote_diff);
+      const routerVsRemote = directRouterVsRemoteDiff(profile);
+      const chips = [
+        `<span class="chip ${routerDiff.length ? "bad" : "ok"}">Router: ${escapeHtml(routerDiff.length ? routerDiff.join(", ") : "match")}</span>`,
+        `<span class="chip ${remoteDiff.length ? "bad" : "ok"}">VPS: ${escapeHtml(remoteDiff.length ? remoteDiff.join(", ") : "match")}</span>`,
+        `<span class="chip ${routerVsRemote.length ? "bad" : "ok"}">Router vs VPS: ${escapeHtml(routerVsRemote.length ? routerVsRemote.join(", ") : "match")}</span>`
+      ];
+      document.getElementById("syncChips").innerHTML = chips.join("");
+    }
+
+    function renderRules(data) {
+      const repoReady = !!data.repo_ready;
+      const intervalSeconds = Number(data.sync_interval || 0) || 30;
+      const lastSyncStatus = data.last_sync_status || "never";
+      const lastSyncAt = data.last_sync_at ? ` · ${formatUnixTime(data.last_sync_at)}` : "";
+      const lastSyncEpoch = Number(data.last_sync_at || 0) || 0;
+      const syncFresh = lastSyncEpoch > 0 && ((Math.floor(Date.now() / 1000) - lastSyncEpoch) <= intervalSeconds * 3);
+      const lastCutoverStatus = data.last_cutover_status || "never";
+      const lastCutoverAt = data.last_cutover_at ? ` · ${formatUnixTime(data.last_cutover_at)}` : "";
+      const cutoverRequired = !!data.cutover_required;
+      const phase = data.sync_phase || "unknown";
+      const phaseAt = data.sync_phase_at ? ` · ${formatUnixTime(data.sync_phase_at)}` : "";
+      const syncActor = data.sync_actor || data.last_sync_actor || "unknown";
+      const trace = (data.sync_trace || "").split(" || ").filter(Boolean);
+      const counts = `${data.source_count || 0} source / ${data.domain_count || 0} domains / ${data.literal_count || 0} literal / ${data.resolved_count || 0} resolved-snapshot / ${data.xray_ipset_count || 0} live-set`;
+      const phaseLabels = {
+        checking_remote: "Checking GitHub and local state",
+        drift_detected: "Changes found, reset is about to start",
+        cutover_in_progress: "Reset is in progress",
+        verified: "Everything is current",
+        error: "Sync failed"
+      };
+      const currentPhase = phaseLabels[phase] || phase;
+      const runtimeState = cutoverRequired
+        ? "Changes are applied in config, but old connections may still be alive until reset finishes."
+        : "Current rules are active on the router.";
+      const statusRows = [
+        ["Background checks", `Every ${intervalSeconds}s · ${syncFresh ? "running normally" : "status is stale"}`],
+        ["Current phase", `${currentPhase}${phaseAt}`],
+        ["Phase detail", data.sync_phase_message || "(no detail)"],
+        ["GitHub sync", `${lastSyncStatus}${lastSyncAt} · actor=${syncActor}`],
+        ["Runtime state", runtimeState],
+        ["Last reset", `${lastCutoverStatus}${lastCutoverAt}`],
+        ["Last verified", formatUnixTime(data.last_verified_at)]
+      ];
+      const diagnosticsLines = [
+        `GitHub head: ${data.repo_head || "(none)"}`,
+        `Rules checksum: ${shortSig(data.rules_checksum)}`,
+        `Applied signature: ${shortSig(data.last_apply_signature)}`,
+        `Cutover signature: ${shortSig(data.last_cutover_signature)}`,
+        `Routing mode: ${data.xray_mode || "full"}`,
+        `Counts: ${counts}`,
+        data.last_sync_message ? `Sync message: ${data.last_sync_message}` : "",
+        data.last_cutover_message ? `Cutover message: ${data.last_cutover_message}` : "",
+        "",
+        trace.length ? "Recent activity:" : "Recent activity: (none yet)",
+        ...trace.map((item) => `- ${item}`)
+      ].filter((line, index, array) => line || (index > 0 && array[index - 1] !== ""));
+      const repoLines = [
+        `Repo path: ${data.repo_path || "(unknown)"}`,
+        `Rules file: ${data.rules_relpath || "(unknown)"}`,
+        `Repo head: ${data.repo_head || "(none)"}`,
+        `Sync interval: ${intervalSeconds}s`,
+        `Repo dirty: ${data.repo_dirty ? "yes" : "no"}`,
+        `Push enabled: ${data.enable_push ? "yes" : "no"}`,
+        `Repo ready: ${repoReady ? "yes" : "no"}`
+      ].filter(Boolean);
+      const chips = [
+        `<span class="chip ${repoReady ? "ok" : "bad"}">Repo: ${escapeHtml(repoReady ? "ready" : "missing")}</span>`,
+        `<span class="chip ${data.xray_mode === "selective" ? "ok" : ""}">Mode: ${escapeHtml(data.xray_mode || "full")}</span>`,
+        `<span class="chip">Rules: ${escapeHtml(counts)}</span>`,
+        `<span class="chip ${syncFresh ? "ok" : "warn"}">Loop: ${escapeHtml(syncFresh ? "fresh" : "stale")}</span>`,
+        `<span class="chip ${lastSyncStatus === "ok" ? "ok" : "bad"}">GitHub: ${escapeHtml(lastSyncStatus)}</span>`,
+        `<span class="chip ${cutoverRequired ? "warn" : "ok"}">Runtime: ${escapeHtml(cutoverRequired ? "reset pending" : "current")}</span>`,
+        `<span class="chip ${phase === "error" ? "bad" : phase === "verified" ? "ok" : "warn"}">Phase: ${escapeHtml(phase)}</span>`,
+        `<span class="chip ${state.rulesDirty ? "bad" : "ok"}">${state.rulesDirty ? "Local edits pending" : "Editor clean"}</span>`
+      ];
+
+      document.getElementById("rulesSummaryChips").innerHTML = chips.join("");
+      const modeToggle = document.getElementById("rulesModeToggle");
+      if (modeToggle) {
+        modeToggle.checked = (data.xray_mode || "full") === "selective";
+      }
+      const modeStateText = document.getElementById("rulesModeStateText");
+      if (modeStateText) {
+        modeStateText.textContent = (data.xray_mode || "full") === "selective"
+          ? "Selective routing is active on this router."
+          : "Full routing is active on this router.";
+        modeStateText.className = `toggle-state ${data.xray_mode === "selective" ? "ok" : ""}`;
+      }
+      if (!state.rulesDirty) {
+        document.getElementById("rulesText").value = data.rules_text || "";
+        state.rulesEditorBaseHead = data.repo_head || "";
+      }
+      document.getElementById("rulesStatusGrid").innerHTML = statusRows.map(([key, value]) => (
+        `<div>${escapeHtml(key)}</div><div class="mono">${escapeHtml(value)}</div>`
+      )).join("");
+      document.getElementById("rulesTraceOutput").textContent = diagnosticsLines.join("\n");
+      document.getElementById("rulesRepoDetails").textContent = repoLines.join("\n");
+      updateRulesActionState();
+    }
+
+    function updateRulesActionState() {
+      const button = document.getElementById("rulesSyncBtn");
+      const hint = document.getElementById("rulesEditorHint");
+      if (button) {
+        button.textContent = state.rulesDirty ? "Save List + Sync GitHub" : "Sync GitHub Rules";
+      }
+      if (hint) {
+        hint.textContent = state.rulesDirty
+          ? "You have unsaved local edits. If GitHub did not move since this editor state was loaded, the edited list is saved exactly as-is. If GitHub moved, conflict handling keeps GitHub as the base and appends only truly unique local lines."
+          : "No local edits pending. Sync checks GitHub, applies real ruleset changes, and if drift is found it performs the reset/cutover automatically. If nothing changed, it only refreshes sync status.";
+      }
+    }
+
+    async function setRulesMode(mode, input) {
+      beginForegroundTask(`Applying ${mode} routing mode with hard cutover...`, 30000);
+      setBusy(input, true);
+      try {
+        const data = await callApi(rulesApi, "set_mode", { mode }, { timeoutMs: 30000 });
+        if (data.ok === false) {
+          throw new Error(data.error || "backend error");
+        }
+        state.rules = data;
+        renderRules(data);
+        await refreshAll(false, false, true);
+        flash(`Routing mode applied locally with hard cutover: ${mode}.`, "good");
+      } catch (err) {
+        if (state.rules) {
+          renderRules(state.rules);
+        } else if (input) {
+          input.checked = !input.checked;
+        }
+        flash(`Routing mode change failed: ${err.message}`, "bad");
+        document.getElementById("rulesTraceOutput").textContent = `Routing mode change failed: ${err.message}`;
+      } finally {
+        setBusy(input, false);
+        endForegroundTask();
+      }
+    }
+
+    function renderAll(forceForm = false) {
+      const runtime = state.runtime;
+      const profile = activeProfile();
+      if (runtime) {
+        renderRuntime(runtime);
+      }
+      if (profile) {
+        renderHeroAndSummary(profile);
+        populateProfileSelect();
+        populateProfileForm(profile, forceForm);
+        renderManagedKey(profile);
+        renderCheckSummary(profile);
+        renderRemoteInfo(profile);
+        renderCompareTables(profile);
+        renderSyncOverview(profile);
+      } else {
+        renderHeroAndSummary(null);
+      }
+      updateAuthUi();
+    }
+
+    async function refreshAll(showMessage = false, forceForm = false, allowWhileBusy = false) {
+      if ((state.foregroundBusy && !allowWhileBusy) || state.refreshBusy) {
+        return;
+      }
+      state.refreshBusy = true;
+      try {
+        const [runtime, vps] = await Promise.all([
+          callApi(runtimeApi, "status", null, { timeoutMs: 6000 }),
+          callApi(vpsApi, "status", null, { timeoutMs: 6000 })
+        ]);
+        state.runtime = runtime;
+        state.vps = vps;
+        renderAll(forceForm);
+        if (showMessage) {
+          flash("Status refreshed.", "good");
+        }
+      } finally {
+        state.refreshBusy = false;
+      }
+    }
+
+    async function loadLogs() {
+      if (state.foregroundBusy || state.logsBusy) {
+        return;
+      }
+      state.logsBusy = true;
+      try {
+        const data = await callApi(runtimeApi, "logs", null, { timeoutMs: 8000 });
+        const out = [
+          "=== gl-switch ===",
+          data.switch_logs || "(empty)",
+          "",
+          "=== xray access ===",
+          data.access_logs || "(empty)",
+          "",
+          "=== xray error ===",
+          data.error_logs || "(empty)"
+        ].join("\n");
+        document.getElementById("logsOutput").textContent = out;
+      } catch (err) {
+        document.getElementById("logsOutput").textContent = `Failed to load logs: ${err.message}`;
+      } finally {
+        state.logsBusy = false;
+      }
+    }
+
+    async function refreshRules() {
+      if (state.foregroundBusy || state.rulesBusy) {
+        return;
+      }
+      state.rulesBusy = true;
+      try {
+        const data = await callApi(rulesApi, "status", null, { timeoutMs: 6000 });
+        state.rules = data;
+        renderRules(data);
+      } finally {
+        state.rulesBusy = false;
+      }
+    }
+
+    async function syncRules(button) {
+      beginForegroundTask("Syncing shared rules with GitHub and applying them...", 45000);
+      setBusy(button, true);
+      try {
+        const data = await callApi(rulesApi, "sync_rules", {
+          rules_text: document.getElementById("rulesText").value,
+          base_repo_head: state.rulesEditorBaseHead || state.rules?.repo_head || ""
+        }, { timeoutMs: 45000 });
+        if (data.ok === false) {
+          throw new Error(data.error || "backend error");
+        }
+        state.rules = data;
+        clearRulesDirty();
+        renderRules(data);
+        await refreshAll(false, false, true);
+        flash(data.sync_phase_message || "Rules sync finished.", "good");
+      } catch (err) {
+        flash(`Rules sync failed: ${err.message}`, "bad");
+        document.getElementById("rulesTraceOutput").textContent = `Rules sync failed: ${err.message}`;
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
+    async function runSmoke() {
+      beginForegroundTask("Running live smoke test...", 15000);
+      document.getElementById("smokeOutput").textContent = "Running smoke test...";
+      try {
+        const data = await callApi(runtimeApi, "smoke", null, { timeoutMs: 20000 });
+        const out = [
+          "=== https test (example.com) ===",
+          data.https_test || "(empty)",
+          "",
+          "=== egress ip (ipinfo.io/ip) ===",
+          data.egress || "(empty)",
+          "",
+          "=== openai api ===",
+          data.openai_api || "(empty)"
+        ].join("\n");
+        document.getElementById("smokeOutput").textContent = out;
+        flash("Smoke test finished.", "good");
+      } catch (err) {
+        document.getElementById("smokeOutput").textContent = `Smoke test failed: ${err.message}`;
+        flash(`Smoke test failed: ${err.message}`, "bad");
+      } finally {
+        endForegroundTask();
+      }
+    }
+
+    async function selectProfile(profileId) {
+      beginForegroundTask(`Switching to profile "${profileId}"...`, 10000);
+      try {
+        const data = await callApi(vpsApi, "select_profile", { profile_id: profileId }, { timeoutMs: 10000 });
+        if (data.ok === false) {
+          throw new Error(data.error || "backend error");
+        }
+        if (data.status) {
+          state.vps = data.status;
+        }
+        clearDirty();
+        renderAll(true);
+        flash(`Active profile switched to "${profileId}".`, "good");
+      } catch (err) {
+        flash(`Failed to switch profile: ${err.message}`, "bad");
+      } finally {
+        endForegroundTask();
+      }
+    }
+
+    async function createProfile(button) {
+      beginForegroundTask("Creating new VPS profile...", 15000);
+      setBusy(button, true);
+      try {
+        const data = await callApi(vpsApi, "create_profile", {}, { timeoutMs: 15000 });
+        if (data.ok === false) {
+          throw new Error(data.error || "backend error");
+        }
+        if (data.status) {
+          state.vps = data.status;
+        }
+        clearDirty();
+        renderAll(true);
+        flash(`Created new VPS profile "${data.created_profile_id || "new"}".`, "good");
+      } catch (err) {
+        flash(`Failed to create profile: ${err.message}`, "bad");
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
+    async function checkProfile(button) {
+      if (!state.uiReady) {
+        return;
+      }
+      const useDirtyForm = state.formDirty;
+      const action = useDirtyForm ? "check_profile" : "adopt_vps";
+      const payload = useDirtyForm ? formPayload() : null;
+      beginForegroundTask("Reading VPS over SSH and comparing live settings...", 25000);
+      setBusy(button, true);
+      document.getElementById("checkResultOutput").textContent = useDirtyForm
+        ? "Testing the edited connection settings, then reading live server-side Xray settings..."
+        : "Reading live server-side Xray settings from the selected VPS...";
+      try {
+        const data = await callApi(vpsApi, action, payload, { timeoutMs: 25000 });
+        if (data.ok === false) {
+          throw new Error(data.error || "backend error");
+        }
+        if (data.status) {
+          state.vps = data.status;
+        }
+        clearDirty();
+        renderAll(true);
+        flash(
+          useDirtyForm
+            ? "VPS read complete. The edited connection settings worked and live server-side settings were adopted."
+            : "VPS read complete. Live server-side settings were adopted into the selected profile.",
+          "good"
+        );
+      } catch (err) {
+        flash(`VPS read failed: ${err.message}`, "bad");
+        document.getElementById("checkResultOutput").textContent = `VPS read failed: ${err.message}`;
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
+    async function applyProfile(button) {
+      beginForegroundTask("Syncing selected profile to VPS and router...", 35000);
+      setBusy(button, true);
+      document.getElementById("checkResultOutput").textContent = "Applying selected profile to VPS and router...";
+      try {
+        const data = await callApi(vpsApi, "apply_profile", formPayload(), { timeoutMs: 45000 });
+        if (data.ok === false) {
+          throw new Error(data.error || "backend error");
+        }
+        if (data.status) {
+          state.vps = data.status;
+        }
+        clearDirty();
+        await refreshAll(false, true, true);
+        flash("Selected profile synced to both VPS and router.", "good");
+      } catch (err) {
+        flash(`Apply failed: ${err.message}`, "bad");
+        document.getElementById("checkResultOutput").textContent = `Apply failed: ${err.message}`;
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
+    document.getElementById("checkProfileBtn").addEventListener("click", (event) => checkProfile(event.currentTarget));
+    document.getElementById("applyProfileBtn").addEventListener("click", (event) => applyProfile(event.currentTarget));
+    document.getElementById("createProfileBtn").addEventListener("click", (event) => createProfile(event.currentTarget));
+    document.getElementById("logsBtn").addEventListener("click", loadLogs);
+    document.getElementById("smokeBtn").addEventListener("click", runSmoke);
+    document.getElementById("rulesSyncBtn").addEventListener("click", (event) => syncRules(event.currentTarget));
+    document.getElementById("rulesModeToggle").addEventListener("change", (event) => {
+      setRulesMode(event.currentTarget.checked ? "selective" : "full", event.currentTarget);
+    });
+    document.getElementById("profileSelect").addEventListener("change", (event) => {
+      selectProfile(event.target.value);
+    });
+    document.getElementById("authMode").addEventListener("change", () => {
+      markDirty();
+      updateAuthUi();
+    });
+
+    [
+      "profileId",
+      "profileLabel",
+      "vpsHost",
+      "sshPort",
+      "sshUser",
+      "sshPassword",
+      "bootstrapKey"
+    ].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener("input", markDirty);
+      }
+    });
+    document.getElementById("rulesText").addEventListener("input", markRulesDirty);
+
+    setStartupControlsDisabled(true);
+    flashLoading("Loading current router and VPS state...");
+
+    callApi(runtimeApi, "status", null, { timeoutMs: 4000 })
+      .then((runtime) => {
+        state.runtime = runtime;
+        renderAll(false);
+      })
+      .catch(() => {});
+
+    callApi(vpsApi, "status", null, { timeoutMs: 4000 })
+      .then((vps) => {
+        state.vps = vps;
+        renderAll(true);
+        state.uiReady = true;
+        setStartupControlsDisabled(false);
+        clearFlash();
+      })
+      .catch((err) => {
+        state.uiReady = true;
+        setStartupControlsDisabled(false);
+        flash(`Initial load failed: ${err.message}`, "bad");
+      });
+
+    refreshRules().catch(() => {});
+
+    setInterval(() => {
+      refreshAll(false, false).catch(() => {});
+      refreshRules().catch(() => {});
+    }, 10000);
+  </script>
+</body>
+</html>

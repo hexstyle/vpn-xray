@@ -1,0 +1,1033 @@
+#!/bin/sh
+
+set -e
+
+PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+
+CONFIG_PKG='router_rules'
+CONFIG_SECTION='global'
+DEFAULT_REPO_FETCH_URL='REPLACE_WITH_RULES_REPO_FETCH_URL'
+DEFAULT_REPO_PUSH_URL='REPLACE_WITH_RULES_REPO_PUSH_URL'
+DEFAULT_REPO_BRANCH='main'
+DEFAULT_REPO_PATH='/etc/router-rules/repo'
+DEFAULT_RULES_RELPATH='lists/shared-targets.txt'
+DEFAULT_GENERATED_DIR='/etc/router-rules/generated'
+DEFAULT_SSH_KEY_PATH='/etc/router-rules/ssh/routerRules_ed25519'
+DEFAULT_KNOWN_HOSTS='/etc/router-rules/ssh/known_hosts'
+DEFAULT_GIT_USER_NAME='router-rules'
+DEFAULT_GIT_USER_EMAIL='router-rules@example.invalid'
+DEFAULT_DNS_RESOLVER='1.1.1.1 9.9.9.9'
+DEFAULT_DEVICE_ID='router'
+DEFAULT_ENABLE_PUSH='0'
+DEFAULT_XRAY_MODE='full'
+DEFAULT_XRAY_IPSET='xray_selective_dst'
+DEFAULT_XRAY_DNSMASQ_CONF='/tmp/dnsmasq.d/router-rules-xray-ipset.conf'
+DEFAULT_SS_PACKAGE='shadowsocks-libev'
+DEFAULT_SS_SECTION='ss_rules'
+DEFAULT_SYNC_INTERVAL='30'
+DEFAULT_CONSUMER='xray'
+STATUS_FILE='/tmp/router-rules.status'
+LOCK_DIR='/tmp/router-rules.lock.d'
+
+json_escape() {
+	printf '%s' "${1:-}" | sed ':a;N;$!ba;s/\\/\\\\/g;s/"/\\"/g;s/\r/\\r/g;s/\t/\\t/g;s/\n/\\n/g'
+}
+
+json_bool() {
+	if [ "${1:-0}" = '1' ]; then
+		printf 'true'
+	else
+		printf 'false'
+	fi
+}
+
+is_placeholder_value() {
+	case "${1:-}" in
+		''|REPLACE_WITH*|CHANGE_ME*|CHANGEME*|YOUR_*)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+cfg_get() {
+	local key="$1"
+	local default="$2"
+	local value=''
+
+	value="$(uci -q get "${CONFIG_PKG}.${CONFIG_SECTION}.${key}" 2>/dev/null || true)"
+	if [ -n "$value" ]; then
+		printf '%s\n' "$value"
+	else
+		printf '%s\n' "$default"
+	fi
+}
+
+repo_fetch_url() { cfg_get repo_fetch_url "$DEFAULT_REPO_FETCH_URL"; }
+repo_push_url() { cfg_get repo_push_url "$DEFAULT_REPO_PUSH_URL"; }
+repo_branch() { cfg_get repo_branch "$DEFAULT_REPO_BRANCH"; }
+repo_path() { cfg_get repo_path "$DEFAULT_REPO_PATH"; }
+rules_relpath() { cfg_get rules_relpath "$DEFAULT_RULES_RELPATH"; }
+generated_dir() { cfg_get generated_dir "$DEFAULT_GENERATED_DIR"; }
+ssh_key_path() { cfg_get ssh_key_path "$DEFAULT_SSH_KEY_PATH"; }
+known_hosts_path() { cfg_get known_hosts_path "$DEFAULT_KNOWN_HOSTS"; }
+git_user_name() { cfg_get git_user_name "$DEFAULT_GIT_USER_NAME"; }
+git_user_email() { cfg_get git_user_email "$DEFAULT_GIT_USER_EMAIL"; }
+dns_resolver() { cfg_get dns_resolver "$DEFAULT_DNS_RESOLVER"; }
+device_id() { cfg_get local_device_id "$DEFAULT_DEVICE_ID"; }
+enable_push() { cfg_get enable_push "$DEFAULT_ENABLE_PUSH"; }
+xray_mode() { cfg_get xray_mode "$DEFAULT_XRAY_MODE"; }
+xray_ipset() { cfg_get xray_ipset "$DEFAULT_XRAY_IPSET"; }
+xray_dnsmasq_conf() { cfg_get xray_dnsmasq_conf "$DEFAULT_XRAY_DNSMASQ_CONF"; }
+ss_package() { cfg_get ss_package "$DEFAULT_SS_PACKAGE"; }
+ss_section() { cfg_get ss_section "$DEFAULT_SS_SECTION"; }
+sync_interval() { cfg_get sync_interval "$DEFAULT_SYNC_INTERVAL"; }
+consumer() { cfg_get consumer "$DEFAULT_CONSUMER"; }
+
+repo_rules_path() {
+	printf '%s/%s\n' "$(repo_path)" "$(rules_relpath)"
+}
+
+resolved_file() {
+	printf '%s/resolved_ipv4.txt\n' "$(generated_dir)"
+}
+
+mapping_file() {
+	printf '%s/resolution_map.tsv\n' "$(generated_dir)"
+}
+
+domain_file() {
+	printf '%s/domains.txt\n' "$(generated_dir)"
+}
+
+literal_file() {
+	printf '%s/literals_ipv4.txt\n' "$(generated_dir)"
+}
+
+status_get() {
+	local key="$1"
+	[ -f "$STATUS_FILE" ] || return 0
+	sed -n "s/^${key}=//p" "$STATUS_FILE" | sed -n '1p'
+}
+
+status_set() {
+	local key="$1"
+	local value="$2"
+	local tmp
+
+	tmp="$(mktemp)"
+	if [ -f "$STATUS_FILE" ]; then
+		grep -v "^${key}=" "$STATUS_FILE" > "$tmp" || true
+	fi
+	printf '%s=%s\n' "$key" "$value" >> "$tmp"
+	mv "$tmp" "$STATUS_FILE"
+}
+
+sync_actor() {
+	printf '%s\n' "${ROUTER_RULES_SYNC_ACTOR:-manual}"
+}
+
+status_trace_add() {
+	local key="$1"
+	local message="$2"
+	local existing item combined count oldifs
+	local stamp
+
+	stamp="$(date '+%H:%M:%S')"
+	existing="$(status_get "$key")"
+	combined="${stamp} ${message}"
+	count=1
+	oldifs="$IFS"
+	IFS='
+'
+	for item in $(printf '%s' "$existing" | sed 's/ || /\n/g'); do
+		[ -n "$item" ] || continue
+		combined="${combined} || ${item}"
+		count=$((count + 1))
+		[ "$count" -ge 6 ] && break
+	done
+	IFS="$oldifs"
+	status_set "$key" "$combined"
+}
+
+set_sync_phase() {
+	local phase="$1"
+	local message="$2"
+	status_set sync_phase "$phase"
+	status_set sync_phase_message "$message"
+	status_set sync_phase_at "$(date +%s)"
+	status_set sync_actor "$(sync_actor)"
+	status_trace_add sync_trace "${phase}: ${message}"
+}
+
+set_status_ok() {
+	local message="$1"
+	status_set last_sync_status 'ok'
+	status_set last_sync_message "$message"
+	status_set last_sync_at "$(date +%s)"
+	status_set last_sync_actor "$(sync_actor)"
+}
+
+set_status_error() {
+	local message="$1"
+	status_set last_sync_status 'error'
+	status_set last_sync_message "$message"
+	status_set last_sync_at "$(date +%s)"
+	status_set last_sync_actor "$(sync_actor)"
+	set_sync_phase error "$message"
+}
+
+set_apply_status() {
+	local consumer="$1"
+	local message="$2"
+	status_set "last_apply_${consumer}" "$(date +%s)"
+	status_set "last_apply_${consumer}_message" "$message"
+}
+
+file_signature() {
+	local file="$1"
+	[ -f "$file" ] || {
+		printf 'missing\n'
+		return 0
+	}
+	if command -v md5sum >/dev/null 2>&1; then
+		md5sum "$file" | awk '{print $1}'
+	else
+		cksum "$file" | awk '{print $1 ":" $2}'
+	fi
+}
+
+xray_state_signature() {
+	local mode rules_sig
+	mode="$(xray_mode)"
+	rules_sig="$(file_signature "$(repo_rules_path)")"
+	printf '%s|%s\n' "$mode" "$rules_sig"
+}
+
+lan_ipv4_cidr() {
+	ip -4 route show dev br-lan proto kernel scope link 2>/dev/null | awk 'NR==1 {print $1}'
+}
+
+ensure_dirs() {
+	mkdir -p "$(repo_path)" "$(generated_dir)" "$(dirname "$(ssh_key_path)")"
+	touch "$(known_hosts_path)"
+	chmod 600 "$(known_hosts_path)"
+}
+
+git_env_setup() {
+	if [ -f "$(ssh_key_path)" ]; then
+		export GIT_SSH_COMMAND="ssh -i $(ssh_key_path) -o BatchMode=yes -o StrictHostKeyChecking=no"
+	fi
+}
+
+repo_bootstrap() {
+	local repo branch rel rules_abs
+
+	repo="$(repo_path)"
+	branch="$(repo_branch)"
+	rel="$(rules_relpath)"
+	rules_abs="$(repo_rules_path)"
+
+	ensure_dirs
+	git_env_setup
+
+	if is_placeholder_value "$(repo_fetch_url)" || is_placeholder_value "$(repo_push_url)" || is_placeholder_value "$(device_id)"; then
+		echo "router-rules is not configured yet; fill router_rules UCI values from local env first" >&2
+		return 1
+	fi
+
+	if [ ! -d "$repo/.git" ]; then
+		rm -rf "$repo"
+		git clone --branch "$branch" --depth=1 "$(repo_fetch_url)" "$repo" >/dev/null 2>&1
+	fi
+
+	git -C "$repo" config user.name "$(git_user_name)"
+	git -C "$repo" config user.email "$(git_user_email)"
+	git -C "$repo" remote set-url origin "$(repo_fetch_url)"
+	git -C "$repo" remote set-url --push origin "$(repo_push_url)"
+	mkdir -p "$(dirname "$rules_abs")"
+	[ -f "$rules_abs" ] || : > "$rules_abs"
+}
+
+trim_line() {
+	printf '%s' "${1:-}" | sed 's/\r$//; s/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+is_comment_or_empty() {
+	case "$1" in
+		''|\#*)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+normalized_line() {
+	trim_line "$1" | tr 'A-Z' 'a-z'
+}
+
+rule_data_stream() {
+	local file="$1"
+	[ -f "$file" ] || return 0
+	while IFS= read -r line || [ -n "$line" ]; do
+		line="$(trim_line "$line")"
+		is_comment_or_empty "$line" && continue
+		printf '%s\n' "$line"
+	done < "$file"
+}
+
+resolver_candidates() {
+	local configured raw file ns
+
+	configured="$(dns_resolver)"
+	for raw in $configured; do
+		raw="$(trim_line "$raw")"
+		[ -n "$raw" ] && printf '%s\n' "$raw"
+	done
+
+	for file in /tmp/resolv.conf.auto /tmp/resolv.conf.d/resolv.conf.auto /tmp/resolv.conf; do
+		[ -f "$file" ] || continue
+		sed -n 's/^nameserver[[:space:]]\+//p' "$file" | while IFS= read -r ns || [ -n "$ns" ]; do
+			ns="$(trim_line "$ns")"
+			[ -n "$ns" ] && printf '%s\n' "$ns"
+		done
+	done | awk '!seen[$0]++'
+}
+
+run_with_timeout() {
+	local seconds="$1"
+	shift
+
+	if command -v timeout >/dev/null 2>&1; then
+		timeout "$seconds" "$@"
+	else
+		"$@"
+	fi
+}
+
+resolve_via_dig() {
+	local host="$1"
+	local resolver="$2"
+
+	command -v dig >/dev/null 2>&1 || return 1
+	run_with_timeout 6 dig +short @"$resolver" "$host" A 2>/dev/null \
+		| grep -E '^[0-9]+(\.[0-9]+){3}$' \
+		| awk '!seen[$0]++'
+}
+
+resolve_via_nslookup() {
+	local host="$1"
+	local resolver="$2"
+
+	command -v nslookup >/dev/null 2>&1 || return 1
+	run_with_timeout 6 nslookup "$host" "$resolver" 2>/dev/null \
+		| sed -n 's/^Address [0-9]*: //p; s/^Address: //p' \
+		| grep -E '^[0-9]+(\.[0-9]+){3}$' \
+		| grep -v "^${resolver}$" \
+		| awk '!seen[$0]++'
+}
+
+resolve_via_resolveip() {
+	local host="$1"
+
+	command -v resolveip >/dev/null 2>&1 || return 1
+	run_with_timeout 6 resolveip "$host" 2>/dev/null \
+		| grep -E '^[0-9]+(\.[0-9]+){3}$' \
+		| awk '!seen[$0]++'
+}
+
+resolve_via_doh() {
+	local host="$1"
+	local body=''
+
+	if command -v curl >/dev/null 2>&1; then
+		body="$(curl -fsS --max-time 8 --resolve dns.google:443:8.8.8.8 "https://dns.google/resolve?name=${host}&type=A" 2>/dev/null || true)"
+		[ -n "$body" ] || body="$(curl -fsS --max-time 8 --resolve dns.google:443:8.8.4.4 "https://dns.google/resolve?name=${host}&type=A" 2>/dev/null || true)"
+		[ -n "$body" ] || body="$(curl -fsS --max-time 8 --resolve cloudflare-dns.com:443:1.1.1.1 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=${host}&type=A" 2>/dev/null || true)"
+	elif command -v uclient-fetch >/dev/null 2>&1; then
+		body="$(run_with_timeout 8 uclient-fetch -qO- "https://dns.google/resolve?name=${host}&type=A" 2>/dev/null || true)"
+	elif command -v wget >/dev/null 2>&1; then
+		body="$(run_with_timeout 8 wget -qO- "https://dns.google/resolve?name=${host}&type=A" 2>/dev/null || true)"
+	fi
+
+	[ -n "$body" ] || return 1
+	printf '%s\n' "$body" \
+		| tr -d '\r\n' \
+		| grep -Eo '"data":"([0-9]{1,3}\.){3}[0-9]{1,3}"' \
+		| cut -d '"' -f4 \
+		| awk '!seen[$0]++'
+}
+
+merge_remote_preferred() {
+	local remote_file="$1"
+	local local_file="$2"
+	local out_file="$3"
+	local appended_lines appended marker
+
+	appended_lines="$(mktemp)"
+	cp "$remote_file" "$out_file"
+	appended=0
+	marker="# merged unique local rules from $(device_id) on $(date '+%Y-%m-%d %H:%M:%S')"
+
+	awk '
+		function trim(s) {
+			sub(/\r$/, "", s)
+			sub(/^[[:space:]]+/, "", s)
+			sub(/[[:space:]]+$/, "", s)
+			return s
+		}
+		NR == FNR {
+			line = trim($0)
+			if (line == "" || line ~ /^#/) {
+				next
+			}
+			seen[tolower(line)] = 1
+			next
+		}
+		{
+			line = trim($0)
+			if (line == "" || line ~ /^#/) {
+				next
+			}
+			norm = tolower(line)
+			if (!(norm in seen) && !(norm in emitted)) {
+				print line
+				emitted[norm] = 1
+			}
+		}
+	' "$remote_file" "$local_file" > "$appended_lines"
+
+	if [ -s "$appended_lines" ]; then
+		printf '\n%s\n' "$marker" >> "$out_file"
+		cat "$appended_lines" >> "$out_file"
+		appended=1
+	fi
+
+	rm -f "$appended_lines"
+}
+
+rule_count() {
+	rule_data_stream "$1" | wc -l | awk '{print $1}'
+}
+
+resolve_domain_ipv4() {
+	local host="$1"
+	local dns="$2"
+	local resolver result
+
+	result="$(resolve_via_doh "$host" || true)"
+	if [ -n "$result" ]; then
+		printf '%s\n' "$result"
+		return 0
+	fi
+
+	if [ -n "$dns" ]; then
+		for resolver in $dns; do
+			result="$(resolve_via_dig "$host" "$resolver" || true)"
+			[ -n "$result" ] || result="$(resolve_via_nslookup "$host" "$resolver" || true)"
+			if [ -n "$result" ]; then
+				printf '%s\n' "$result"
+				return 0
+			fi
+		done
+	fi
+
+	while IFS= read -r resolver || [ -n "$resolver" ]; do
+		[ -n "$resolver" ] || continue
+		result="$(resolve_via_dig "$host" "$resolver" || true)"
+		[ -n "$result" ] || result="$(resolve_via_nslookup "$host" "$resolver" || true)"
+		if [ -n "$result" ]; then
+			printf '%s\n' "$result"
+			return 0
+		fi
+	done <<EOF
+$(resolver_candidates)
+EOF
+
+	result="$(resolve_via_resolveip "$host" || true)"
+	if [ -n "$result" ]; then
+		printf '%s\n' "$result"
+		return 0
+	fi
+
+	resolve_via_doh "$host" || true
+}
+
+split_rules_internal() {
+	local source_file out_domains out_literals tmp_domains tmp_literals line
+
+	source_file="$(repo_rules_path)"
+	out_domains="$(domain_file)"
+	out_literals="$(literal_file)"
+	tmp_domains="$(mktemp)"
+	tmp_literals="$(mktemp)"
+
+	: > "$tmp_domains"
+	: > "$tmp_literals"
+
+	while IFS= read -r line || [ -n "$line" ]; do
+		line="$(trim_line "$line")"
+		is_comment_or_empty "$line" && continue
+		if printf '%s' "$line" | grep -Eq '^[0-9]+(\.[0-9]+){3}(/[0-9]+)?$'; then
+			printf '%s\n' "$line" >> "$tmp_literals"
+		else
+			printf '%s\n' "$(normalized_line "$line")" >> "$tmp_domains"
+		fi
+	done < "$source_file"
+
+	sort -u "$tmp_domains" > "$out_domains"
+	sort -u "$tmp_literals" > "$out_literals"
+	rm -f "$tmp_domains" "$tmp_literals"
+}
+
+resolve_rules_internal() {
+	local source_file dns out_map out_resolved out_domains out_literals tmp_resolved line resolved
+
+	source_file="$(repo_rules_path)"
+	dns="$(dns_resolver)"
+	out_map="$(mapping_file)"
+	out_resolved="$(resolved_file)"
+	out_domains="$(domain_file)"
+	out_literals="$(literal_file)"
+	tmp_resolved="$(mktemp)"
+
+	split_rules_internal
+	: > "$out_map"
+	: > "$tmp_resolved"
+
+	if [ -f "$out_literals" ]; then
+		while IFS= read -r line || [ -n "$line" ]; do
+			[ -n "$line" ] || continue
+			printf '%s\n' "$line" >> "$tmp_resolved"
+			printf '%s\tliteral\t%s\n' "$line" "$line" >> "$out_map"
+		done < "$out_literals"
+	fi
+
+	if [ -f "$out_domains" ]; then
+		while IFS= read -r line || [ -n "$line" ]; do
+			[ -n "$line" ] || continue
+		resolve_domain_ipv4 "$line" "$dns" | while IFS= read -r resolved || [ -n "$resolved" ]; do
+			[ -n "$resolved" ] || continue
+			printf '%s\n' "$resolved"
+			printf '%s\tdomain\t%s\n' "$resolved" "$line" >> "$out_map"
+		done >> "$tmp_resolved"
+		done < "$out_domains"
+	fi
+
+	sort -u "$tmp_resolved" > "$out_resolved"
+	rm -f "$tmp_resolved"
+	status_set last_resolve_at "$(date +%s)"
+	status_set resolved_count "$(wc -l < "$out_resolved" | awk '{print $1}')"
+	status_set source_count "$(rule_count "$source_file")"
+}
+
+apply_shadowsocks_internal() {
+	local pkg section resolved current tmp_current changed value
+
+	pkg="$(ss_package)"
+	section="$(ss_section)"
+	resolved="$(resolved_file)"
+	tmp_current="$(mktemp)"
+
+	uci -q show "${pkg}.${section}" 2>/dev/null | sed -n "s/^${pkg}\.${section}\.dst_ips_forward='\(.*\)'$/\1/p" | sort -u > "$tmp_current"
+	if [ -f "$resolved" ] && cmp -s "$resolved" "$tmp_current"; then
+		set_apply_status shadowsocks 'no changes'
+		rm -f "$tmp_current"
+		return 0
+	fi
+
+	while uci -q delete "${pkg}.${section}.dst_ips_forward" >/dev/null 2>&1; do :; done
+	if [ -f "$resolved" ]; then
+		while IFS= read -r value || [ -n "$value" ]; do
+			[ -n "$value" ] || continue
+			uci add_list "${pkg}.${section}.dst_ips_forward=$value"
+		done < "$resolved"
+	fi
+	uci commit "$pkg"
+	/etc/init.d/shadowsocks-libev restart >/dev/null 2>&1 || true
+	/etc/init.d/firewall restart >/dev/null 2>&1 || true
+	set_apply_status shadowsocks "applied $(wc -l < "$resolved" | awk '{print $1}') targets"
+	rm -f "$tmp_current"
+}
+
+build_xray_ipset_internal() {
+	local setname literals domains conf tmp_conf count
+
+	split_rules_internal
+	setname="$(xray_ipset)"
+	literals="$(literal_file)"
+	domains="$(domain_file)"
+	conf="$(xray_dnsmasq_conf)"
+	tmp_conf="$(mktemp)"
+	count=0
+
+	ipset create "$setname" hash:net family inet maxelem 65536 -exist
+	ipset flush "$setname"
+	if [ -f "$literals" ]; then
+		while IFS= read -r value || [ -n "$value" ]; do
+			[ -n "$value" ] || continue
+			ipset add "$setname" "$value" -exist
+			count=$((count + 1))
+		done < "$literals"
+	fi
+
+	: > "$tmp_conf"
+	if [ -f "$domains" ]; then
+		while IFS= read -r value || [ -n "$value" ]; do
+			[ -n "$value" ] || continue
+			printf 'ipset=/%s/%s\n' "$value" "$setname" >> "$tmp_conf"
+		done < "$domains"
+	fi
+
+	mkdir -p "$(dirname "$conf")"
+	if ! cmp -s "$tmp_conf" "$conf" 2>/dev/null; then
+		mv "$tmp_conf" "$conf"
+		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+	else
+		rm -f "$tmp_conf"
+	fi
+
+	count="$(ipset list "$setname" 2>/dev/null | sed -n 's/^Number of entries: //p' | sed -n '1p')"
+	[ -n "$count" ] || count=0
+	status_set xray_ipset_count "$count"
+}
+
+clear_xray_dnsmasq_internal() {
+	local conf
+
+	conf="$(xray_dnsmasq_conf)"
+	if [ -f "$conf" ]; then
+		rm -f "$conf"
+		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+	fi
+}
+
+apply_xray_internal() {
+	local mode count setname signature need_restart last_mode final_rule conf
+
+	mode="$(xray_mode)"
+	setname="$(xray_ipset)"
+	conf="$(xray_dnsmasq_conf)"
+	last_mode="$(status_get last_apply_xray_mode)"
+	split_rules_internal
+	if [ "$mode" = 'selective' ]; then
+		build_xray_ipset_internal
+	else
+		clear_xray_dnsmasq_internal
+		ipset create "$setname" hash:net family inet maxelem 65536 -exist
+		ipset flush "$setname"
+		status_set xray_ipset_count '0'
+	fi
+
+	need_restart=0
+	[ "${ROUTER_RULES_FORCE_RESTART:-0}" = '1' ] && need_restart=1
+	[ "$last_mode" = "$mode" ] || need_restart=1
+	final_rule="$(iptables -t nat -S CODEX_TRANSPROXY 2>/dev/null | tail -n 1)"
+	if [ "$mode" = 'selective' ]; then
+		[ -s "$conf" ] || need_restart=1
+		ipset list "$setname" >/dev/null 2>&1 || need_restart=1
+		printf '%s\n' "$final_rule" | grep -q -- "-m set --match-set ${setname} dst -j REDIRECT" || need_restart=1
+		iptables -t nat -C PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || need_restart=1
+		iptables -t nat -C PREROUTING -i br-lan -p tcp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || need_restart=1
+	else
+		[ ! -e "$conf" ] || need_restart=1
+		printf '%s\n' "$final_rule" | grep -q -- "-p tcp -j REDIRECT --to-ports 12345" || need_restart=1
+	fi
+	if [ "$need_restart" = '1' ]; then
+		/etc/init.d/codex-transproxy restart >/dev/null 2>&1 || true
+	fi
+	count="$(status_get xray_ipset_count)"
+	set_apply_status xray "mode=${mode} applied ${count} targets"
+	signature="$(xray_state_signature)"
+	status_set last_apply_xray_signature "$signature"
+	status_set last_apply_xray_mode "$mode"
+}
+
+hard_cutover_xray_internal() {
+	local signature mode subnet conntrack_flushed
+
+	set_sync_phase cutover_in_progress 'Resetting transparent path and clearing live sessions for the current ruleset'
+	ROUTER_RULES_FORCE_RESTART=1 apply_xray_internal
+	subnet="$(lan_ipv4_cidr)"
+	conntrack_flushed=0
+	if [ -n "$subnet" ] && command -v conntrack >/dev/null 2>&1; then
+		conntrack -D -f ipv4 -p tcp -s "$subnet" >/dev/null 2>&1 || true
+		conntrack -D -f ipv4 -p udp -s "$subnet" >/dev/null 2>&1 || true
+		conntrack_flushed=1
+	fi
+	signature="$(xray_state_signature)"
+	mode="$(xray_mode)"
+	status_set last_cutover_at "$(date +%s)"
+	status_set last_cutover_status 'ok'
+	status_set last_cutover_message "hard cutover applied mode=${mode} conntrack_flushed=${conntrack_flushed}"
+	status_set last_cutover_signature "$signature"
+	status_set last_cutover_mode "$mode"
+	status_set last_verified_at "$(date +%s)"
+	set_sync_phase verified "Current ruleset is active after hard cutover (mode=${mode}, conntrack_flushed=${conntrack_flushed})"
+}
+
+sync_apply_xray_internal() {
+	set_sync_phase checking_remote 'Checking GitHub and local rules state'
+	sync_repo_internal || return 1
+	if [ "$(status_get last_sync_changed)" = '1' ]; then
+		set_sync_phase drift_detected 'Found changes between GitHub and the current router ruleset; starting cutover'
+		hard_cutover_xray_internal
+	elif xray_needs_apply_internal; then
+		set_sync_phase drift_detected 'Found runtime drift against the current ruleset; starting cutover'
+		hard_cutover_xray_internal
+	else
+		status_set last_verified_at "$(date +%s)"
+		set_sync_phase verified 'Everything is already synchronized with GitHub and active on the router'
+	fi
+}
+
+save_sync_apply_xray_internal() {
+	local src="$1"
+
+	save_rules_file_internal "$src" || return 1
+	sync_apply_xray_internal
+}
+
+xray_needs_apply_internal() {
+	local mode conf setname final_rule signature last_signature
+
+	mode="$(xray_mode)"
+	conf="$(xray_dnsmasq_conf)"
+	setname="$(xray_ipset)"
+	signature="$(xray_state_signature)"
+	last_signature="$(status_get last_apply_xray_signature)"
+
+	[ "$signature" = "$last_signature" ] || return 0
+
+	final_rule="$(iptables -t nat -S CODEX_TRANSPROXY 2>/dev/null | tail -n 1)"
+	if [ "$mode" = 'selective' ]; then
+		[ -s "$conf" ] || return 0
+		ipset list "$setname" >/dev/null 2>&1 || return 0
+		printf '%s\n' "$final_rule" | grep -q -- "-m set --match-set ${setname} dst -j REDIRECT" || return 0
+		iptables -t nat -C PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || return 0
+		iptables -t nat -C PREROUTING -i br-lan -p tcp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || return 0
+	else
+		[ ! -e "$conf" ] || return 0
+		printf '%s\n' "$final_rule" | grep -q -- "-p tcp -j REDIRECT --to-ports 12345" || return 0
+	fi
+
+	return 1
+}
+
+sync_repo_internal() {
+	local repo rel branch work_file local_snapshot remote_snapshot changed pushed
+	local local_head_before remote_head requested_base_head strategy
+
+	repo_bootstrap
+	repo="$(repo_path)"
+	rel="$(rules_relpath)"
+	branch="$(repo_branch)"
+	work_file="$(repo_rules_path)"
+	local_snapshot="$(mktemp)"
+	remote_snapshot="$(mktemp)"
+	requested_base_head="${ROUTER_RULES_BASE_HEAD:-}"
+	if [ -n "$requested_base_head" ]; then
+		requested_base_head="$(git -C "$repo" rev-parse --verify "${requested_base_head}^{commit}" 2>/dev/null || printf '%s' "$requested_base_head")"
+	fi
+
+	cp "$work_file" "$local_snapshot" 2>/dev/null || : > "$local_snapshot"
+	local_head_before="$(git -C "$repo" rev-parse --verify HEAD 2>/dev/null || true)"
+	git_env_setup
+	git -C "$repo" fetch origin "$branch" >/dev/null 2>&1 || {
+		set_status_error 'git fetch failed'
+		rm -f "$local_snapshot" "$remote_snapshot"
+		return 1
+	}
+
+	if git -C "$repo" show "origin/$branch:$rel" > "$remote_snapshot" 2>/dev/null; then
+		remote_head="$(git -C "$repo" rev-parse --verify "origin/$branch" 2>/dev/null || true)"
+		git -C "$repo" reset --hard "origin/$branch" >/dev/null 2>&1
+	else
+		: > "$remote_snapshot"
+		remote_head=''
+	fi
+
+	strategy='remote'
+	if cmp -s "$local_snapshot" "$remote_snapshot"; then
+		:
+	elif [ -n "$requested_base_head" ] && [ "$requested_base_head" = "$remote_head" ]; then
+		cp "$local_snapshot" "$work_file"
+		strategy='exact-local'
+	elif [ -z "$requested_base_head" ] && [ -n "$local_head_before" ] && [ "$local_head_before" = "$remote_head" ]; then
+		cp "$local_snapshot" "$work_file"
+		strategy='exact-local'
+	else
+		merge_remote_preferred "$remote_snapshot" "$local_snapshot" "$work_file"
+		strategy='merge-remote-preferred'
+	fi
+
+	changed=0
+	if ! git -C "$repo" diff --quiet -- "$rel"; then
+		changed=1
+		git -C "$repo" add "$rel"
+		git -C "$repo" commit -m "Sync shared targets from $(device_id)" >/dev/null 2>&1 || true
+	fi
+
+	pushed=0
+	if [ "$changed" = '1' ] && [ "$(enable_push)" = '1' ]; then
+		if git -C "$repo" push origin "$branch" >/dev/null 2>&1; then
+			pushed=1
+		else
+			set_status_error 'git push failed'
+			rm -f "$local_snapshot" "$remote_snapshot"
+			return 1
+		fi
+	fi
+
+	set_status_ok "synced changed=${changed} pushed=${pushed} strategy=${strategy}"
+	status_set last_sync_changed "$changed"
+	status_set last_sync_strategy "$strategy"
+	status_set last_sync_remote_head "$remote_head"
+	rm -f "$local_snapshot" "$remote_snapshot"
+}
+
+save_rules_file_internal() {
+	local src="$1"
+	local dst
+
+	repo_bootstrap
+	dst="$(repo_rules_path)"
+	cp "$src" "$dst"
+}
+
+ensure_git_key_internal() {
+	local key pub
+
+	key="$(ssh_key_path)"
+	mkdir -p "$(dirname "$key")"
+	[ -f "$key" ] || ssh-keygen -t ed25519 -f "$key" -N '' -C "routerRules@$(device_id)" >/dev/null 2>&1
+	chmod 600 "$key"
+	chmod 644 "${key}.pub"
+}
+
+set_xray_mode_internal() {
+	local mode="$1"
+	case "$mode" in
+		full|selective)
+			uci -q set "${CONFIG_PKG}.${CONFIG_SECTION}.xray_mode=${mode}"
+			uci commit "$CONFIG_PKG"
+			;;
+		*)
+			echo "invalid mode: $mode" >&2
+			return 1
+			;;
+	esac
+}
+
+status_json() {
+	local repo rel rules_file resolved map domains literals file_text profile_status repo_head repo_dirty mode
+	local source_count resolved_count domain_count literal_count xray_ipset_count last_sync_at last_sync_status last_sync_message last_apply_xray last_apply_shadowsocks
+	local setname current_signature last_cutover_at last_cutover_status last_cutover_message last_cutover_signature cutover_required
+	local sync_phase sync_phase_at sync_phase_message sync_trace last_verified_at last_sync_actor rules_checksum last_apply_signature interval
+
+	repo="$(repo_path)"
+	rel="$(rules_relpath)"
+	rules_file="$(repo_rules_path)"
+	resolved="$(resolved_file)"
+	map="$(mapping_file)"
+	domains="$(domain_file)"
+	literals="$(literal_file)"
+	mode="$(xray_mode)"
+	file_text=''
+	[ -f "$rules_file" ] && file_text="$(cat "$rules_file")"
+	interval="$(sync_interval)"
+
+	repo_head=''
+	repo_dirty='0'
+	if [ -d "$repo/.git" ]; then
+		repo_head="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || true)"
+		if ! git -C "$repo" diff --quiet -- "$rel" 2>/dev/null; then
+			repo_dirty='1'
+		fi
+	fi
+
+	source_count="$(rule_count "$rules_file")"
+	resolved_count="$( [ -f "$resolved" ] && wc -l < "$resolved" | awk '{print $1}' || echo 0 )"
+	domain_count="$( [ -f "$domains" ] && wc -l < "$domains" | awk '{print $1}' || echo 0 )"
+	literal_count="$( [ -f "$literals" ] && wc -l < "$literals" | awk '{print $1}' || echo 0 )"
+	setname="$(xray_ipset)"
+	xray_ipset_count="$(ipset list "$setname" 2>/dev/null | sed -n 's/^Number of entries: //p' | sed -n '1p')"
+	[ -n "$xray_ipset_count" ] || xray_ipset_count="$(status_get xray_ipset_count)"
+	[ -n "$xray_ipset_count" ] || xray_ipset_count='0'
+
+	last_sync_at="$(status_get last_sync_at)"
+	last_sync_status="$(status_get last_sync_status)"
+	last_sync_message="$(status_get last_sync_message)"
+	last_apply_xray="$(status_get last_apply_xray)"
+	last_apply_shadowsocks="$(status_get last_apply_shadowsocks)"
+	last_sync_actor="$(status_get last_sync_actor)"
+	current_signature="$(xray_state_signature)"
+	rules_checksum="$(file_signature "$rules_file")"
+	last_apply_signature="$(status_get last_apply_xray_signature)"
+	last_cutover_at="$(status_get last_cutover_at)"
+	last_cutover_status="$(status_get last_cutover_status)"
+	last_cutover_message="$(status_get last_cutover_message)"
+	last_cutover_signature="$(status_get last_cutover_signature)"
+	last_verified_at="$(status_get last_verified_at)"
+	sync_phase="$(status_get sync_phase)"
+	sync_phase_at="$(status_get sync_phase_at)"
+	sync_phase_message="$(status_get sync_phase_message)"
+	sync_trace="$(status_get sync_trace)"
+	cutover_required='0'
+	[ "$current_signature" = "$last_cutover_signature" ] || cutover_required='1'
+
+	printf '{'
+	printf '"ok":true,'
+	printf '"repo_ready":'
+	if [ -d "$repo/.git" ]; then json_bool 1; else json_bool 0; fi
+	printf ','
+	printf '"repo_path":"%s",' "$(json_escape "$repo")"
+	printf '"rules_relpath":"%s",' "$(json_escape "$rel")"
+	printf '"repo_head":"%s",' "$(json_escape "$repo_head")"
+	printf '"repo_dirty":'; json_bool "$repo_dirty"; printf ','
+	printf '"xray_mode":"%s",' "$(json_escape "$mode")"
+	printf '"sync_interval":"%s",' "$(json_escape "$interval")"
+	printf '"enable_push":'; json_bool "$(enable_push)"; printf ','
+	printf '"source_count":"%s",' "$(json_escape "$source_count")"
+	printf '"domain_count":"%s",' "$(json_escape "$domain_count")"
+	printf '"literal_count":"%s",' "$(json_escape "$literal_count")"
+	printf '"resolved_count":"%s",' "$(json_escape "$resolved_count")"
+	printf '"xray_ipset_count":"%s",' "$(json_escape "$xray_ipset_count")"
+	printf '"last_sync_at":"%s",' "$(json_escape "$last_sync_at")"
+	printf '"last_sync_actor":"%s",' "$(json_escape "$last_sync_actor")"
+	printf '"last_sync_status":"%s",' "$(json_escape "$last_sync_status")"
+	printf '"last_sync_message":"%s",' "$(json_escape "$last_sync_message")"
+	printf '"sync_phase":"%s",' "$(json_escape "$sync_phase")"
+	printf '"sync_phase_at":"%s",' "$(json_escape "$sync_phase_at")"
+	printf '"sync_phase_message":"%s",' "$(json_escape "$sync_phase_message")"
+	printf '"sync_trace":"%s",' "$(json_escape "$sync_trace")"
+	printf '"last_verified_at":"%s",' "$(json_escape "$last_verified_at")"
+	printf '"rules_checksum":"%s",' "$(json_escape "$rules_checksum")"
+	printf '"last_apply_signature":"%s",' "$(json_escape "$last_apply_signature")"
+	printf '"last_apply_xray":"%s",' "$(json_escape "$last_apply_xray")"
+	printf '"last_apply_shadowsocks":"%s",' "$(json_escape "$last_apply_shadowsocks")"
+	printf '"last_cutover_at":"%s",' "$(json_escape "$last_cutover_at")"
+	printf '"last_cutover_status":"%s",' "$(json_escape "$last_cutover_status")"
+	printf '"last_cutover_message":"%s",' "$(json_escape "$last_cutover_message")"
+	printf '"last_cutover_signature":"%s",' "$(json_escape "$last_cutover_signature")"
+	printf '"cutover_required":'; json_bool "$cutover_required"; printf ','
+	printf '"rules_text":"%s"' "$(json_escape "$file_text")"
+	printf '}'
+}
+
+with_lock() {
+	local cmd="$1"
+	local holder=''
+	local tries=0
+	local rc=0
+	shift
+
+	while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+		holder=''
+		[ -f "$LOCK_DIR/pid" ] && holder="$(cat "$LOCK_DIR/pid" 2>/dev/null | sed -n '1p')"
+		if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+			rm -rf "$LOCK_DIR"
+			continue
+		fi
+		tries=$((tries + 1))
+		if [ "$tries" -ge 60 ]; then
+			echo 'router-rules lock timeout' >&2
+			return 1
+		fi
+		sleep 1
+	done
+
+	printf '%s\n' "$$" > "$LOCK_DIR/pid"
+	trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
+	"$cmd" "$@"
+	rc=$?
+	trap - EXIT INT TERM
+	rm -rf "$LOCK_DIR"
+	return "$rc"
+}
+
+usage() {
+	cat <<'EOF'
+router-rules commands:
+  status-json
+  ensure-git-key
+  sync
+  resolve
+  apply-shadowsocks
+  build-xray-ipset
+  apply-xray
+  cutover-xray
+  sync-apply-current
+  sync-apply-shadowsocks
+  sync-apply-xray
+  save-file <path>
+  set-xray-mode <full|selective>
+EOF
+}
+
+cmd="${1:-}"
+case "$cmd" in
+	status-json)
+		status_json
+		;;
+	ensure-git-key)
+		with_lock ensure_git_key_internal
+		;;
+	sync)
+		with_lock sync_repo_internal
+		;;
+	resolve)
+		with_lock resolve_rules_internal
+		;;
+	apply-shadowsocks)
+		with_lock apply_shadowsocks_internal
+		;;
+	build-xray-ipset)
+		with_lock build_xray_ipset_internal
+		;;
+	apply-xray)
+		with_lock apply_xray_internal
+		;;
+	cutover-xray)
+		with_lock hard_cutover_xray_internal
+		;;
+	sync-apply-current)
+		case "$(consumer)" in
+			shadowsocks)
+				with_lock sync_repo_internal
+				with_lock resolve_rules_internal
+				with_lock apply_shadowsocks_internal
+				;;
+			*)
+				with_lock sync_apply_xray_internal
+				;;
+		esac
+		;;
+	sync-apply-shadowsocks)
+		with_lock sync_repo_internal
+		with_lock resolve_rules_internal
+		with_lock apply_shadowsocks_internal
+		;;
+	sync-apply-xray)
+		with_lock sync_apply_xray_internal
+		;;
+	save-sync-apply-xray)
+		shift
+		[ $# -ge 1 ] || usage
+		with_lock save_sync_apply_xray_internal "$1"
+		;;
+	save-file)
+		shift
+		[ -n "${1:-}" ] || { usage >&2; exit 1; }
+		with_lock save_rules_file_internal "$1"
+		;;
+	set-xray-mode)
+		shift
+		[ -n "${1:-}" ] || { usage >&2; exit 1; }
+		with_lock set_xray_mode_internal "$1"
+		;;
+	*)
+		usage >&2
+		exit 1
+		;;
+esac
