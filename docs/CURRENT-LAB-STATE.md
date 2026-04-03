@@ -1,8 +1,8 @@
-# Sanitized Validation Matrix
+# Validation Matrix
 
-This file intentionally does not contain live router addresses, live VPS addresses, passwords, UUIDs, or keys.
+This file summarizes the validated baseline and expected runtime shape.
 
-Use it as a compact statement of what has been validated, not as a dump of someone else's current lab.
+Live addresses, keys, and credentials belong in local env files, not in this document.
 
 ## Validated Components
 
@@ -64,4 +64,4 @@ Healthy state should look like:
 
 ## Snapshot Discipline
 
-If a future agent needs a new real-world snapshot, it should be written to local notes or operational docs outside the public repo unless it is first sanitized.
+If someone needs a new real-world snapshot, it should be written to local notes or operational docs outside the public repo unless it is first stripped of live secrets and private addressing.

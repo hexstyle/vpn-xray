@@ -81,7 +81,7 @@ A new operator should be able to reproduce the setup with:
 3. their own Xray / Reality identifiers
 4. their own GitHub shared-rules repo
 
-without reading the original chat log.
+without relying on any external conversation context.
 
 ## Remaining Operational Caveats
 

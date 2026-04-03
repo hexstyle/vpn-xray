@@ -1,6 +1,6 @@
 # Architecture
 
-This document is the compact system map for future agents. It explains what runs where, which component is authoritative for each concern, and which assumptions are safe to make.
+This document is the compact system map for operators and maintainers. It explains what runs where, which component is authoritative for each concern, and which assumptions are safe to make.
 
 ## Goal
 

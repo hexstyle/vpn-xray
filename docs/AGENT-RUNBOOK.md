@@ -1,4 +1,4 @@
-# Agent Runbook
+# Setup Runbook
 
 This runbook is the shortest supported path to reproduce the setup from scratch.
 

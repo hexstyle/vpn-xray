@@ -8,23 +8,16 @@ This repository targets the compact `GL.iNet GL-MT3000` travel router shown abov
 
 The main use case is split routing from a work laptop: keep ordinary traffic outside the personal tunnel, but send the destinations you actually need through your own VPS instead of through a corporate VPN. That is useful when you need stable access to selected external services, including foreign LLM agents, without changing proxy settings on the client. The router UI also supports fast SSH-first provisioning of another clean Debian VPS, so if the current server gets blocked or you lose access to it, you can move to another reachable host and stay online quickly.
 
-This repository is intentionally sanitized:
-
-- no live router IPs
-- no live VPS IPs
-- no live UUIDs / Reality keys / passwords
-- no tracked local `.env` files
-
-Everything that must be personalized is supplied through local untracked env files created from examples.
+All installation-specific values are supplied through local untracked `.env` files created from the examples in `config/`.
 
 ## Start Here
 
 - [Audit](./docs/AUDIT.md)
-- [Agent Runbook](./docs/AGENT-RUNBOOK.md)
+- [Setup Runbook](./docs/AGENT-RUNBOOK.md)
 - [Architecture](./docs/ARCHITECTURE.md)
 - [Shared Rules](./docs/SHARED-RULES.md)
 - [Web UI](./docs/WEB-UI.md)
-- [Sanitized Validation Matrix](./docs/CURRENT-LAB-STATE.md)
+- [Validation Matrix](./docs/CURRENT-LAB-STATE.md)
 - [UI Extensibility Notes](./docs/UI-EXTENSIBILITY.md)
 
 ## What This Bundle Provides
@@ -176,7 +169,3 @@ Behavior:
 - `router-files/xray-admin.cgi`: runtime / logs / smoke backend
 - `router-files/xray-vps.cgi`: VPS-profile / SSH-first backend
 - `router-files/xray-rules.cgi`: shared-rules backend
-
-## Publication Note
-
-Before publishing, this repository was audited and converted to a sanitized, placeholder-driven shape. If a future agent adds tracked live values again, that is a regression.
