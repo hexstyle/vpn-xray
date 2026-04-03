@@ -10,16 +10,19 @@ if [[ -f "$ENV_FILE" ]]; then
   load_env_file "$ENV_FILE" "$ROOT_DIR/config/router.env.example"
 fi
 
+ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"
+ROUTER_HOST="${ROUTER_HOST:-$(host_from_ssh_target "$ROUTER_SSH")}"
+
 REPO="${REPO:-}"
 if [[ -z "$REPO" ]]; then
   REPO="$(derive_github_repo_slug "${RULES_REPO_PUSH_URL:-}" || true)"
 fi
 
 require_vars ROUTER_HOST REPO
-reject_placeholder_vars ROUTER_HOST REPO
+reject_placeholder_vars ROUTER_SSH ROUTER_HOST REPO
 TITLE="${TITLE:-routerRules-${ROUTER_HOST}}"
 
-pubkey="$(ssh "root@$ROUTER_HOST" '/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true; cat /etc/router-rules/ssh/routerRules_ed25519.pub')"
+pubkey="$(ssh "$ROUTER_SSH" '/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true; cat /etc/router-rules/ssh/routerRules_ed25519.pub')"
 
 if [[ -z "$pubkey" ]]; then
   echo "Failed to read router deploy key from $ROUTER_HOST" >&2

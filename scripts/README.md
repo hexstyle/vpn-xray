@@ -1,25 +1,34 @@
-# Scripts Folder
+# Scripts
 
-This folder contains the supported entrypoints for installation and maintenance.
+This folder contains the supported entrypoints.
 
-Main scripts:
+## Recommended Entry Point
+
+- `install-stack.sh`
+  - full hello-world install for the main supported combination
+
+## Step-By-Step Entry Points
 
 - `init-config.sh`
-  - copies or updates local env files with generated Xray identity values
-  - synchronizes `UUID`, `Reality keypair`, `short id`, and default `server name`
+  - creates or updates local env files
+  - derives hosts from SSH targets
+  - generates the Xray UUID, Reality keys, short ID, and default server name
 - `validate-env.sh`
-  - checks that required values are present and placeholders were replaced
+  - checks that required values exist after bootstrap
 - `deploy-vps-config.sh`
-  - renders and deploys the VPS `xray` server config
+  - deploys the selected VPS profile
 - `deploy-child-router.sh`
-  - deploys the GL router runtime, UI, and shared-rules consumer
+  - deploys the selected router profile
 - `verify-child-router.sh`
-  - smoke-tests the router proxy path
+  - smoke-tests the router-side proxy path
+
+## Secondary Scripts
+
 - `deploy-asus-rules.sh`
-  - deploys the ASUS shared-rules consumer
+  - deploys the secondary `openwrt-shadowsocks-libev` rules consumer
 - `register-router-rules-deploy-key.sh`
   - registers the router deploy key for the shared-rules GitHub repo
 
-Helper code lives in:
+## Helpers
 
-- [`lib/`](./lib)
+- [`lib/`](./lib/README.md)

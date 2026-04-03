@@ -1,193 +1,116 @@
 # Setup Runbook
 
-This runbook is the shortest supported path to reproduce the setup from scratch.
+This is the shortest supported path to a working install.
 
 ## Goal
 
-Make a GL.iNet child router transparently forward client TCP traffic through a VPS over `VLESS + Reality`, with no proxy settings on client devices.
+Use a supported OpenWrt router profile as a transparent client-side wrapper around Xray, and use a supported VPS profile as the remote server side.
+
+Current reference combination:
+
+- router:
+  - `gl-mt3000-glinet`
+- VPS:
+  - `debian-13`
 
 ## Prerequisites
 
-- GL.iNet router compatible with the current scripts
-- reachable Linux VPS with `root` SSH access
-- operator-owned GitHub repo for shared rules
-- local shell with `bash`, `ssh`, `curl`, `python3`, `git`
+- one supported router reachable over SSH
+- one supported VPS reachable over SSH
+- local shell with:
+  - `bash`
+  - `ssh`
+  - `curl`
+  - `python3`
+  - `git`
 
-## 1. Prepare Local Config Files
-
-Create untracked local env files:
+## 1. Create Local Config Files
 
 ```bash
-cp config/vps.env.example config/vps.env
 cp config/router.env.example config/router.env
-# optional
-cp config/asus-router.env.example config/asus-router.env
+cp config/vps.env.example config/vps.env
 ```
 
-For a minimal first install, edit only:
+Edit only:
 
 - `config/router.env`
-  - `ROUTER_HOST`
+  - `ROUTER_SSH`
 - `config/vps.env`
-  - `VPS_HOST`
+  - `VPS_SSH`
 
-Then generate the Xray-side values automatically:
+That is the only required human input for the supported hello-world path.
 
-```bash
-./scripts/init-config.sh
-```
-
-If you also use the ASUS shared-rules consumer, fill `config/asus-router.env` separately.
-
-Validate before deploy:
+## 2. Run The Full Installer
 
 ```bash
-./scripts/validate-env.sh vps
-./scripts/validate-env.sh router
-# optional
-./scripts/validate-env.sh asus
+./scripts/install-stack.sh
 ```
 
-## 2. Deploy The VPS
+This script runs, in order:
 
-```bash
-./scripts/deploy-vps-config.sh
-```
+1. `scripts/init-config.sh`
+2. `scripts/validate-env.sh vps`
+3. `scripts/validate-env.sh router`
+4. `scripts/deploy-vps-config.sh`
+5. `scripts/deploy-child-router.sh`
+6. `scripts/verify-child-router.sh`
 
-This script:
-
-- renders `server-files/xray-vps-config.template.json`
-- uploads it to the VPS
-- runs `xray run -test`
-- backs up the existing server config
-- installs the rendered config and restarts `xray`
-
-## 3. Deploy The GL Router
-
-```bash
-./scripts/deploy-child-router.sh
-```
-
-If the current management IP differs from the value in `config/router.env`, override it from the shell instead of editing the file for a one-off session:
-
-```bash
-ROUTER_HOST=<current-router-host> ROUTER_LAN_IP=<current-lan-host> ./scripts/deploy-child-router.sh
-```
-
-This deploy:
-
-- installs `xray-core`, `redsocks`, and router init scripts
-- installs the standalone web UI and CGI backends
-- installs the shared-rules tool and background sync service
-- binds the GL hardware switch to the VPS path
-- keeps `eth1` in `br-lan` by default unless explicitly isolated
-
-## 4. Verify The GL Router
-
-```bash
-./scripts/verify-child-router.sh
-```
-
-Expected:
-
-- `google.com` via explicit proxy returns `200`
-- `ifconfig.me/ip` via explicit proxy returns the VPS egress IP
-- `ipinfo.io/ip` via explicit proxy returns the VPS egress IP
-- `api.openai.com/v1/models` returns `401`
-
-Then verify from a real client behind the router with no proxy settings:
-
-- `https://www.google.com`
-- `https://ifconfig.me/ip`
-- `https://ipinfo.io/ip`
-
-## 5. Optional ASUS Shared-Rules Consumer
-
-If you also want the ASUS `shadowsocks-libev` side to consume the same rules repo:
-
-```bash
-./scripts/deploy-asus-rules.sh
-```
-
-## 6. Optional Router Deploy Key Registration
-
-If the GL router must push back to the shared-rules GitHub repo:
-
-```bash
-./scripts/register-router-rules-deploy-key.sh
-```
-
-The script can derive the GitHub `owner/repo` slug from the local router env file if the repo URLs are already set there.
-
-## Web UI Flow
-
-Main page:
+## 3. Open The Router UI
 
 - `https://<router-host>/xray.html`
 
-Supported operator flow:
+From there you can:
 
-1. choose or create a VPS profile
-2. fill SSH access for that profile
-3. `Read VPS And Update Profile`
-4. review the current state and drift
-5. `Sync Router + VPS`
-6. use `Selective Address Filter` for shared GitHub-backed rules
+- inspect the current VPS
+- create another VPS profile
+- read a reachable Debian VPS over SSH
+- sync router and VPS settings
+- manage selective routing rules
 
-Notes:
+## Step-By-Step Entry Points
 
-- the page does not own path enable/disable; the hardware switch does
-- the page only auto-refreshes lightweight status
-- log loading is manual
-- background rules sync is system-side, not page-side
-
-## Known Failure Modes
-
-### Some sites hang, others work
-
-Check in order:
-
-1. upstream topology and Wi-Fi quality
-2. VPS transport settings
-3. shared-rules mode and recent cutover state
-
-Do not assume every stall is a proxy bug.
-
-### Browser `chatgpt.com` challenge
-
-That is usually VPS IP reputation, not a broken transport path.
-
-Use OpenAI API and neutral egress-IP checks instead.
-
-### Selective domain rule appears delayed
-
-This is usually one of:
-
-- client DNS cache
-- already-open TCP session
-- client not using router DNS
-
-## Minimal Live Checks
-
-Useful commands:
+If you do not want the all-in-one installer, the supported manual sequence is:
 
 ```bash
-ssh root@$ROUTER_HOST '/usr/bin/router-rules status-json'
-ssh root@$ROUTER_HOST '/etc/init.d/codex-xray status || true'
-ssh root@$ROUTER_HOST 'iptables -t nat -S CODEX_TRANSPROXY'
-ssh root@$ROUTER_HOST "netstat -tn 2>/dev/null | grep ${XRAY_SERVER:-REPLACE_WITH_VPS_HOST}:${XRAY_PORT:-443} || true"
+./scripts/init-config.sh
+./scripts/validate-env.sh vps
+./scripts/validate-env.sh router
+./scripts/deploy-vps-config.sh
+./scripts/deploy-child-router.sh
+./scripts/verify-child-router.sh
 ```
 
-## Rollback
+## Shared Rules Are Optional
 
-On the router:
+GitHub-backed shared rules are not required for the first install.
 
-```bash
-ssh root@$ROUTER_HOST '/etc/init.d/codex-transproxy stop; /etc/init.d/codex-xray stop'
-```
+You can leave these empty initially:
 
-On the VPS:
+- `RULES_REPO_FETCH_URL`
+- `RULES_REPO_PUSH_URL`
 
-- restore the latest `config.json.bak.*`
-- run `xray run -test`
-- restart `xray`
+The basic Xray path still works without them.
+
+## Known Runtime Behaviors
+
+### Selective domain rule looks delayed
+
+That usually means one of:
+
+- the client still has a DNS cache entry
+- the client kept an old TCP session open
+- the client is not using router DNS
+
+### Some sites hang while others work
+
+Check in this order:
+
+1. uplink quality and topology
+2. VPS transport path
+3. whether the site is inside or outside the selective set
+
+### `chatgpt.com` challenge
+
+That is usually VPS IP reputation, not a broken Xray transport path.
+
+Use `api.openai.com`, `ifconfig.me`, and `ipinfo.io` as the health checks instead.

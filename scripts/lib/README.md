@@ -8,4 +8,6 @@ Current helper:
   - load env files
   - enforce required variables
   - reject placeholder values
+  - derive hosts from SSH targets
+  - resolve router and VPS profile paths
   - derive a GitHub repo slug from configured repo URLs

@@ -1,51 +1,44 @@
-# Config Folder
+# Config
 
-This folder contains only configuration templates.
+This folder contains the local `.env` templates used by the supported quickstart.
 
-Copy the examples to local untracked files before use:
+## Main Files
 
-- `router.env.example` -> `router.env`
-- `vps.env.example` -> `vps.env`
-- `asus-router.env.example` -> `asus-router.env`
+- `router.env.example`
+  - copy to `router.env`
+  - fill only `ROUTER_SSH` for the first install
+- `vps.env.example`
+  - copy to `vps.env`
+  - fill only `VPS_SSH` for the first install
 
-For a minimal first setup, edit only:
+## What Gets Generated Automatically
 
-- `config/router.env`
-  - `ROUTER_HOST`
-- `config/vps.env`
-  - `VPS_HOST`
-
-Then auto-fill the Xray identity fields:
+After you run:
 
 ```bash
 ./scripts/init-config.sh
 ```
 
-This generates and synchronizes:
+the scripts will generate and synchronize:
 
 - `XRAY_UUID`
 - `XRAY_SERVER_NAME`
 - `XRAY_SHORT_ID`
 - `XRAY_PRIVATE_KEY`
 - `XRAY_PUBLIC_KEY`
+- derived `ROUTER_HOST`
+- derived `VPS_HOST`
+- derived `XRAY_SERVER`
 
-Most other values have defaults in the deploy scripts and do not need to be touched for a normal first install.
+## Secondary Profiles
 
-These local `.env` files are intentionally ignored by git because they contain installation-specific values:
+Profile-specific examples that are not part of the main hello-world flow live next to the profile itself. For example:
 
-- router addresses
-- VPS host
-- UUIDs
-- Reality keys
-- GitHub repo URLs
+- `routers/openwrt-shadowsocks-libev/asus-router.env.example`
 
-Use:
+## Important
 
-```bash
-./scripts/init-config.sh
-./scripts/validate-env.sh router
-./scripts/validate-env.sh vps
-./scripts/validate-env.sh asus
-```
+Tracked example files stay generic. Your real values belong only in local untracked files such as:
 
-to make sure placeholders were replaced before deploy.
+- `config/router.env`
+- `config/vps.env`

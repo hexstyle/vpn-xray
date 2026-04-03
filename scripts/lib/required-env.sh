@@ -18,6 +18,16 @@ load_env_file() {
   set +a
 }
 
+load_profile_defaults() {
+  local profile_file="$1"
+
+  [[ -f "$profile_file" ]] || return 0
+  set -a
+  # shellcheck disable=SC1090
+  source "$profile_file"
+  set +a
+}
+
 require_vars() {
   local name
   for name in "$@"; do
@@ -96,4 +106,47 @@ default_router_env_file() {
   else
     printf '%s\n' "$root_dir/config/router.env"
   fi
+}
+
+default_vps_env_file() {
+  local root_dir="$1"
+  printf '%s\n' "$root_dir/config/vps.env"
+}
+
+host_from_ssh_target() {
+  local target="${1:-}"
+
+  target="${target#ssh://}"
+  target="${target%%/*}"
+  target="${target##*@}"
+
+  if [[ "$target" =~ ^\[(.*)\]:[0-9]+$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  if [[ "$target" =~ ^\[(.*)\]$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  target="${target%%:*}"
+  printf '%s\n' "$target"
+}
+
+router_profile_dir() {
+  local root_dir="$1"
+  local profile="${2:-gl-mt3000-glinet}"
+  printf '%s\n' "$root_dir/routers/$profile"
+}
+
+router_common_dir() {
+  local root_dir="$1"
+  printf '%s\n' "$root_dir/routers/common"
+}
+
+vps_profile_dir() {
+  local root_dir="$1"
+  local profile="${2:-debian-13}"
+  printf '%s\n' "$root_dir/vps/$profile"
 }

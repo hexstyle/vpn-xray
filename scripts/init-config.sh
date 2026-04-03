@@ -8,12 +8,14 @@ VPS_ENV="${VPS_ENV:-$ROOT_DIR/config/vps.env}"
 ROUTER_TEMPLATE="$ROOT_DIR/config/router.env.example"
 VPS_TEMPLATE="$ROOT_DIR/config/vps.env.example"
 DEFAULT_SERVER_NAME="${DEFAULT_SERVER_NAME:-www.microsoft.com}"
+DEFAULT_ROUTER_PROFILE="${DEFAULT_ROUTER_PROFILE:-gl-mt3000-glinet}"
+DEFAULT_VPS_PROFILE="${DEFAULT_VPS_PROFILE:-debian-13}"
 
 mkdir -p "$(dirname "$ROUTER_ENV")" "$(dirname "$VPS_ENV")"
 [[ -f "$ROUTER_ENV" ]] || cp "$ROUTER_TEMPLATE" "$ROUTER_ENV"
 [[ -f "$VPS_ENV" ]] || cp "$VPS_TEMPLATE" "$VPS_ENV"
 
-python3 - <<'PY' "$ROUTER_ENV" "$VPS_ENV" "$DEFAULT_SERVER_NAME"
+python3 - <<'PY' "$ROUTER_ENV" "$VPS_ENV" "$DEFAULT_SERVER_NAME" "$DEFAULT_ROUTER_PROFILE" "$DEFAULT_VPS_PROFILE"
 import base64
 import os
 import secrets
@@ -72,6 +74,20 @@ def b64url_no_pad(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
+def host_from_ssh_target(target: str) -> str:
+    target = target.strip()
+    if not target:
+        return ""
+    if target.startswith("ssh://"):
+        target = target[6:]
+    target = target.split("/", 1)[0]
+    if "@" in target:
+        target = target.split("@", 1)[1]
+    if target.startswith("[") and "]" in target:
+        return target[1:].split("]", 1)[0]
+    return target.split(":", 1)[0]
+
+
 def clamp_scalar(raw: bytes) -> bytes:
     k = bytearray(raw)
     k[0] &= 248
@@ -122,9 +138,30 @@ def generate_reality_pair():
 router_path = Path(sys.argv[1])
 vps_path = Path(sys.argv[2])
 default_server_name = sys.argv[3]
+default_router_profile = sys.argv[4]
+default_vps_profile = sys.argv[5]
 
 router_lines, router, _ = parse_env(router_path)
 vps_lines, vps, _ = parse_env(vps_path)
+
+if is_placeholder(router.get("ROUTER_PROFILE", "").strip()):
+    set_value(router_lines, "ROUTER_PROFILE", default_router_profile)
+
+if is_placeholder(vps.get("VPS_PROFILE", "").strip()):
+    set_value(vps_lines, "VPS_PROFILE", default_vps_profile)
+
+router_ssh = router.get("ROUTER_SSH", "").strip()
+vps_ssh = vps.get("VPS_SSH", "").strip()
+
+router_host = router.get("ROUTER_HOST", "").strip()
+if is_placeholder(router_host) and not is_placeholder(router_ssh):
+    router_host = host_from_ssh_target(router_ssh)
+    set_value(router_lines, "ROUTER_HOST", router_host)
+
+vps_host = vps.get("VPS_HOST", "").strip()
+if is_placeholder(vps_host) and not is_placeholder(vps_ssh):
+    vps_host = host_from_ssh_target(vps_ssh)
+    set_value(vps_lines, "VPS_HOST", vps_host)
 
 uuid_value = None
 for candidate in (router.get("XRAY_UUID"), vps.get("XRAY_UUID")):
@@ -173,7 +210,6 @@ set_value(vps_lines, "XRAY_SHORT_ID", short_id)
 set_value(router_lines, "XRAY_PUBLIC_KEY", public_key)
 set_value(vps_lines, "XRAY_PRIVATE_KEY", private_key)
 
-vps_host = vps.get("VPS_HOST", "").strip()
 router_xray_server = router.get("XRAY_SERVER", "").strip()
 if not is_placeholder(vps_host) and is_placeholder(router_xray_server):
     set_value(router_lines, "XRAY_SERVER", vps_host)

@@ -1,6 +1,6 @@
 # Shared Rules
 
-This document covers the shared destination-list layer used by multiple routers.
+This document covers the optional GitHub-backed destination list used by supported router profiles.
 
 ## Goal
 
@@ -32,7 +32,7 @@ Comments start with `#`.
 
 Main script:
 
-- `router-files/router-rules`
+- `routers/common/files/router-rules`
 
 Responsibilities:
 
@@ -114,7 +114,7 @@ Important:
 
 ## Consumers
 
-## GL child router
+### GL child router
 
 Consumer:
 
@@ -134,7 +134,7 @@ Important:
 - GL selective mode is no longer a snapshot-only model for domains
 - if a domain's IPv4 changes over time, the live set updates when clients resolve it through router DNS
 
-## ASUS router
+### Secondary OpenWrt `shadowsocks-libev` router
 
 Consumer:
 
@@ -153,7 +153,7 @@ This is intentionally snapshot-based because that consumer does not match domain
 
 Init service:
 
-- `router-files/router-rules-sync.init`
+- `routers/common/files/router-rules-sync.init`
 
 Behavior:
 
@@ -198,18 +198,18 @@ Mode semantics:
 Useful checks on GL:
 
 ```sh
-ssh root@$ROUTER_HOST '/usr/bin/router-rules status-json'
-ssh root@$ROUTER_HOST 'ipset list xray_selective_dst | sed -n "1,25p"'
-ssh root@$ROUTER_HOST 'sed -n "1,20p" /tmp/dnsmasq.d/router-rules-xray-ipset.conf'
-ssh root@$ROUTER_HOST 'iptables -t nat -S CODEX_TRANSPROXY'
+ssh "$ROUTER_SSH" '/usr/bin/router-rules status-json'
+ssh "$ROUTER_SSH" 'ipset list xray_selective_dst | sed -n "1,25p"'
+ssh "$ROUTER_SSH" 'sed -n "1,20p" /tmp/dnsmasq.d/router-rules-xray-ipset.conf'
+ssh "$ROUTER_SSH" 'iptables -t nat -S CODEX_TRANSPROXY'
 ```
 
-Useful checks on ASUS:
+Useful checks on the secondary `shadowsocks-libev` consumer:
 
 ```sh
-ssh root@$ASUS_ROUTER_HOST '/usr/bin/router-rules status-json'
-ssh root@$ASUS_ROUTER_HOST 'sed -n "1,40p" /etc/router-rules/generated/resolution_map.tsv'
-ssh root@$ASUS_ROUTER_HOST 'uci -q show shadowsocks-libev.ss_rules | sed -n "1,12p"'
+ssh "$SECONDARY_ROUTER_SSH" '/usr/bin/router-rules status-json'
+ssh "$SECONDARY_ROUTER_SSH" 'sed -n "1,40p" /etc/router-rules/generated/resolution_map.tsv'
+ssh "$SECONDARY_ROUTER_SSH" 'uci -q show shadowsocks-libev.ss_rules | sed -n "1,12p"'
 ```
 
 Useful check for the canonical repo:
