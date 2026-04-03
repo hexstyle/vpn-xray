@@ -2,6 +2,12 @@
 
 Portable OpenWrt bundle for a GL.iNet child router that forwards client TCP traffic to a VPS over `VLESS + Reality`, with no proxy settings on client devices.
 
+<img src="./docs/assets/gl-mt3000-router.jpg" alt="GL.iNet GL-MT3000 travel router" width="420">
+
+This repository targets the compact `GL.iNet GL-MT3000` travel router shown above. It runs from `5V` power, is small enough to throw in a bag, and can be powered from a Mac over USB while you work through your own VPN/VPS path. The physical toggle visible on the front edge is used here as the source of truth for enabling or disabling the proxy path.
+
+The main use case is split routing from a work laptop: keep ordinary traffic outside the personal tunnel, but send the destinations you actually need through your own VPS instead of through a corporate VPN. That is useful when you need stable access to selected external services, including foreign LLM agents, without changing proxy settings on the client. The router UI also supports fast SSH-first provisioning of another clean Debian VPS, so if the current server gets blocked or you lose access to it, you can move to another reachable host and stay online quickly.
+
 This repository is intentionally sanitized:
 
 - no live router IPs
