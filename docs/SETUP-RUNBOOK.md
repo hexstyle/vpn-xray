@@ -24,11 +24,20 @@ cp config/router.env.example config/router.env
 cp config/asus-router.env.example config/asus-router.env
 ```
 
-Replace all placeholders in:
+For a minimal first install, edit only:
 
-- `config/vps.env`
 - `config/router.env`
-- `config/asus-router.env` if used
+  - `ROUTER_HOST`
+- `config/vps.env`
+  - `VPS_HOST`
+
+Then generate the Xray-side values automatically:
+
+```bash
+./scripts/init-config.sh
+```
+
+If you also use the ASUS shared-rules consumer, fill `config/asus-router.env` separately.
 
 Validate before deploy:
 

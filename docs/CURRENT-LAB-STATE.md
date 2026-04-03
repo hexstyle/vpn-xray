@@ -1,10 +1,10 @@
-# Validation Matrix
+# Current Implementation State
 
-This file summarizes the validated baseline and expected runtime shape.
+This file summarizes the implemented feature set and the expected runtime shape.
 
 Live addresses, keys, and credentials belong in local env files, not in this document.
 
-## Validated Components
+## Current Baseline
 
 - child router family:
   - `GL.iNet GL-MT3000`
@@ -19,6 +19,18 @@ Live addresses, keys, and credentials belong in local env files, not in this doc
 - shared-rules sync loop:
   - `30s` default interval
 
+## Current User-Facing Capabilities
+
+- transparent browsing without proxy settings on client devices
+- hardware toggle for `proxy path on / off`
+- web UI at `https://<router-host>/xray.html`
+- SSH-first setup of a new Debian VPS from the router UI
+- switching between saved VPS profiles
+- shared selective-rules list synced through GitHub
+- local `full` / `selective` mode on the GL router
+- live domain-based selective routing on GL through `dnsmasq -> ipset`
+- ASUS consumer based on resolved IPv4 snapshots for `shadowsocks-libev`
+
 ## Live Values Are Not Tracked Here
 
 These always come from local untracked env files:
@@ -32,9 +44,9 @@ These always come from local untracked env files:
 - Reality short ID
 - operator-owned GitHub repo URLs for shared rules
 
-## Current Operator Expectations
+## How To Use It Day To Day
 
-The operator should be able to derive everything runtime-specific from:
+Runtime-specific values come from:
 
 - `config/router.env`
 - `config/vps.env`
@@ -52,7 +64,7 @@ The UI and diagnostics endpoints are always shaped like:
 - `https://<router-host>/cgi-bin/xray-rules`
 - `http://<router-host>:<proxy-port>`
 
-## Stable Runtime Expectations
+## Expected Runtime Behavior
 
 Healthy state should look like:
 

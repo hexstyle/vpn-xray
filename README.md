@@ -10,14 +10,26 @@ The main use case is split routing from a work laptop: keep ordinary traffic out
 
 All installation-specific values are supplied through local untracked `.env` files created from the examples in `config/`.
 
-## Start Here
+## What Works Right Now
 
-- [Audit](./docs/AUDIT.md)
-- [Setup Runbook](./docs/AGENT-RUNBOOK.md)
-- [Architecture](./docs/ARCHITECTURE.md)
-- [Shared Rules](./docs/SHARED-RULES.md)
+- `xray-core 26.3.27` on the router with `VLESS + Reality`
+- transparent client TCP forwarding through `redsocks`
+- GL hardware switch for `path on / path off`
+- SSH-first VPS profile management in the web UI
+- quick move to another clean Debian VPS if you still have SSH access to it
+- shared GitHub-backed list of domains / IPv4 / CIDR
+- `full` and `selective` routing modes on the GL router
+- domain-aware selective mode on GL through `dnsmasq -> ipset`
+- shared-rules consumer for ASUS `shadowsocks-libev`
+
+## Documentation
+
+- [Documentation Index](./docs/README.md)
+- [Setup Runbook](./docs/SETUP-RUNBOOK.md)
+- [Current Implementation State](./docs/CURRENT-LAB-STATE.md)
 - [Web UI](./docs/WEB-UI.md)
-- [Validation Matrix](./docs/CURRENT-LAB-STATE.md)
+- [Shared Rules](./docs/SHARED-RULES.md)
+- [Architecture](./docs/ARCHITECTURE.md)
 - [UI Extensibility Notes](./docs/UI-EXTENSIBILITY.md)
 
 ## What This Bundle Provides
@@ -44,9 +56,20 @@ cp config/router.env.example config/router.env
 cp config/asus-router.env.example config/asus-router.env
 ```
 
-These local `.env` files are ignored by git.
+For a normal first install, edit only:
 
-Required values are enforced. The deploy scripts fail fast if placeholders remain.
+- `config/router.env`
+  - `ROUTER_HOST`
+- `config/vps.env`
+  - `VPS_HOST`
+
+Then generate the Xray identity values automatically:
+
+```bash
+./scripts/init-config.sh
+```
+
+These local `.env` files are ignored by git. Required values are enforced, and the deploy scripts fail fast if placeholders remain.
 
 Validate them explicitly before deploy:
 
@@ -59,46 +82,64 @@ Validate them explicitly before deploy:
 
 ## Quick Start
 
-1. Fill `config/vps.env`.
-2. Fill `config/router.env`.
-3. Deploy the VPS:
+1. Copy `config/vps.env.example` to `config/vps.env`.
+2. Copy `config/router.env.example` to `config/router.env`.
+3. Fill only `VPS_HOST` and `ROUTER_HOST`.
+4. Generate the Xray values:
+
+```bash
+./scripts/init-config.sh
+```
+
+5. Deploy the VPS:
 
 ```bash
 ./scripts/deploy-vps-config.sh
 ```
 
-4. Deploy the GL router:
+6. Deploy the GL router:
 
 ```bash
 ./scripts/deploy-child-router.sh
 ```
 
-5. Verify the GL router:
+7. Verify the GL router:
 
 ```bash
 ./scripts/verify-child-router.sh
 ```
 
-6. If you also need the ASUS shared-rules consumer:
+8. If you also need the ASUS shared-rules consumer:
 
 ```bash
 ./scripts/deploy-asus-rules.sh
 ```
 
+After deploy, open:
+
+- `https://<router-host>/xray.html`
+
+From there you can:
+
+- inspect or switch VPS profiles
+- sync router and VPS config
+- manage the shared selective-rules list
+- see whether the router is already in sync with GitHub and current runtime state
+
 ## Required Parameters
 
-Values you must replace in local env files:
+Values you usually replace by hand:
 
 - router management host
-- router LAN address
-- home/admin subnet
 - VPS host
+- shared-rules GitHub repo URLs if you want Git-backed selective rules immediately
+
+Values that can be generated automatically:
+
 - Xray UUID
 - Reality public/private key pair
 - Reality short ID
-- SNI / camouflage host
-- shared-rules GitHub repo URLs
-- router device IDs used by the shared-rules sync layer
+- default SNI / camouflage host
 
 Values already pinned here and normally reused as-is:
 

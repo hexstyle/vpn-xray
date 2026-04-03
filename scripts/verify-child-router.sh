@@ -11,6 +11,8 @@ if [[ -n "$ENV_ROUTER_HOST" ]]; then
   ROUTER_HOST="$ENV_ROUTER_HOST"
 fi
 
+PROXY_PORT="${PROXY_PORT:-1083}"
+
 require_vars ROUTER_HOST PROXY_PORT
 reject_placeholder_vars ROUTER_HOST
 
