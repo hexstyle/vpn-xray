@@ -1,6 +1,6 @@
 # Getting Started
 
-This page is for a first install from scratch.
+This page is the human-first guide for a clean install from scratch.
 
 Current supported hello-world combination:
 
@@ -9,179 +9,182 @@ Current supported hello-world combination:
 - VPS OS: `Debian 13`
 - VPS profile: `debian-13`
 
-If you want the shortest possible version, read [`../README.md`](../README.md) first and come back here only if you need more detail.
+If you only want the shortest version, start with [`../README.md`](../README.md).
 
 ## What You Need
 
 - one `GL.iNet GL-MT3000` router
-- one VPS running `Debian 13`
-- your computer on macOS, Linux, or Windows
-- internet access for the router and for the VPS during install
+- one VPS with `Debian 13`
+- internet uplink on the router during bootstrap
+- outbound internet on the VPS during setup
+- a usable global IPv4 address on the VPS
+- any computer with an `ssh` client
 
-This stack is currently `IPv4-only` end to end. Your VPS must have a usable global IPv4 address.
+You do not need WSL, Docker, Python, or a local installer for the main path.
 
-## Download The Repository
+If `ssh` is missing on Windows, enable the built-in `OpenSSH Client` optional feature first and then continue with the same commands.
 
-Choose one:
+## Before You Start
 
-- GitHub ZIP:
-  - open `https://github.com/hexstyle/vpn-xray`
-  - click `Code`
-  - click `Download ZIP`
-  - unpack the ZIP
-- Git:
+### Router
 
-```bash
-git clone https://github.com/hexstyle/vpn-xray.git
-cd vpn-xray
+1. Factory-reset the router.
+2. Connect your computer to it by Wi-Fi or LAN.
+3. Open `http://192.168.8.1`.
+4. Finish the GL.iNet wizard.
+5. Set the admin password.
+6. Test SSH:
+
+```sh
+ssh root@192.168.8.1
 ```
 
-## Prepare Your Computer
+Use the same password you set in the GL.iNet web panel.
 
-### macOS
+What must be true before you continue:
 
-- open `Terminal`
+- `ssh root@192.168.8.1` works
 
-### Linux
+### VPS
 
-- open your normal terminal
+Create a VPS with:
 
-### Windows
+- `Debian 13`
+- public IPv4
+- `root` SSH
 
-Install WSL once:
+Test it:
 
-```powershell
-wsl --install
+```sh
+ssh root@YOUR_VPS_IP
+```
+
+What must be true before you continue:
+
+- `ssh root@YOUR_VPS_IP` works
+
+## Bootstrap the Router Platform
+
+SSH into the router:
+
+```sh
+ssh root@192.168.8.1
+```
+
+Run the bootstrap command on the router:
+
+```sh
+sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)"
+```
+
+This installs the router-side platform only:
+
+- runtime
+- watchdog
+- web UI
+- bundled VPS profiles
+
+At this stage the router is ready, but no VPS path is active yet.
+
+## Configure the VPS in the Router UI
+
+Open:
+
+```text
+https://192.168.8.1/xray.html
 ```
 
 Then:
 
-1. reboot Windows
-2. open `PowerShell`
-3. `cd` into the unpacked repository folder
+1. Click `New VPS` or select an existing profile.
+2. Fill `VPS Host / Address`.
+3. Choose the SSH auth method.
+4. Fill:
+   - `SSH User`
+   - `SSH Password`
+   - or a bootstrap private key
+5. Click `Sync Router + VPS`.
 
-You will later run:
+What happens next:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
+- the router checks SSH access to the VPS
+- the router reads the target system
+- the router installs Xray on the VPS if needed
+- the router generates or reuses client/server values
+- the router syncs the VPS and the local router profile
 
-SSH is the only command-line login the installer needs. The SSH checks below simply confirm that your computer can log into the router and the VPS before automation starts.
-The installer keeps its own SSH host-key cache in `tmp/ssh/known_hosts`, so a stale key in your personal `~/.ssh/known_hosts` should not block the install.
+## Start Using It
 
-## Prepare The Router
+After the first successful sync:
 
-1. Factory-reset the router.
-2. Connect your computer to the router by Wi-Fi or LAN.
-3. Open `http://192.168.8.1`.
-4. Finish the GL.iNet first-run wizard and set the admin password.
-5. Test SSH:
+1. Connect your devices to the router.
+2. Put the physical switch in the `ON` position.
+3. Keep the router in `full` mode unless you specifically need selective routing.
 
-```bash
-ssh root@192.168.8.1
-```
+Default behavior:
 
-Use the same password you set in the GL.iNet web interface.
-If `ssh` is not available in PowerShell on Windows, run the same command inside WSL after `wsl --install`.
+- `full`
+  - all client traffic goes through the VPS
+- `selective`
+  - only chosen destinations go through the VPS
 
-If the Wi-Fi password is not shown on the sticker or in the quick card, try `goodlife`.
+## First Checks
 
-At this point, the only thing that must be true is:
-
-- `ssh root@192.168.8.1` works from your computer
-
-## Prepare The VPS
-
-1. Create a VPS with `Debian 13`.
-2. Make sure it has a public IPv4 address.
-3. Verify SSH access:
-
-```bash
-ssh root@YOUR_VPS_IP
-```
-
-On Windows, you can run that check either from PowerShell or from the WSL terminal.
-
-At this point, the only thing that must be true is:
-
-- `ssh root@YOUR_VPS_IP` works from your computer
-
-## Fill `install.env`
-
-Create the file:
-
-```bash
-cp install.env.example install.env
-```
-
-Fill only these two lines for the first install:
-
-```env
-ROUTER_SSH=root@192.168.8.1
-VPS_SSH=root@YOUR_VPS_IP
-```
-
-Leave the generated Xray values empty. They are created automatically.
-
-## Run Preflight First
-
-macOS / Linux:
-
-```bash
-PREFLIGHT_ONLY=1 ./install.sh
-```
-
-Windows:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -PreflightOnly
-```
-
-If preflight passes, run the real install.
-
-## Run The Real Install
-
-macOS / Linux:
-
-```bash
-./install.sh
-```
-
-Windows:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-## What To Expect After Install
-
-1. Keep the physical router switch in the `ON` position.
-2. Connect your devices to the GL router by Wi-Fi or LAN.
-3. Open:
-
-- `https://<router-host>/xray.html`
-
-4. The default routing mode is `full`.
-   That means all client traffic goes through the VPS.
-5. `selective` mode is optional and can be enabled later in the web UI.
-
-## How To Check That It Works
-
-From a device connected to the router, open:
+From a device connected behind the router, open:
 
 - `https://ifconfig.me/ip`
 - `https://ipinfo.io/ip`
 
-You should see the VPS egress IP, not your home provider IP.
+You should see the VPS IP.
+
+Useful extra checks:
+
+- `https://www.google.com`
+- `https://example.com`
+
+`api.openai.com` is advisory only. A VPS IP can be filtered by OpenAI even when the transport itself is healthy.
 
 ## If Something Fails
 
-- If install stops before changing anything:
-  - fix the reported preflight problem and run again
-- If install completes but verify says the switch is `OFF`:
-  - flip the physical switch to `ON`
-  - rerun `routers/gl-mt3000-glinet/verify-router.sh`
-- If Google and the IP checks work, but `api.openai.com` does not:
-  - the transport may still be healthy
-  - the current VPS IP may be filtered by OpenAI
-  - switch to another VPS later in the router UI if needed
+### Bootstrap on the Router Fails
+
+Common causes:
+
+- the router has no internet uplink yet
+- router time/NTP is not settled
+- package feeds are temporarily unreachable
+- the firmware does not match the supported router profile
+
+What to do:
+
+- confirm the router itself can browse out
+- wait a minute after the uplink comes up and retry
+- rerun the same bootstrap command
+
+### UI Says the Platform Is Waiting for a VPS
+
+That is not an error.
+
+It means:
+
+- the router platform is installed
+- but you still need one successful `Sync Router + VPS`
+
+### `Sync Router + VPS` Fails
+
+Read the message literally:
+
+- SSH problem
+  - fix `VPS Host / Address`, `SSH User`, password or key
+- unsupported OS
+  - use the supported VPS profile for now
+- port problem
+  - if port `443` is busy on the VPS, use another `XRAY_PORT` only in the advanced installer path
+
+## Advanced Path
+
+If you want one local command from a workstation to orchestrate both sides, that still exists:
+
+- [`../install.sh`](../install.sh)
+
+That is the advanced path now, not the primary one.

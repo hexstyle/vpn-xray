@@ -15,6 +15,7 @@ PROBE_SOCKS_PORT='18084'
 LOCAL_HTTP_PROXY='http://127.0.0.1:1083'
 LIVE_HTTP_PORT='1083'
 LIVE_SOCKS_PORT='1084'
+CONFIG_READY_FILE='/etc/xray/codex-xray.ready'
 
 REQUEST_DATA=''
 
@@ -76,6 +77,10 @@ listen_present() {
 
 nat_rule_present() {
 	iptables -t nat -S PREROUTING 2>/dev/null | grep -q 'CODEX_TRANSPROXY'
+}
+
+config_ready() {
+	[ -f "$CONFIG_READY_FILE" ] && [ -s "$XRAY_CONFIG" ]
 }
 
 current_switch_state() {
@@ -373,10 +378,11 @@ probe_json() {
 status_json() {
 	local switch_state switch_func xray_running redsocks_running http_listen socks_listen redsocks_listen transproxy
 	local server_address server_port server_name public_key short_id flow uuid access_log error_log
-	local path_requested path_active
+	local path_requested path_active ready path_state
 
 	switch_state="$(current_switch_state)"
 	switch_func="$(uci -q get switch-button.@main[0].func 2>/dev/null || true)"
+	config_ready && ready=1 || ready=0
 
 	service_running "$XRAY_PID" && xray_running=1 || xray_running=0
 	service_running "$REDSOCKS_PID" && redsocks_running=1 || redsocks_running=0
@@ -397,6 +403,16 @@ status_json() {
 		path_active=0
 	fi
 
+	if [ "$switch_state" != 'on' ]; then
+		path_state='switch_off'
+	elif [ "$ready" != '1' ]; then
+		path_state='needs_vps_profile'
+	elif [ "$path_active" = '1' ]; then
+		path_state='active'
+	else
+		path_state='inactive'
+	fi
+
 	server_address="$(config_value '@.outbounds[0].settings.vnext[0].address')"
 	server_port="$(config_value '@.outbounds[0].settings.vnext[0].port')"
 	server_name="$(config_value '@.outbounds[0].streamSettings.realitySettings.serverName')"
@@ -410,6 +426,8 @@ status_json() {
 	printf '{'
 	printf '"switch_state":"%s",' "$(json_escape "$switch_state")"
 	printf '"switch_func":"%s",' "$(json_escape "$switch_func")"
+	printf '"config_ready":'; json_bool "$ready"; printf ','
+	printf '"path_state":"%s",' "$(json_escape "$path_state")"
 	printf '"path_requested":'; json_bool "$path_requested"; printf ','
 	printf '"path_active":'; json_bool "$path_active"; printf ','
 	printf '"xray_running":'; json_bool "$xray_running"; printf ','

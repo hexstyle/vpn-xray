@@ -9,6 +9,7 @@ PREFLIGHT_ONLY=0
 if [[ "${1:-}" == "--preflight" ]]; then
   PREFLIGHT_ONLY=1
 fi
+
 ENV_ROUTER_SSH="${ROUTER_SSH:-}"
 ENV_ROUTER_HOST="${ROUTER_HOST:-}"
 ENV_ROUTER_LAN_IP="${ROUTER_LAN_IP:-}"
@@ -24,14 +25,14 @@ load_profile_defaults "$ROUTER_PROFILE_DIR/profile.env"
 if [[ -n "$ENV_ROUTER_SSH" ]]; then
   ROUTER_SSH="$ENV_ROUTER_SSH"
 fi
-
 if [[ -n "$ENV_ROUTER_HOST" ]]; then
   ROUTER_HOST="$ENV_ROUTER_HOST"
 fi
-
 if [[ -n "$ENV_ROUTER_LAN_IP" ]]; then
   ROUTER_LAN_IP="$ENV_ROUTER_LAN_IP"
 fi
+
+require_local_commands bash ssh ssh-keygen tar python3
 
 ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"
 ROUTER_HOST="${ROUTER_HOST:-$(host_from_ssh_target "$ROUTER_SSH")}"
@@ -80,22 +81,16 @@ router_ssh() {
   return "$rc"
 }
 
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 require_vars \
   ROUTER_SSH \
   ROUTER_HOST \
   ROUTER_EXPECTED_MODEL \
   ROUTER_REQUIRED_COMMANDS \
   ROUTER_REQUIRES_DNSMASQ_IPSET \
-  XRAY_CORE_ARCHIVE \
-  XRAY_CORE_URL \
-  XRAY_CORE_ARCHIVE_SHA256 \
-  XRAY_CORE_BINARY_SHA256 \
-  REDSOCKS_PACKAGE \
-  REDSOCKS_URL \
-  REDSOCKS_SHA256 \
-  LIBEVENT_PACKAGE \
-  LIBEVENT_URL \
-  LIBEVENT_SHA256 \
   XRAY_SERVER \
   XRAY_PORT \
   XRAY_UUID \
@@ -159,254 +154,94 @@ if [[ "${ISOLATE_WIFI_LAN_ONLY:-0}" == "1" && "$ROUTER_HOST" == "$ROUTER_LAN_IP"
 fi
 
 tmpdir="$(mktemp -d)"
-cache_dir="$ROOT_DIR/artifacts"
 cleanup() {
   rm -rf "$tmpdir"
 }
 trap cleanup EXIT
-
-archive="$tmpdir/$XRAY_CORE_ARCHIVE"
-cached_archive="$cache_dir/$XRAY_CORE_ARCHIVE"
-extract_dir="$tmpdir/extract"
-binary="$extract_dir/xray"
-libevent_pkg="$cache_dir/$LIBEVENT_PACKAGE"
-redsocks_pkg="$cache_dir/$REDSOCKS_PACKAGE"
-vps_bundle_tar="$tmpdir/vps-bundles.tar"
-vps_bundle_root="$tmpdir/router-vps-bundles"
-
-mkdir -p "$cache_dir"
-if [[ -f "$cached_archive" ]]; then
-  cp "$cached_archive" "$archive"
-else
-  curl --http1.1 --retry 3 --retry-delay 1 -fL --max-time 180 -o "$archive" "$XRAY_CORE_URL"
-fi
-
-archive_sha="$(python3 - <<'PY' "$archive"
-import hashlib, pathlib, sys
-p = pathlib.Path(sys.argv[1])
-print(hashlib.sha256(p.read_bytes()).hexdigest())
-PY
-)"
-if [[ "$archive_sha" != "$XRAY_CORE_ARCHIVE_SHA256" ]]; then
-  curl --http1.1 --retry 3 --retry-delay 1 -fL --max-time 180 -o "$archive" "$XRAY_CORE_URL"
-  archive_sha="$(python3 - <<'PY' "$archive"
-import hashlib, pathlib, sys
-p = pathlib.Path(sys.argv[1])
-print(hashlib.sha256(p.read_bytes()).hexdigest())
-PY
-)"
-  if [[ "$archive_sha" != "$XRAY_CORE_ARCHIVE_SHA256" ]]; then
-    echo "Archive sha256 mismatch: $archive_sha" >&2
-    exit 1
-  fi
-fi
-
-cp "$archive" "$cached_archive"
-mkdir -p "$extract_dir"
-unzip -oq "$archive" -d "$extract_dir"
-
-binary_sha="$(python3 - <<'PY' "$binary"
-import hashlib, pathlib, sys
-p = pathlib.Path(sys.argv[1])
-print(hashlib.sha256(p.read_bytes()).hexdigest())
-PY
-)"
-if [[ "$binary_sha" != "$XRAY_CORE_BINARY_SHA256" ]]; then
-  echo "Binary sha256 mismatch: $binary_sha" >&2
-  exit 1
-fi
 
 render_template() {
   local input="$1"
   local output="$2"
   python3 - <<'PY' "$input" "$output"
 import os, pathlib, re, sys
-template = pathlib.Path(sys.argv[1]).read_text()
+
+template_path = pathlib.Path(sys.argv[1])
+output_path = pathlib.Path(sys.argv[2])
+template = template_path.read_text()
+
 def repl(match):
     key = match.group(1)
-    return os.environ[key]
-pathlib.Path(sys.argv[2]).write_text(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
+    try:
+        return os.environ[key]
+    except KeyError:
+        raise SystemExit(f"Template {template_path} requires env variable {key}, but it is missing")
+
+output_path.write_text(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
 PY
 }
 
+source_bundle="$tmpdir/router-source.tar"
 json_cfg="$tmpdir/codex-xray.json"
 redsocks_cfg="$tmpdir/redsocks.conf"
 router_rules_cfg="$tmpdir/router-rules.config"
+
+tar -C "$ROOT_DIR" -cf "$source_bundle" common routers vps
 render_template "$ROUTER_PROFILE_DIR/files/codex-xray.json.template" "$json_cfg"
 render_template "$ROUTER_PROFILE_DIR/files/redsocks.conf.template" "$redsocks_cfg"
 render_template "$ROUTER_COMMON_DIR/files/router-rules.config.template" "$router_rules_cfg"
 
-mkdir -p "$vps_bundle_root/vps"
-for profile_dir in "$ROOT_DIR"/vps/*; do
-  [[ -d "$profile_dir" ]] || continue
-  [[ -f "$profile_dir/profile.env" ]] || continue
-  profile_name="$(basename "$profile_dir")"
-  mkdir -p "$vps_bundle_root/vps/$profile_name"
-  cp "$profile_dir/profile.env" "$vps_bundle_root/vps/$profile_name/profile.env"
-  if [[ -f "$profile_dir/README.md" ]]; then
-    cp "$profile_dir/README.md" "$vps_bundle_root/vps/$profile_name/README.md"
-  fi
-  if [[ -d "$profile_dir/files" ]]; then
-    mkdir -p "$vps_bundle_root/vps/$profile_name/files"
-    cp -R "$profile_dir/files/." "$vps_bundle_root/vps/$profile_name/files/"
-  fi
-done
-tar -C "$vps_bundle_root" -cf "$vps_bundle_tar" vps
+remote_source_root='/tmp/vpn-xray-local-src'
+remote_source_tar='/tmp/vpn-xray-local-src.tar'
+remote_platform_cmd=$(
+  cat <<EOF
+RULES_REPO_FETCH_URL=$(shell_quote "$RULES_REPO_FETCH_URL") \
+RULES_REPO_PUSH_URL=$(shell_quote "$RULES_REPO_PUSH_URL") \
+RULES_REPO_BRANCH=$(shell_quote "$RULES_REPO_BRANCH") \
+RULES_DEVICE_ID=$(shell_quote "$RULES_DEVICE_ID") \
+RULES_ENABLE_PUSH=$(shell_quote "${RULES_ENABLE_PUSH:-0}") \
+RULES_SYNC_INTERVAL=$(shell_quote "${RULES_SYNC_INTERVAL:-30}") \
+RULES_GIT_USER_NAME=$(shell_quote "${RULES_GIT_USER_NAME:-router-rules}") \
+RULES_GIT_USER_EMAIL=$(shell_quote "${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}") \
+RULES_DNS_RESOLVER=$(shell_quote "${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}") \
+XRAY_RULES_MODE=$(shell_quote "${XRAY_RULES_MODE:-full}") \
+ISOLATE_WIFI_LAN_ONLY=$(shell_quote "${ISOLATE_WIFI_LAN_ONLY:-0}") \
+VPN_XRAY_REPO_SLUG=$(shell_quote "local-source-bundle") \
+VPN_XRAY_REF=$(shell_quote "local-install") \
+sh $(shell_quote "$remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh") --source-dir $(shell_quote "$remote_source_root")
+EOF
+)
 
-fetch_pkg() {
-  local url="$1"
-  local path="$2"
-  local expected="$3"
-  if [[ ! -f "$path" ]]; then
-    curl --http1.1 --retry 3 --retry-delay 1 -fL --max-time 180 -o "$path" "$url"
-  fi
-  local got
-  got="$(python3 - <<'PY' "$path"
-import hashlib, pathlib, sys
-p = pathlib.Path(sys.argv[1])
-print(hashlib.sha256(p.read_bytes()).hexdigest())
-PY
-)"
-  if [[ "$got" != "$expected" ]]; then
-    rm -f "$path"
-    curl --http1.1 --retry 3 --retry-delay 1 -fL --max-time 180 -o "$path" "$url"
-    got="$(python3 - <<'PY' "$path"
-import hashlib, pathlib, sys
-p = pathlib.Path(sys.argv[1])
-print(hashlib.sha256(p.read_bytes()).hexdigest())
-PY
-)"
-    [[ "$got" == "$expected" ]] || {
-      echo "Package sha256 mismatch for $path: $got" >&2
-      exit 1
-    }
-  fi
-}
+router_ssh "rm -rf $remote_source_root && mkdir -p $remote_source_root"
+router_ssh "cat > $remote_source_tar" < "$source_bundle"
+router_ssh "tar -xf $remote_source_tar -C $remote_source_root && rm -f $remote_source_tar"
+router_ssh "$remote_platform_cmd"
 
-fetch_pkg "$LIBEVENT_URL" "$libevent_pkg" "$LIBEVENT_SHA256"
-fetch_pkg "$REDSOCKS_URL" "$redsocks_pkg" "$REDSOCKS_SHA256"
-
-router_ssh '
-  /etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
-  /etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
-  /etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
-  /etc/init.d/codex-xray stop >/dev/null 2>&1 || true
-  killall codex-xray-core 2>/dev/null || true
-  for pid in $(ps w | awk '\''$5=="/bin/sh" && $6=="/usr/bin/router-rules" {print $1}'\''); do
-    kill "$pid" 2>/dev/null || true
-  done
-  rm -rf /root/xray-staging /usr/share/vpn-xray 2>/dev/null || true
-  rm -f /usr/bin/xray /usr/local/bin/sing-box /usr/local/bin/sing-box-1.12.22 /usr/local/bin/sing-box-1.8.0 /usr/local/bin/sing-box-xray 2>/dev/null || true
-  mkdir -p /usr/local/bin /etc/xray /var/log/xray /etc/router-rules/generated /etc/router-rules/ssh /usr/share/vpn-xray
-'
-router_ssh "cat > /tmp/$LIBEVENT_PACKAGE" < "$libevent_pkg"
-router_ssh "cat > /tmp/$REDSOCKS_PACKAGE" < "$redsocks_pkg"
-router_ssh 'opkg install /tmp/'"$LIBEVENT_PACKAGE"' /tmp/'"$REDSOCKS_PACKAGE"' >/dev/null 2>&1 || true; command -v redsocks >/dev/null'
-if ! router_ssh 'opkg install git git-http curl ca-bundle ca-certificates 2>&1'; then
-  echo "WARNING: opkg install failed on the router; Git-backed shared-rules sync may not work until packages are installed." >&2
-fi
-router_ssh 'cat > /usr/local/bin/codex-xray-core && chmod 755 /usr/local/bin/codex-xray-core' < "$binary"
 router_ssh 'cat > /etc/xray/codex-xray.json && chmod 600 /etc/xray/codex-xray.json' < "$json_cfg"
 router_ssh 'cat > /etc/redsocks.conf && chmod 600 /etc/redsocks.conf' < "$redsocks_cfg"
 router_ssh 'cat > /etc/config/router_rules && chmod 600 /etc/config/router_rules' < "$router_rules_cfg"
-router_ssh 'cat > /etc/init.d/codex-xray && chmod 755 /etc/init.d/codex-xray' < "$ROUTER_PROFILE_DIR/files/codex-xray.init"
-router_ssh 'cat > /etc/init.d/codex-transproxy && chmod 755 /etc/init.d/codex-transproxy' < "$ROUTER_PROFILE_DIR/files/codex-transproxy.init"
-router_ssh 'cat > /etc/init.d/xray-switch-watchdog && chmod 755 /etc/init.d/xray-switch-watchdog' < "$ROUTER_PROFILE_DIR/files/xray-switch-watchdog.init"
-router_ssh 'cat > /etc/init.d/router-rules-sync && chmod 755 /etc/init.d/router-rules-sync' < "$ROUTER_COMMON_DIR/files/router-rules-sync.init"
-router_ssh 'cat > /etc/gl-switch.d/xray.sh && chmod 755 /etc/gl-switch.d/xray.sh' < "$ROUTER_PROFILE_DIR/files/gl-switch-xray.sh"
-router_ssh 'cat > /usr/bin/router-rules && chmod 755 /usr/bin/router-rules' < "$ROUTER_COMMON_DIR/files/router-rules"
-router_ssh 'cat > /www/xray.html && chmod 644 /www/xray.html' < "$ROUTER_PROFILE_DIR/files/xray.html"
-router_ssh 'cat > /www/cgi-bin/xray-admin && chmod 755 /www/cgi-bin/xray-admin' < "$ROUTER_PROFILE_DIR/files/xray-admin.cgi"
-router_ssh 'cat > /www/cgi-bin/xray-vps && chmod 755 /www/cgi-bin/xray-vps' < "$ROUTER_PROFILE_DIR/files/xray-vps.cgi"
-router_ssh 'cat > /www/cgi-bin/xray-rules && chmod 755 /www/cgi-bin/xray-rules' < "$ROUTER_PROFILE_DIR/files/xray-rules.cgi"
-router_ssh 'cat > /tmp/vpn-xray-vps.tar' < "$vps_bundle_tar"
-router_ssh 'mkdir -p /usr/share/vpn-xray && tar -xf /tmp/vpn-xray-vps.tar -C /usr/share/vpn-xray && rm -f /tmp/vpn-xray-vps.tar'
 
 router_ssh "
-  killall sing-box 2>/dev/null || true
-  killall sing-box-1.8.0 2>/dev/null || true
-  killall sing-box-1.12.22 2>/dev/null || true
-  killall xray-test 2>/dev/null || true
-  killall codex-xray-core 2>/dev/null || true
-  pids=\$(netstat -ltnp 2>/dev/null | awk '/:18081 / {print \$7}' | cut -d/ -f1 | sort -u)
-  [ -n \"\$pids\" ] && kill \$pids 2>/dev/null || true
-  uci -q delete firewall.codex_wan_socks_test
-  uci -q delete firewall.codex_wan_httpd_test
-  uci -q delete firewall.codex_wan_http_proxy_test
-  uci -q delete firewall.codex_wan_http_proxy_prod
-  uci -q delete firewall.codex_wan_redsocks_drop
-  uci -q set firewall.codex_wan_http_proxy_prod=rule
-  uci set firewall.codex_wan_http_proxy_prod.name='codex_wan_http_proxy_prod'
-  uci set firewall.codex_wan_http_proxy_prod.src='wan'
-  uci set firewall.codex_wan_http_proxy_prod.family='ipv4'
-  uci set firewall.codex_wan_http_proxy_prod.proto='tcp'
-  uci set firewall.codex_wan_http_proxy_prod.src_ip='$HOME_SUBNET'
-  uci set firewall.codex_wan_http_proxy_prod.dest_port='$PROXY_PORT'
-  uci set firewall.codex_wan_http_proxy_prod.target='ACCEPT'
-  uci set firewall.codex_wan_redsocks_drop=rule
-  uci set firewall.codex_wan_redsocks_drop.name='codex_wan_redsocks_drop'
-  uci set firewall.codex_wan_redsocks_drop.src='wan'
-  uci set firewall.codex_wan_redsocks_drop.family='ipv4'
-  uci set firewall.codex_wan_redsocks_drop.proto='tcp'
-  uci set firewall.codex_wan_redsocks_drop.dest_port='$REDSOCKS_PORT'
-  uci set firewall.codex_wan_redsocks_drop.target='DROP'
-  uci commit firewall
-  uci -q delete dhcp.lan.dhcp_option
-  uci set dhcp.lan.ra='disabled'
-  uci set dhcp.lan.dhcpv6='disabled'
-  uci set dhcp.lan.ndp='disabled'
-  uci -q delete dhcp.@dnsmasq[0].noresolv
-  uci set dhcp.@dnsmasq[0].resolvfile='/tmp/resolv.conf.d/resolv.conf.auto'
-  uci -q delete dhcp.@dnsmasq[0].server
-  uci commit dhcp
-  uci set network.lan.ip6assign='0'
-  uci set stubby.global.enabled='0'
-  uci commit stubby
-  uci set switch-button.@main[0].func='xray'
-  uci -q delete switch-button.@main[0].sub_func
-  uci commit switch-button
-"
-
-if [[ "${ISOLATE_WIFI_LAN_ONLY:-0}" == "1" ]]; then
-  router_ssh "
-    uci del_list network.@device[0].ports='eth1' 2>/dev/null || true
-    uci commit network
-  "
-else
-  router_ssh "
-    uci add_list network.@device[0].ports='eth1' 2>/dev/null || true
-    uci commit network
-  "
-fi
-
-router_ssh "
-  /etc/init.d/firewall reload >/dev/null 2>&1
-  /etc/init.d/stubby stop >/dev/null 2>&1 || true
-  /etc/init.d/stubby disable >/dev/null 2>&1 || true
-  /etc/init.d/dnsmasq restart >/dev/null 2>&1
-  /etc/init.d/odhcpd restart >/dev/null 2>&1 || true
-  /etc/init.d/codex-xray stop >/dev/null 2>&1 || true
-  /etc/init.d/codex-xray disable >/dev/null 2>&1 || true
-  /etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
-  /etc/init.d/codex-transproxy disable >/dev/null 2>&1 || true
   /etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
-  /etc/init.d/xray-switch-watchdog enable >/dev/null 2>&1 || true
-  /etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
-  /etc/init.d/gl_switch_button_check stop >/dev/null 2>&1 || true
-  /etc/init.d/gl_switch_button_check disable >/dev/null 2>&1 || true
   /etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
-  /etc/init.d/router-rules-sync enable >/dev/null 2>&1 || true
+  /usr/local/bin/codex-xray-core run -test -config /etc/xray/codex-xray.json >/dev/null 2>&1 || {
+    echo 'Router Xray config validation failed after upload.' >&2
+    exit 1
+  }
+  touch /etc/xray/codex-xray.ready
+  chmod 600 /etc/xray/codex-xray.ready
+  /etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
+  /etc/init.d/codex-xray stop >/dev/null 2>&1 || true
   /usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
-  repo=/etc/router-rules/repo
-  branch='$RULES_REPO_BRANCH'
-  export GIT_SSH_COMMAND='ssh -i /etc/router-rules/ssh/routerRules_ed25519 -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no'
-  if [ -d \"\$repo/.git\" ]; then
-    git -C \"\$repo\" fetch origin \"\$branch\" >/dev/null 2>&1 || true
-    git -C \"\$repo\" reset --hard \"origin/\$branch\" >/dev/null 2>&1 || true
-    git -C \"\$repo\" clean -fd >/dev/null 2>&1 || true
-  fi
   /usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
   /etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
+  /etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
+  switch_state='off'
+  if [ -f /lib/functions/gl_util.sh ]; then
+    . /lib/functions/gl_util.sh
+    switch_state=\$(get_switch_button_status 2>/dev/null || echo off)
+  fi
+  /etc/gl-switch.d/xray.sh \"\$switch_state\" >/dev/null 2>&1 || true
+  rm -rf $remote_source_root
 "
 
 if [[ "$NETWORK_RELOAD" == "1" ]]; then

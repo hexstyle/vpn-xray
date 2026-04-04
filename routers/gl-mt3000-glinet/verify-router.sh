@@ -60,6 +60,13 @@ warn_verify() {
   warning_count=$((warning_count + 1))
 }
 
+config_ready="$(router_ssh '[ -f /etc/xray/codex-xray.ready ] && [ -s /etc/xray/codex-xray.json ] && echo 1 || echo 0' | sed -n '1p')"
+if [[ "$config_ready" != "1" ]]; then
+  echo "The vpn-xray platform is installed, but this router does not have an active VPS client profile yet." >&2
+  echo "Open https://$ROUTER_HOST/xray.html, add VPS SSH details, click 'Sync Router + VPS', and then rerun verify." >&2
+  exit 21
+fi
+
 switch_state="$(router_ssh ". /lib/functions/gl_util.sh; get_switch_button_status 2>/dev/null || echo unknown" | sed -n '1p')"
 
 if [[ "$switch_state" != "on" ]]; then

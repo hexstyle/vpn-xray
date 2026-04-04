@@ -10,6 +10,7 @@ KEY_DIR='/etc/xray/ssh-keys'
 KNOWN_HOSTS='/etc/xray/known_hosts'
 INSPECT_DIR='/etc/xray/vps-inspect'
 ROUTER_CONFIG='/etc/xray/codex-xray.json'
+ROUTER_READY_FILE='/etc/xray/codex-xray.ready'
 ROUTER_XRAY_BIN='/usr/local/bin/codex-xray-core'
 ROUTER_HTTP_PORT='1083'
 ROUTER_SOCKS_PORT='1084'
@@ -151,7 +152,10 @@ current_switch_state() {
 }
 
 router_current_json() {
+	local ready
+	router_config_ready && ready=1 || ready=0
 	printf '{'
+	printf '"config_ready":'; json_bool "$ready"; printf ','
 	printf '"server_address":"%s",' "$(json_escape "$(router_live_value server_address)")"
 	printf '"server_port":"%s",' "$(json_escape "$(router_live_value server_port)")"
 	printf '"server_name":"%s",' "$(json_escape "$(router_live_value server_name)")"
@@ -160,6 +164,10 @@ router_current_json() {
 	printf '"short_id":"%s",' "$(json_escape "$(router_live_value short_id)")"
 	printf '"flow":"%s"' "$(json_escape "$(router_live_value flow)")"
 	printf '}'
+}
+
+router_config_ready() {
+	[ -f "$ROUTER_READY_FILE" ] && [ -s "$ROUTER_CONFIG" ] && [ -x "$ROUTER_XRAY_BIN" ]
 }
 
 ensure_dirs() {
@@ -1559,9 +1567,15 @@ apply_profile_to_router_internal() {
 	}
 
 	backup="${ROUTER_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
-	cp "$ROUTER_CONFIG" "$backup"
+	if [ -f "$ROUTER_CONFIG" ]; then
+		cp "$ROUTER_CONFIG" "$backup"
+	else
+		backup=''
+	fi
 	mv "$rendered" "$ROUTER_CONFIG"
 	chmod 600 "$ROUTER_CONFIG"
+	touch "$ROUTER_READY_FILE"
+	chmod 600 "$ROUTER_READY_FILE"
 	/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
 	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
 	sleep 1

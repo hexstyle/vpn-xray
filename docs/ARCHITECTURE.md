@@ -12,17 +12,19 @@ The structure is intentionally split into:
 
 That keeps the public install flow simple while still allowing future router firmware targets and future VPS OS profiles.
 
-## Root Install Flow
+## Install Flows
 
-`./install.sh` is the only top-level entrypoint for the supported setup.
+There are now two supported entrypoints:
 
-It does five things:
+- primary path
+  - [`../bootstrap-router.sh`](../bootstrap-router.sh)
+  - bootstrap the platform on the router, then finish VPS setup from the router UI
+- advanced path
+  - [`../install.sh`](../install.sh)
+  - orchestrate both router and VPS from a workstation
 
-1. initialize `install.env`
-2. validate the chosen router and VPS profiles
-3. deploy the selected VPS profile
-4. deploy the selected router profile
-5. run router verification
+The primary path is intentionally router-first.
+That keeps the public interface small: the operator only needs router SSH first, then VPS SSH details inside the UI.
 
 ## Shared Bootstrap Layer
 
@@ -33,12 +35,12 @@ It does five things:
 - profile resolution
 - auto-generation of UUID / Reality values
 
-The quickstart only asks the operator for:
+The advanced local path only asks the operator for:
 
 - `ROUTER_SSH`
 - `VPS_SSH`
 
-Everything else is either defaulted by the profile or generated automatically.
+Everything else is either defaulted by the profile or generated automatically there.
 
 ## Router Profiles
 
@@ -46,8 +48,10 @@ Each router profile contains:
 
 - `profile.env`
   - default values specific to that router / firmware
+- `install-platform.sh`
+  - router-side installer used by the primary SSH bootstrap path
 - `install-router.sh`
-  - deploys the runtime, UI, rules engine, and profile bundles
+  - advanced workstation-driven entrypoint
 - `verify-router.sh`
   - verifies the installed path
 - `files/`
@@ -124,3 +128,20 @@ Enforcement belongs to the router services:
 - `xray-switch-watchdog`
 - `codex-xray`
 - `codex-transproxy`
+
+## Ready-State Gate
+
+The router runtime now has an explicit ready marker:
+
+- `/etc/xray/codex-xray.ready`
+
+Why it exists:
+
+- the router platform can be installed before any VPS is configured
+- the traffic path must stay dormant until the router has one valid client profile
+
+Effects:
+
+- if the ready marker is absent, the watchdog will not bring the path up
+- once the router successfully applies a VPS profile, the ready marker is created
+- the UI exposes this as `Platform Status`

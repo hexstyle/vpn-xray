@@ -589,6 +589,13 @@
           <button class="primary" id="checkProfileBtn">Read VPS And Update Profile</button>
           <button class="warn-btn" id="applyProfileBtn">Sync Router + VPS</button>
         </div>
+        <div id="setupNotice" class="readonly-pane" style="margin-top:12px;display:none;">
+          <div class="label">First-Time Setup</div>
+          <div class="hint">
+            The router platform is installed, but there is no active VPS path yet. Fill the VPS SSH details above and click
+            <strong>Sync Router + VPS</strong>. The router will configure the selected server and then apply the client profile locally.
+          </div>
+        </div>
         <div class="readonly-pane" style="margin-top:12px;">
           <div class="label">Last VPS Read Result</div>
           <pre id="checkResultOutput">No check run yet.</pre>
@@ -644,9 +651,19 @@
             <div class="hint">Physical ON/OFF switch on the router body. Enforced by the router watchdog service.</div>
           </div>
           <div class="status-box">
+            <div class="label">Platform Status</div>
+            <div id="configReady" class="value">...</div>
+            <div class="hint" id="configReadyHint">Whether this router already has an active Xray client profile.</div>
+          </div>
+          <div class="status-box">
             <div class="label">Path State</div>
             <div id="pathActive" class="value">...</div>
-            <div class="hint">Whether the live transparent path is active right now.</div>
+            <div class="hint" id="pathActiveHint">Whether the live transparent path is active right now.</div>
+          </div>
+          <div class="status-box">
+            <div class="label">Switch Request</div>
+            <div id="switchRequest" class="value">...</div>
+            <div class="hint">What the physical hardware switch is currently asking the router to do.</div>
           </div>
           <div class="status-box">
             <div class="label">Last VPS Check</div>
@@ -1082,7 +1099,34 @@
     function renderRuntime(data) {
       document.getElementById("switchState").textContent = data.switch_state || "unknown";
       document.getElementById("switchState").className = `value ${data.switch_state === "on" ? "ok" : data.switch_state === "off" ? "warn" : "bad"}`;
-      applyState(document.getElementById("pathActive"), data.path_active, "active", "inactive");
+      document.getElementById("switchRequest").textContent = data.switch_state === "on" ? "path should be on" : data.switch_state === "off" ? "path should be off" : "unknown";
+      document.getElementById("switchRequest").className = `value ${data.switch_state === "on" ? "ok" : data.switch_state === "off" ? "warn" : "bad"}`;
+
+      const ready = !!data.config_ready;
+      document.getElementById("configReady").textContent = ready ? "ready" : "waiting for VPS";
+      document.getElementById("configReady").className = `value ${ready ? "ok" : "warn"}`;
+      document.getElementById("configReadyHint").textContent = ready
+        ? "This router already has an active client profile and can bring the path up when the switch is ON."
+        : "The router platform is installed, but no client profile has been applied yet.";
+
+      const pathEl = document.getElementById("pathActive");
+      const pathHint = document.getElementById("pathActiveHint");
+      if (!ready) {
+        pathEl.textContent = "waiting for VPS profile";
+        pathEl.className = "value warn";
+        pathHint.textContent = "Nothing is broken: the platform is installed, but the router still needs one successful VPS sync.";
+      } else if (data.path_state === "switch_off") {
+        pathEl.textContent = "idle";
+        pathEl.className = "value warn";
+        pathHint.textContent = "The client profile is ready, but the physical switch is OFF, so the path stays down on purpose.";
+      } else {
+        applyState(pathEl, data.path_active, "active", "inactive");
+        pathHint.textContent = data.path_active
+          ? "The live transparent path is active right now."
+          : "The router has a client profile, but the path is not active yet. Check the switch position, runtime state and VPS health.";
+      }
+
+      document.getElementById("setupNotice").style.display = ready ? "none" : "block";
     }
 
     function renderHeroAndSummary(profile) {
@@ -1092,7 +1136,9 @@
       const remoteDiff = parseDiffList(profile?.remote_diff || "");
       const drift = routerDiff.length || remoteDiff.length;
       document.getElementById("heroProfile").textContent = profile?.label || profile?.id || "...";
-      document.getElementById("heroTarget").textContent = runtime.server_address || profile?.endpoint_host || "...";
+      document.getElementById("heroTarget").textContent = runtime.config_ready
+        ? (runtime.server_address || profile?.endpoint_host || "...")
+        : (profile?.endpoint_host || "No active VPS yet");
 
       document.getElementById("summaryRemoteIp").textContent = remote.public_ip || "(unknown)";
       const inspectStatus = remote.status || profile?.last_inspect_status || "never";
@@ -1101,8 +1147,13 @@
         : inspectStatus;
       document.getElementById("summaryInspect").textContent = inspectText;
       document.getElementById("summaryInspect").className = `value ${inspectStatus === "ok" ? "ok" : "warn"}`;
-      document.getElementById("summaryDrift").textContent = drift ? "needs sync" : "in sync";
-      document.getElementById("summaryDrift").className = `value ${drift ? "warn" : "ok"}`;
+      if (!runtime.config_ready) {
+        document.getElementById("summaryDrift").textContent = "waiting for first apply";
+        document.getElementById("summaryDrift").className = "value warn";
+      } else {
+        document.getElementById("summaryDrift").textContent = drift ? "needs sync" : "in sync";
+        document.getElementById("summaryDrift").className = `value ${drift ? "warn" : "ok"}`;
+      }
     }
 
     function renderManagedKey(profile) {
@@ -1122,6 +1173,7 @@
       const routerDiff = parseDiffList(profile.router_diff);
       const remoteDiff = parseDiffList(profile.remote_diff);
       const lines = [
+        `Router platform: ${state.runtime?.config_ready ? "client profile ready" : "waiting for first router apply"}`,
         `Last read: ${remote.status || profile.last_inspect_status || "never"}${profile.last_inspect_at ? ` at ${formatUnixTime(profile.last_inspect_at)}` : ""}`,
         `SSH access from router: ${remote.ssh_ok === "1" ? "ok" : "not confirmed"}`,
         `Install support: ${remote.install_supported === "1" ? "supported" : "not supported"}`,
@@ -1141,6 +1193,7 @@
       const rows = [
         ["VPS profile", profile.vps_profile || "(unknown)"],
         ["Selected host", profile.endpoint_host || "(unknown)"],
+        ["Router profile ready", state.runtime?.config_ready ? "yes" : "no"],
         ["Last read", `${remote.status || profile.last_inspect_status || "never"}${profile.last_inspect_at ? ` at ${formatUnixTime(profile.last_inspect_at)}` : ""}`],
         ["Router client", state.runtime?.xray_running ? "running" : "stopped"],
         ["Transparent path", state.runtime?.path_active ? "active" : "inactive"],

@@ -6,8 +6,10 @@ Each profile describes one router or firmware family and ships:
 
 - `profile.env`
   - default values for that router / firmware
+- `install-platform.sh`
+  - router-side installer used by the primary SSH bootstrap path
 - `install-router.sh`
-  - installs the runtime, UI, and shared-rules engine on the router
+  - advanced local entrypoint that still reuses the same router-side platform install path
 - `verify-router.sh`
   - verifies the deployed path
 - `files/`
@@ -21,8 +23,11 @@ To add another router or firmware target, create `routers/<profile-id>/` with th
 
 - `profile.env`
   - router-specific defaults, package URLs, checksums, ports, runtime toggles, and preflight expectations
+- `install-platform.sh`
+  - router-side platform installer
+  - safe to run on the router itself after the repository bundle is unpacked there
 - `install-router.sh`
-  - installs or updates the router runtime for that profile
+  - optional workstation-driven entrypoint for advanced use
 - `verify-router.sh`
   - verifies the installed path for that profile
 - `files/`
@@ -30,11 +35,20 @@ To add another router or firmware target, create `routers/<profile-id>/` with th
 - `README.md`
   - profile-specific setup notes
 
-Router profiles may reuse shared OpenWrt-side assets from [`common/`](./common/README.md), but the top-level installer only needs the profile directory and its `profile.env` to resolve the target.
+Router profiles may reuse shared OpenWrt-side assets from [`common/`](./common/README.md).
+
+The intended product shape is:
+
+- primary path
+  - SSH into the router
+  - run the profile's `install-platform.sh` through [`../bootstrap-router.sh`](../bootstrap-router.sh)
+- advanced path
+  - use `install-router.sh` from a workstation when you want local orchestration
 
 For OpenWrt-based router profiles, `profile.env` is also the place to declare preflight expectations such as:
 
 - expected hardware / firmware identifier
+- bootstrap auto-detect identifier
 - required base commands on the target
 - whether `dnsmasq` must expose `ipset` support
 

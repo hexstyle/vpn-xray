@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/common/lib/env.sh"
 
-require_local_commands bash curl ssh ssh-keygen tar unzip python3
+require_local_commands bash ssh ssh-keygen tar python3
 
 ENV_FILE="${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
@@ -43,6 +43,11 @@ if [[ "$SKIP_VERIFY" != "1" ]]; then
     echo
     echo "Verification paused: the router hardware switch is OFF."
     echo "Turn the switch ON and rerun:"
+    echo "  $ROOT_DIR/routers/$ROUTER_PROFILE/verify-router.sh"
+  elif [[ "$verify_rc" -eq 21 ]]; then
+    echo
+    echo "Verification paused: the router platform is installed, but there is no active VPS profile on the router yet."
+    echo "Open the router UI, sync a VPS profile, and rerun:"
     echo "  $ROOT_DIR/routers/$ROUTER_PROFILE/verify-router.sh"
   elif [[ "$verify_rc" -ne 0 ]]; then
     exit "$verify_rc"

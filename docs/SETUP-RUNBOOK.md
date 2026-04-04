@@ -5,130 +5,162 @@ If this is your first install, start with:
 - [`../README.md`](../README.md)
 - [`GETTING-STARTED.md`](./GETTING-STARTED.md)
 
-This file is the technical reference for the supported install flow and advanced options.
+This file is the technical reference for the supported setup paths.
 
 ## Supported Hello-World Path
 
-This repository currently ships one primary supported combination:
+Current supported combination:
 
 - router profile: [`gl-mt3000-glinet`](../routers/gl-mt3000-glinet/README.md)
 - VPS profile: [`debian-13`](../vps/debian-13/README.md)
 
-## What You Need Before Starting
+## Primary Install Path: Router-First
 
-- `root` SSH access to the router after factory reset
-- `root` SSH access to the VPS
-- a usable global IPv4 address on the VPS; this stack does not support IPv6-only servers
-- working uplink on the router during install
-- outbound internet on the VPS during install
-- local `bash`, `curl`, `ssh`, `tar`, `unzip`, and `python3`
+The primary path does not depend on a local Bash or Python environment.
 
-The local installer keeps its own SSH host-key cache in `tmp/ssh/known_hosts` and accepts first-seen keys automatically, so it does not depend on your personal `~/.ssh/known_hosts`.
+It assumes only:
 
-## Minimal Input
+- you can SSH into the router
+- the router itself has internet access
+- you can later enter VPS SSH details in the web UI
 
-Only these two values are required for the first install:
+### Operator Preconditions
 
-- `ROUTER_SSH`
-- `VPS_SSH`
+- `ssh root@192.168.8.1` already works
+- the router can reach GitHub/package feeds
+- the VPS has `Debian 13`, `root` SSH and global IPv4
 
-Example:
+### Commands
+
+1. SSH into the router:
+
+```sh
+ssh root@192.168.8.1
+```
+
+2. Run the router bootstrap:
+
+```sh
+sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)"
+```
+
+3. Open:
+
+```text
+https://192.168.8.1/xray.html
+```
+
+4. In the web UI, create/select a VPS and click `Sync Router + VPS`.
+
+### What the Router Bootstrap Installs
+
+- `codex-xray`
+- `codex-transproxy`
+- `xray-switch-watchdog`
+- `router-rules-sync`
+- `xray.html`
+- `xray-admin`, `xray-vps`, `xray-rules`
+- bundled VPS installer profiles under `/usr/share/vpn-xray/vps`
+
+The router platform is installed in a dormant state until a VPS profile is successfully applied.
+
+That dormant state is tracked by:
+
+- `/etc/xray/codex-xray.ready`
+
+If the file is absent:
+
+- the watchdog will not bring the path up
+- the UI reports that the router is still waiting for the first VPS apply
+
+## Advanced Install Path: Local Orchestration
+
+The repository still ships a local advanced path:
+
+- [`../install.sh`](../install.sh)
+
+Use it when:
+
+- you want one local command to configure both router and VPS
+- you want CI or reproducible workstation-driven installs
+- you want to pre-generate Xray values before touching the router UI
+
+### Advanced Path Requirements
+
+- local `bash`
+- local `ssh`
+- local `ssh-keygen`
+- local `tar`
+- local `python3`
+- `root` SSH to the router
+- `root` SSH to the VPS
+
+### Minimal Advanced Input
+
+Create:
+
+```sh
+cp install.env.example install.env
+```
+
+Fill:
 
 ```env
 ROUTER_SSH=root@192.168.8.1
 VPS_SSH=root@YOUR_VPS_IP
 ```
 
-Create your local install file:
+Optional:
 
-```bash
-cp install.env.example install.env
-```
+- `XRAY_PORT` if port `443` is already occupied on the VPS
 
-## Quickstart Commands
+### Advanced Commands
 
-1. Edit only:
+Dry run:
 
-- `ROUTER_SSH`
-- `VPS_SSH`
-- optionally `XRAY_PORT` if port `443` is already occupied on the VPS
-
-2. Run:
-
-```bash
-./install.sh
-```
-
-On Windows:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-If you want to verify both ends before any change is made:
-
-```bash
+```sh
 PREFLIGHT_ONLY=1 ./install.sh
 ```
 
-On Windows:
+Real install:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -PreflightOnly
+```sh
+./install.sh
 ```
 
-## What Happens Automatically
+## Shared Rules
 
-The installer fills the rest:
+Shared Git-backed selective rules are optional.
 
-- `ROUTER_HOST`
-- `ROUTER_LAN_IP`
-- `VPS_HOST`
-- `XRAY_SERVER`
-- `XRAY_UUID`
-- `XRAY_SERVER_NAME`
-- `XRAY_SHORT_ID`
-- `XRAY_PUBLIC_KEY`
-- `XRAY_PRIVATE_KEY`
-
-It then:
-
-- runs router and VPS preflight checks before making changes
-- validates the selected profiles
-- deploys the VPS payload using the chosen VPS profile
-- deploys the router runtime and web UI
-- uploads the supported VPS profile bundles to the router
-- runs a verification pass
-
-If the physical switch on the GL.iNet router is `OFF`, deployment still finishes, but the final verification step stops with an explicit reminder to turn the switch `ON` and rerun `verify-router.sh`.
-
-## After Install
-
-Open:
-
-- `https://<router-host>/xray.html`
-
-From there you can:
-
-- switch between saved VPS profiles
-- read a VPS over SSH
-- sync router + VPS
-- choose `full` or `selective` routing on the router
-- manage the shared selective-rules list
-
-Behavior summary:
-
-- `full`
-  - all client traffic goes through the VPS
-- `selective`
-  - only listed domains / IPv4 / CIDR go through the VPS
-
-## Optional Shared Rules
-
-If you also want GitHub-backed selective routing, fill these extra values in `install.env`:
+If you want them, use these advanced variables:
 
 - `RULES_REPO_FETCH_URL`
-- `RULES_REPO_PUSH_URL` only if this router should push local edits back upstream
-- `RULES_ENABLE_PUSH=1` only when upstream push is intended
+- `RULES_REPO_PUSH_URL`
+- `RULES_ENABLE_PUSH=1` only when the router is allowed to push upstream
 
-If `RULES_REPO_FETCH_URL` is left empty, the router/VPS transport still works, but shared-rule Git sync is inactive.
+If `RULES_REPO_FETCH_URL` is empty:
+
+- the transport still works
+- `full` and local `selective` still work
+- GitHub-backed rules sync stays disabled
+
+## Verification Notes
+
+The physical GL.iNet switch is still the source of truth.
+
+Important outcomes:
+
+- switch `OFF`
+  - deployment may still complete
+  - runtime stays intentionally down
+- platform installed, but no ready profile yet
+  - the UI shows `waiting for VPS`
+  - `verify-router.sh` exits with a nonfatal guidance code
+
+Useful checks after a successful first sync:
+
+- `https://ifconfig.me/ip`
+- `https://ipinfo.io/ip`
+- `https://www.google.com`
+
+`api.openai.com` remains advisory only.

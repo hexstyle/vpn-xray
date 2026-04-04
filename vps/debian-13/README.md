@@ -20,5 +20,7 @@ If you are installing from scratch, start with [`../../README.md`](../../README.
 
 The same profile bundle is used in two places:
 
-- by the local root installer during the initial setup
-- by the router UI later when you provision another VPS over SSH
+- by the advanced local installer during the initial setup
+- by the router UI when the router provisions another VPS over SSH
+
+For the primary user path, the router itself uses this profile after the platform has already been bootstrapped on the GL router.

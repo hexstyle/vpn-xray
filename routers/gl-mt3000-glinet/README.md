@@ -29,11 +29,29 @@ This profile expects:
 - standalone web UI at `https://<router-host>/xray.html`
 - bundled VPS profiles under `/usr/share/vpn-xray/vps`
 
-## First-Run Input
+## Primary Install Shape
 
-For the default quickstart, the operator only needs:
+Primary path:
 
-- `ROUTER_SSH`
-- `VPS_SSH`
+- SSH into the router
+- run [`../../bootstrap-router.sh`](../../bootstrap-router.sh) on the router
+- finish VPS setup from `xray.html`
 
-Everything else is generated or defaulted by the profile unless you intentionally turn on advanced features such as Git-backed shared rules.
+Advanced path:
+
+- use [`install-router.sh`](./install-router.sh) from a workstation together with the top-level [`../../install.sh`](../../install.sh)
+
+## Ready-State Behavior
+
+This profile now separates:
+
+- platform installed
+- active VPS client profile installed
+
+The runtime stays dormant until the router has one valid client profile.
+
+That state is tracked with:
+
+- `/etc/xray/codex-xray.ready`
+
+So after a fresh platform bootstrap it is normal to see the UI waiting for the first VPS sync.

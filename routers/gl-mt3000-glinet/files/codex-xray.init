@@ -8,6 +8,7 @@ EXTRA_HELP="	status	Show runtime status"
 NAME="codex-xray"
 BIN="/usr/local/bin/codex-xray-core"
 CONFIG="/etc/xray/codex-xray.json"
+CONFIG_READY_FILE="/etc/xray/codex-xray.ready"
 PIDFILE="/var/run/${NAME}.pid"
 MPTCP_STATE_FILE="/var/run/${NAME}.mptcp"
 LOG_DIR="/var/log/xray"
@@ -33,6 +34,10 @@ start() {
 	}
 	[ -f "$CONFIG" ] || {
 		echo "$CONFIG missing"
+		return 1
+	}
+	[ -f "$CONFIG_READY_FILE" ] || {
+		echo "$CONFIG_READY_FILE missing"
 		return 1
 	}
 

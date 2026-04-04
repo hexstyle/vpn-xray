@@ -1,188 +1,200 @@
 # vpn-xray
 
-`vpn-xray` is a simple installer and web UI around [Xray-core](https://github.com/XTLS/Xray-core) for supported router and VPS profiles.
+`vpn-xray` is a router-first wrapper around [Xray-core](https://github.com/XTLS/Xray-core).
+
+It is meant for one practical job: put a small travel router between your devices and the internet, then move traffic through your own VPS without manually hand-editing Xray configs every time.
 
 <img src="./docs/assets/gl-mt3000-router.jpg" alt="GL.iNet GL-MT3000 travel router" width="420">
 
-The reference device in this repository is the compact `GL.iNet GL-MT3000` travel router shown above. It runs from `5V`, can be powered from a Mac over USB, and is easy to keep in a bag as a personal network edge. The physical switch on the front edge is the source of truth for `path on / path off`.
+The reference device in this repository is the compact `GL.iNet GL-MT3000` travel router shown above. It runs from `5V`, can be powered from a Mac over USB, and is small enough to keep in a bag. The physical switch on the front edge remains the source of truth for `path on / path off`.
 
-The default mode after install is simple: connect your devices to this router and send all traffic through your own VPS. Later, in the router UI, you can keep that `full` mode or switch to `selective` mode if you want only chosen destinations to go through the VPS.
+The default behavior after setup is simple:
 
-## Start Here
+- connect devices to this router
+- keep the physical switch in `ON`
+- route all client traffic through your VPS in `full` mode
 
-If you have just bought the router and a VPS, read this section first.
-If you want the more guided version with extra explanations for SSH and Windows, open [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md).
+Later, in the router UI, you can keep `full` mode or switch to `selective` mode if you want only chosen destinations through the VPS.
 
-### 1. Download This Repository
+## Supported Hello-World
 
-Choose one:
+Current primary supported combination:
 
-- GitHub ZIP: download and unpack this repository from `https://github.com/hexstyle/vpn-xray`
-- Git:
+- router: `GL.iNet GL-MT3000`
+- router profile: [`gl-mt3000-glinet`](./routers/gl-mt3000-glinet/README.md)
+- VPS OS: `Debian 13`
+- VPS profile: [`debian-13`](./vps/debian-13/README.md)
 
-```bash
-git clone https://github.com/hexstyle/vpn-xray.git
-cd vpn-xray
-```
+This stack is currently `IPv4-only` end to end. Your VPS must have a usable global IPv4 address.
 
-### 2. Prepare the Router
+## Fastest Path
 
-For the current supported router profile:
+You do not need WSL, Python, Homebrew, or a local installer for the main path.
 
-- device: `GL.iNet GL-MT3000`
-- factory-reset management address: `http://192.168.8.1`
-- SSH target after first setup: usually `root@192.168.8.1`
+You only need:
 
-Recommended first-run steps:
+- the router reachable over SSH at `root@192.168.8.1`
+- one Debian 13 VPS reachable over `root` SSH
+- any computer with an `ssh` client
+
+If `ssh` is missing on Windows, enable the built-in `OpenSSH Client` feature first and then use the same commands.
+
+### 1. Prepare the Router
 
 1. Factory-reset the router.
 2. Connect your computer to the router by Wi-Fi or LAN.
 3. Open `http://192.168.8.1`.
-4. Set the router admin password in the GL.iNet setup wizard.
-5. Test SSH access:
+4. Finish the GL.iNet first-run wizard and set the admin password.
+5. Test SSH:
 
-```bash
+```sh
 ssh root@192.168.8.1
 ```
 
-Use the same admin password you just set in the GL.iNet web panel.
+Use the same password you set in the GL.iNet web interface.
 
-### 3. Prepare the VPS
+### 2. Prepare the VPS
 
-For the current supported VPS profile:
+Before you touch this repository, make sure this already works:
 
-- OS: `Debian 13`
-- access: `root` SSH
-- network: a usable global `IPv4` address
-
-Before running the installer, verify that this works:
-
-```bash
+```sh
 ssh root@YOUR_VPS_IP
 ```
 
-If your provider gives you an SSH key instead of a password, that is fine. The only requirement is that `ssh root@...` already works from your computer before you start.
+Requirements:
 
-### 4. Open a Terminal on Your Computer
+- `Debian 13`
+- global IPv4
+- `root` SSH access
 
-- macOS: open `Terminal`
-- Linux: open your usual terminal
-- Windows:
-  - install WSL once:
+### 3. Bootstrap the Platform on the Router
 
-```powershell
-wsl --install
+SSH into the router:
+
+```sh
+ssh root@192.168.8.1
 ```
 
-  - reboot Windows
-  - open `PowerShell` in the repository folder
+Then run this directly on the router:
 
-### 5. Fill Two Values
-
-Create your local install file:
-
-```bash
-cp install.env.example install.env
+```sh
+sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)"
 ```
 
-Then edit only these two values:
+What this does:
 
-```env
-ROUTER_SSH=root@192.168.8.1
-VPS_SSH=root@YOUR_VPS_IP
+- installs the router runtime
+- installs the web UI
+- installs bundled VPS installer profiles on the router
+- leaves the path dormant until you configure a VPS in the UI
+
+If this step fails, the router usually tells you what to fix:
+
+- no internet uplink on the router
+- wrong system time / NTP not settled yet
+- unsupported firmware or missing router features
+
+### 4. Finish in the Router UI
+
+Open:
+
+```text
+https://192.168.8.1/xray.html
 ```
 
-Format:
+Then:
 
-- `ROUTER_SSH=user@host`
-- `VPS_SSH=user@host`
+1. Create or select a VPS profile.
+2. Fill `VPS Host / Address`.
+3. Choose SSH auth:
+   - password
+   - private key
+   - or reuse the router-managed key later
+4. Click `Sync Router + VPS`.
 
-For the first install, leave the generated Xray values empty. They are created automatically.
+The router will:
 
-### 6. Run the Installer
+- reach the VPS over SSH
+- inspect the target system
+- install Xray on the VPS if needed
+- generate or reuse the required client/server values
+- sync the VPS and the router together
 
-On macOS or Linux:
+### 5. Use the Router
 
-```bash
-./install.sh
-```
+After the first successful sync:
 
-On Windows:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-If you want a dry run before any change is made:
-
-- macOS / Linux:
-
-```bash
-PREFLIGHT_ONLY=1 ./install.sh
-```
-
-- Windows:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -PreflightOnly
-```
-
-## What Happens Automatically
-
-The installer will:
-
-- run router and VPS preflight checks before making changes
-- generate `XRAY_UUID`, `XRAY_SERVER_NAME`, `XRAY_SHORT_ID`, `XRAY_PUBLIC_KEY`, and `XRAY_PRIVATE_KEY`
-- install and configure Xray on the VPS
-- install the router runtime, watchdog, web UI, and bundled VPS profiles
-- run a final verification pass
-
-Important:
-
-- keep the physical router switch in the `ON` position before the final verification pass
-- if the switch is `OFF`, deployment still completes, but verification pauses and asks you to turn it `ON`
-- if port `443` is already busy on the VPS, set `XRAY_PORT` in `install.env` before the real install
-
-## After Install
-
-1. Connect your phone, laptop, or other device to the GL.iNet router by Wi-Fi or LAN.
+1. Connect your laptop, phone or other device to the GL.iNet router.
 2. Put the physical switch in the `ON` position.
-3. Open:
+3. By default, `full` mode sends all client traffic through the VPS.
 
-- `https://<router-host>/xray.html`
+Good first checks from a device behind the router:
 
-4. By default the router starts in `full` mode:
-   all client traffic goes through the VPS.
-5. If you want only some destinations through the VPS, change the router to `selective` mode later in the web UI.
-
-Good first checks:
-
-- `https://www.google.com`
 - `https://ifconfig.me/ip`
 - `https://ipinfo.io/ip`
+- `https://www.google.com`
 
-`api.openai.com/v1/models` is only an advisory check. Some VPS IPs can be filtered by OpenAI even when the proxy path itself is healthy.
+If the transport is healthy, those IP checks should show the VPS egress IP, not your home provider IP.
 
-## Supported Profiles
+`api.openai.com` is only an advisory check. Some VPS IPs are filtered by OpenAI even when the VPN/proxy path itself is fine.
 
-Current supported combinations are explicit:
+## Why This Exists
 
-- Router profiles:
-  - [`gl-mt3000-glinet`](./routers/gl-mt3000-glinet/README.md)
-- VPS profiles:
-  - [`debian-13`](./vps/debian-13/README.md)
+The main use case is simple and practical:
 
-The repository is structured so more router firmware profiles and more VPS OS profiles can be added later under [`routers/`](./routers/README.md) and [`vps/`](./vps/README.md) without changing the top-level install flow.
+- keep a small router in your bag
+- power it from USB
+- connect your work laptop or phone to it
+- use your own VPS as the internet exit
 
-## Need More Detail?
+That is useful when:
 
-- User-friendly first-run guide:
+- you want all traffic through your own VPS
+- you need `selective` mode later, so only chosen destinations go through the VPS
+- you want to stay productive even if one VPS gets blocked
+- you want to switch to another Debian VPS quickly from the router UI itself
+
+If your current VPS is gone, but you still have SSH access to another Debian server, the router can provision that new VPS from the web UI without going back to manual Xray setup.
+
+## Shared Rules and Selective Mode
+
+`full` mode is the default and simplest path.
+
+`selective` mode is optional.
+
+When you switch the router to `selective`:
+
+- literal `IPv4` / `CIDR` rules are matched directly
+- domain rules are tracked live on the router through `dnsmasq -> ipset`
+- the shared list can be GitHub-backed if you configure that later
+
+See:
+
+- [`docs/SHARED-RULES.md`](./docs/SHARED-RULES.md)
+- [`docs/WEB-UI.md`](./docs/WEB-UI.md)
+
+## Advanced Path
+
+This repository still ships a local advanced installer:
+
+- [`install.sh`](./install.sh)
+
+That path is useful for developers, CI, or people who want one local command to orchestrate both the router and the VPS from their workstation.
+
+For most users, the recommended path is still:
+
+1. bootstrap the platform on the router over SSH
+2. configure the VPS from `xray.html`
+
+## Read Next
+
+- Friendly first install:
   - [`docs/GETTING-STARTED.md`](./docs/GETTING-STARTED.md)
-- Technical install reference:
+- Technical runbook:
   - [`docs/SETUP-RUNBOOK.md`](./docs/SETUP-RUNBOOK.md)
 - Web UI behavior:
   - [`docs/WEB-UI.md`](./docs/WEB-UI.md)
-- Shared selective rules:
+- Shared rules:
   - [`docs/SHARED-RULES.md`](./docs/SHARED-RULES.md)
 - Architecture:
   - [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
@@ -191,20 +203,20 @@ The repository is structured so more router firmware profiles and more VPS OS pr
 
 Every main folder has its own `README.md`.
 
-- [`install.env.example`](./install.env.example)
-  - the only file you copy for a fresh setup
+- [`bootstrap-router.sh`](./bootstrap-router.sh)
+  - SSH-only router bootstrap entrypoint for the primary path
 - [`install.sh`](./install.sh)
-  - macOS / Linux installer entrypoint
-- [`install.ps1`](./install.ps1)
-  - Windows launcher that runs the installer through WSL
+  - advanced local installer for developers and CI
+- [`install.env.example`](./install.env.example)
+  - optional input file for the advanced local installer
 - [`common/`](./common/README.md)
   - shared bootstrap and validation helpers
 - [`routers/`](./routers/README.md)
-  - router profiles and shared OpenWrt-side assets
+  - router profiles and shared router-side assets
 - [`vps/`](./vps/README.md)
   - VPS profiles and server-side payloads
 - [`docs/`](./docs/README.md)
-  - getting started, runbooks, UI behavior, shared rules, and architecture
+  - user-facing docs, runbooks, UI behavior and architecture
 
 ## Thanks
 

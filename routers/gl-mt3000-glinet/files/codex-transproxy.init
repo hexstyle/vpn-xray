@@ -6,6 +6,7 @@ STOP=09
 REDSOCKS_CONF="/etc/redsocks.conf"
 REDSOCKS_PID="/var/run/redsocks.pid"
 XRAY_CONFIG="/etc/xray/codex-xray.json"
+CONFIG_READY_FILE="/etc/xray/codex-xray.ready"
 TCP_CHAIN="CODEX_TRANSPROXY"
 TCP_PORT="12345"
 LEGACY_DNS_CHAIN="CODEX_DNS_LOCAL"
@@ -129,6 +130,8 @@ ensure_codex_xray() {
 }
 
 start() {
+	[ -f "$CONFIG_READY_FILE" ] || return 1
+	[ -s "$XRAY_CONFIG" ] || return 1
 	ensure_codex_xray || return 1
 	[ -f "$REDSOCKS_CONF" ] || return 1
 	/usr/sbin/redsocks -t -c "$REDSOCKS_CONF" || return 1
