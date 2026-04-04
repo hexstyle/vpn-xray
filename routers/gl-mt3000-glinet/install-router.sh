@@ -44,6 +44,7 @@ ROUTER_SSH_OPTS=(
 
 RULES_REPO_FETCH_URL="${RULES_REPO_FETCH_URL:-}"
 RULES_REPO_PUSH_URL="${RULES_REPO_PUSH_URL:-}"
+RULES_REPO_BRANCH="${RULES_REPO_BRANCH:-main}"
 RULES_DEVICE_ID="${RULES_DEVICE_ID:-gl-router}"
 
 router_ssh() {
@@ -262,7 +263,6 @@ router_ssh '
   /etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
   /etc/init.d/codex-xray stop >/dev/null 2>&1 || true
   killall codex-xray-core 2>/dev/null || true
-  killall git nslookup dig curl 2>/dev/null || true
   for pid in $(ps w | awk '\''$5=="/bin/sh" && $6=="/usr/bin/router-rules" {print $1}'\''); do
     kill "$pid" 2>/dev/null || true
   done
@@ -357,10 +357,11 @@ router_ssh "
   /etc/init.d/router-rules-sync enable >/dev/null 2>&1 || true
   /usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
   repo=/etc/router-rules/repo
+  branch='$RULES_REPO_BRANCH'
   export GIT_SSH_COMMAND='ssh -i /etc/router-rules/ssh/routerRules_ed25519 -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no'
   if [ -d \"\$repo/.git\" ]; then
-    git -C \"\$repo\" fetch origin main >/dev/null 2>&1 || true
-    git -C \"\$repo\" reset --hard origin/main >/dev/null 2>&1 || true
+    git -C \"\$repo\" fetch origin \"\$branch\" >/dev/null 2>&1 || true
+    git -C \"\$repo\" reset --hard \"origin/\$branch\" >/dev/null 2>&1 || true
     git -C \"\$repo\" clean -fd >/dev/null 2>&1 || true
   fi
   /usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true

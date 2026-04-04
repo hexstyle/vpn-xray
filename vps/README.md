@@ -22,6 +22,7 @@ To add another supported VPS OS, create a new folder `vps/<profile-id>/` with th
   - expected keys include:
     - `VPS_PROFILE`
     - `VPS_PROFILE_LABEL`
+    - `VPS_DEFAULT_SERVER_NAME`
     - `VPS_OS_ID`
     - `VPS_OS_VERSION_PREFIX`
     - `VPS_REQUIRED_PKG_MGR`

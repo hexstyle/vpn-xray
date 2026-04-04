@@ -17,7 +17,11 @@ if ! is_placeholder_value "$ENV_VPS_PROFILE"; then
 fi
 
 load_profile_defaults "$(vps_profile_dir "$ROOT_DIR" "$DEFAULT_VPS_PROFILE")/profile.env"
-DEFAULT_SERVER_NAME="${VPS_DEFAULT_SERVER_NAME:-${DEFAULT_SERVER_NAME:-www.microsoft.com}}"
+DEFAULT_SERVER_NAME="${VPS_DEFAULT_SERVER_NAME:-${DEFAULT_SERVER_NAME:-}}"
+[ -n "$DEFAULT_SERVER_NAME" ] || {
+  echo "VPS profile '$DEFAULT_VPS_PROFILE' does not declare VPS_DEFAULT_SERVER_NAME in profile.env" >&2
+  exit 1
+}
 
 python3 - <<'PY' "$ENV_FILE" "$DEFAULT_SERVER_NAME" "$DEFAULT_ROUTER_PROFILE" "$DEFAULT_VPS_PROFILE"
 import base64

@@ -258,7 +258,6 @@ default_server_name_for_profile() {
 
 	profile="$(normalize_vps_profile "$profile")"
 	value="$(vps_profile_value "$profile" VPS_DEFAULT_SERVER_NAME)"
-	[ -n "$value" ] || value='www.microsoft.com'
 	printf '%s' "$value"
 }
 
@@ -506,11 +505,38 @@ profile_cache_path() {
 	printf '%s/%s.env\n' "$INSPECT_DIR" "$1"
 }
 
+profile_private_cache_path() {
+	printf '%s/%s.private\n' "$INSPECT_DIR" "$1"
+}
+
 cache_get() {
 	local cache="$1"
 	local key="$2"
 	[ -f "$cache" ] || return 0
 	sed -n "s/^${key}=//p" "$cache" | sed -n '1p'
+}
+
+private_cache_get() {
+	local profile_id="$1"
+	local cache
+
+	cache="$(profile_private_cache_path "$profile_id")"
+	[ -f "$cache" ] || return 0
+	cat "$cache" 2>/dev/null || true
+}
+
+private_cache_set() {
+	local profile_id="$1"
+	local value="$2"
+	local cache
+
+	cache="$(profile_private_cache_path "$profile_id")"
+	if [ -n "$value" ]; then
+		printf '%s' "$value" > "$cache"
+		chmod 600 "$cache"
+	else
+		rm -f "$cache"
+	fi
 }
 
 profile_cache_fresh() {
@@ -1098,7 +1124,7 @@ EOF
 
 refresh_remote_cache() {
 	local profile_id="$1"
-	local output cache install_profile install_label install_supported install_notes tmp_cache
+	local output public_output private_key cache install_profile install_label install_supported install_notes tmp_cache
 
 	if ! ssh_works "$profile_id"; then
 		return 1
@@ -1109,7 +1135,10 @@ refresh_remote_cache() {
 		return 1
 	fi
 
-	write_cache "$profile_id" "$output"
+	private_key="$(printf '%s\n' "$output" | sed -n 's/^REMOTE_private_key=//p' | sed -n '1p')"
+	public_output="$(printf '%s\n' "$output" | grep -v '^REMOTE_private_key=' || true)"
+	private_cache_set "$profile_id" "$private_key"
+	write_cache "$profile_id" "$public_output"
 	cache="$(profile_cache_path "$profile_id")"
 	IFS='|' read -r install_profile install_label install_supported install_notes <<EOF
 $(remote_install_support "$profile_id" "$cache")
@@ -1170,7 +1199,7 @@ drop_profile_store_backup() {
 }
 
 save_profile_from_request() {
-	local current requested_id profile_id label vps_profile auth_mode ssh_host ssh_port ssh_user server_address server_port server_name uuid public_key private_key short_id flow bootstrap_key
+	local current requested_id profile_id label vps_profile auth_mode ssh_host ssh_port ssh_user server_address server_port server_name existing_server_name uuid public_key private_key short_id flow bootstrap_key
 
 	current="$(active_profile_id)"
 	requested_id="$(sanitize_id "$(request_value profile_id)")"
@@ -1200,6 +1229,8 @@ save_profile_from_request() {
 	[ -n "$ssh_port" ] || ssh_port='22'
 	[ -n "$ssh_user" ] || ssh_user='root'
 	[ -n "$server_port" ] || server_port='443'
+	existing_server_name="$(profile_get "$profile_id" server_name)"
+	[ -n "$server_name" ] || server_name="$existing_server_name"
 	[ -n "$server_name" ] || server_name="$(default_server_name_for_profile "$vps_profile")"
 
 	if ! profile_exists "$profile_id"; then
@@ -1409,10 +1440,12 @@ adopt_remote_into_profile() {
 	local cache value remote_value
 
 	cache="$(profile_cache_path "$profile_id")"
-	for value in server_port server_name uuid public_key private_key short_id flow; do
+	for value in server_port server_name uuid public_key short_id flow; do
 		remote_value="$(cache_get "$cache" "REMOTE_${value}")"
 		[ -n "$remote_value" ] && profile_set "$profile_id" "$value" "$remote_value"
 	done
+	remote_value="$(private_cache_get "$profile_id")"
+	[ -n "$remote_value" ] && profile_set "$profile_id" private_key "$remote_value"
 	profile_set "$profile_id" last_inspect_status 'ok'
 	uci commit "$PROFILE_PACKAGE"
 }
