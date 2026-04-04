@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/common/lib/env.sh"
 
-require_local_commands bash curl ssh tar unzip python3
+require_local_commands bash curl ssh ssh-keygen tar unzip python3
 
 ENV_FILE="${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"

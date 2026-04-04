@@ -182,3 +182,34 @@ require_local_commands() {
     exit 1
   fi
 }
+
+installer_ssh_dir() {
+  local root_dir="$1"
+  printf '%s/tmp/ssh\n' "$root_dir"
+}
+
+installer_known_hosts_file() {
+  local root_dir="$1"
+  printf '%s/known_hosts\n' "$(installer_ssh_dir "$root_dir")"
+}
+
+ensure_installer_ssh_state() {
+  local root_dir="$1"
+  local dir
+  local file
+
+  dir="$(installer_ssh_dir "$root_dir")"
+  file="$(installer_known_hosts_file "$root_dir")"
+  mkdir -p "$dir"
+  touch "$file"
+  chmod 600 "$file"
+}
+
+remove_hostkey_entry() {
+  local known_hosts_file="$1"
+  local host="$2"
+
+  [ -f "$known_hosts_file" ] || return 0
+  command -v ssh-keygen >/dev/null 2>&1 || return 0
+  ssh-keygen -R "$host" -f "$known_hosts_file" >/dev/null 2>&1 || true
+}

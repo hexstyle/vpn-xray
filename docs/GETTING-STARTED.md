@@ -67,6 +67,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 SSH is the only command-line login the installer needs. The SSH checks below simply confirm that your computer can log into the router and the VPS before automation starts.
+The installer keeps its own SSH host-key cache in `tmp/ssh/known_hosts`, so a stale key in your personal `~/.ssh/known_hosts` should not block the install.
 
 ## Prepare The Router
 

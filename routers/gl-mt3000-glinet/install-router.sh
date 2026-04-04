@@ -37,9 +37,12 @@ ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"
 ROUTER_HOST="${ROUTER_HOST:-$(host_from_ssh_target "$ROUTER_SSH")}"
 ROUTER_LAN_IP="${ROUTER_LAN_IP:-$ROUTER_HOST}"
 SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
+ensure_installer_ssh_state "$ROOT_DIR"
+INSTALLER_KNOWN_HOSTS="$(installer_known_hosts_file "$ROOT_DIR")"
 ROUTER_SSH_OPTS=(
   -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
   -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
 )
 
 RULES_REPO_FETCH_URL="${RULES_REPO_FETCH_URL:-}"
@@ -48,7 +51,33 @@ RULES_REPO_BRANCH="${RULES_REPO_BRANCH:-main}"
 RULES_DEVICE_ID="${RULES_DEVICE_ID:-gl-router}"
 
 router_ssh() {
-  ssh "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" "$@"
+  local err rc
+
+  err="$(mktemp)"
+  if ssh "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" "$@" 2>"$err"; then
+    rm -f "$err"
+    return 0
+  fi
+
+  rc=$?
+  cat "$err" >&2
+
+  if grep -q 'REMOTE HOST IDENTIFICATION HAS CHANGED' "$err"; then
+    echo "Installer SSH cache has a stale host key for $ROUTER_HOST. Refreshing and retrying once..." >&2
+    remove_hostkey_entry "$INSTALLER_KNOWN_HOSTS" "$ROUTER_HOST"
+    if ssh "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" "$@" 2>"$err"; then
+      rm -f "$err"
+      return 0
+    fi
+    rc=$?
+    cat "$err" >&2
+  fi
+
+  echo "Router SSH failed for $ROUTER_SSH." >&2
+  echo "Checks: the router should be reachable at $ROUTER_HOST, SSH must accept the current admin password, and the installer uses its own host-key cache at $INSTALLER_KNOWN_HOSTS." >&2
+  echo "If the router was factory-reset or replaced, rerun the install. The stale key in ~/.ssh/known_hosts is no longer relevant to this installer." >&2
+  rm -f "$err"
+  return "$rc"
 }
 
 require_vars \

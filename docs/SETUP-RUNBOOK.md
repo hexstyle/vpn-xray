@@ -23,7 +23,7 @@ This repository currently ships one primary supported combination:
 - outbound internet on the VPS during install
 - local `bash`, `curl`, `ssh`, `tar`, `unzip`, and `python3`
 
-The local installer accepts first-seen SSH host keys automatically with `StrictHostKeyChecking=accept-new`, so the first connection should not hang on an interactive host-key question.
+The local installer keeps its own SSH host-key cache in `tmp/ssh/known_hosts` and accepts first-seen keys automatically, so it does not depend on your personal `~/.ssh/known_hosts`.
 
 ## Minimal Input
 

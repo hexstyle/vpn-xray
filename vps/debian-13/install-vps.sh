@@ -21,13 +21,42 @@ XRAY_FLOW="${XRAY_FLOW:-}"
 VPS_SSH="${VPS_SSH:-root@${VPS_HOST:-}}"
 VPS_HOST="${VPS_HOST:-$(host_from_ssh_target "$VPS_SSH")}"
 SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
+ensure_installer_ssh_state "$ROOT_DIR"
+INSTALLER_KNOWN_HOSTS="$(installer_known_hosts_file "$ROOT_DIR")"
 VPS_SSH_OPTS=(
   -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
   -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
 )
 
 vps_ssh() {
-  ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "$@"
+  local err rc
+
+  err="$(mktemp)"
+  if ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "$@" 2>"$err"; then
+    rm -f "$err"
+    return 0
+  fi
+
+  rc=$?
+  cat "$err" >&2
+
+  if grep -q 'REMOTE HOST IDENTIFICATION HAS CHANGED' "$err"; then
+    echo "Installer SSH cache has a stale host key for $VPS_HOST. Refreshing and retrying once..." >&2
+    remove_hostkey_entry "$INSTALLER_KNOWN_HOSTS" "$VPS_HOST"
+    if ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "$@" 2>"$err"; then
+      rm -f "$err"
+      return 0
+    fi
+    rc=$?
+    cat "$err" >&2
+  fi
+
+  echo "VPS SSH failed for $VPS_SSH." >&2
+  echo "Checks: the VPS must be reachable, root SSH must already work from this computer, and the installer uses its own host-key cache at $INSTALLER_KNOWN_HOSTS." >&2
+  echo "If the VPS was recreated, rerun the install. The stale key in ~/.ssh/known_hosts is no longer relevant to this installer." >&2
+  rm -f "$err"
+  return "$rc"
 }
 
 require_vars \
