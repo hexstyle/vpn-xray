@@ -2,6 +2,8 @@
 
 This is the main supported router profile.
 
+If you are installing from scratch, start with [`../../README.md`](../../README.md) and [`../../docs/GETTING-STARTED.md`](../../docs/GETTING-STARTED.md) first.
+
 ## Firmware Family
 
 - GL.iNet firmware on top of OpenWrt

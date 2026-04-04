@@ -2,6 +2,8 @@
 
 This is the main supported VPS profile.
 
+If you are installing from scratch, start with [`../../README.md`](../../README.md) and [`../../docs/GETTING-STARTED.md`](../../docs/GETTING-STARTED.md) first.
+
 ## Assumptions
 
 - Debian 13

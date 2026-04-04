@@ -1,4 +1,4 @@
-# Current Supported State
+# Supported State
 
 This file describes the supported reference state without embedding personal data.
 

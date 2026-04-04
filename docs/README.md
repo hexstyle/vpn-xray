@@ -1,12 +1,13 @@
 # Documentation
 
-Read these in order if you want the shortest path from zero to a working setup:
+Read these in order:
 
-1. [Setup Runbook](./SETUP-RUNBOOK.md)
-2. [Current Supported State](./CURRENT-LAB-STATE.md)
-3. [Web UI](./WEB-UI.md)
-4. [Shared Rules](./SHARED-RULES.md)
-5. [Architecture](./ARCHITECTURE.md)
+1. [Getting Started](./GETTING-STARTED.md)
+2. [Setup Runbook](./SETUP-RUNBOOK.md)
+3. [Supported State](./SUPPORTED-STATE.md)
+4. [Web UI](./WEB-UI.md)
+5. [Shared Rules](./SHARED-RULES.md)
+6. [Architecture](./ARCHITECTURE.md)
 
 Optional background:
 
@@ -14,9 +15,10 @@ Optional background:
 
 ## Human / Agent Index
 
-The same documentation should work both for a person and for automation:
+The same documentation should work for both a person and automation:
 
 - start from [`../README.md`](../README.md)
-- use [`SETUP-RUNBOOK.md`](./SETUP-RUNBOOK.md) for the supported install flow
+- use [`GETTING-STARTED.md`](./GETTING-STARTED.md) for the first install
+- use [`SETUP-RUNBOOK.md`](./SETUP-RUNBOOK.md) for the supported install flow and advanced options
 - choose profiles from [`../routers/`](../routers/README.md) and [`../vps/`](../vps/README.md)
 - only then dive into [`WEB-UI.md`](./WEB-UI.md), [`SHARED-RULES.md`](./SHARED-RULES.md), and [`ARCHITECTURE.md`](./ARCHITECTURE.md)
