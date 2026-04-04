@@ -35,7 +35,7 @@ fi
 
 echo "== waiting for proxy path =="
 proxy_ready=0
-for _ in $(seq 1 20); do
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   if router_ssh "pid=\$(cat /var/run/codex-xray.pid 2>/dev/null || true); [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null && netstat -ltnp 2>/dev/null | grep -q ':$PROXY_PORT '" >/dev/null 2>&1; then
     proxy_ready=1
     break

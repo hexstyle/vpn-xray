@@ -30,7 +30,7 @@ chmod 600 "$XRAY_CONFIG_PATH"
 cat /tmp/codex-router-meta.env > "$REMOTE_META_PATH"
 chmod 600 "$REMOTE_META_PATH"
 
-systemctl enable "$XRAY_SERVICE" >/dev/null 2>&1 || true
+systemctl enable "$XRAY_SERVICE" >/dev/null 2>&1
 systemctl restart "$XRAY_SERVICE"
 sleep 2
 systemctl is-active "$XRAY_SERVICE" >/dev/null
