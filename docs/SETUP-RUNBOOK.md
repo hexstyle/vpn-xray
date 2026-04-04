@@ -11,6 +11,7 @@ This repository currently ships one primary supported combination:
 
 - `root` SSH access to the router after factory reset
 - `root` SSH access to the VPS
+- a usable global IPv4 address on the VPS; this stack does not support IPv6-only servers
 - working uplink on the router during install
 - outbound internet on the VPS during install
 - local `bash`, `curl`, `ssh`, `tar`, `unzip`, and `python3`

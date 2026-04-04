@@ -96,9 +96,11 @@ for p in ${VPS_XRAY_BINARY} /usr/local/bin/xray /usr/bin/xray; do
     break
   fi
 done
+ipv4_addr="$(ip -4 addr show scope global 2>/dev/null | awk '/inet / {print $2; exit}' | cut -d/ -f1 || true)"
 port_check="$(ss -ltnp 2>/dev/null | grep \":${XRAY_PORT} \" || true)"
 port_owner='0'
 printf '%s' "$port_check" | grep -qi 'xray' && port_owner='xray'
+port_check_first="$(printf '%s\n' "$port_check" | sed -n '1p')"
 outbound_https='0'
 if curl -4fsSI --connect-timeout 8 https://github.com >/dev/null 2>&1 || wget -4 -q --spider --timeout=8 https://github.com >/dev/null 2>&1; then
   outbound_https='1'
@@ -109,7 +111,8 @@ printf 'ARCH=%s\n' "$arch"
 printf 'PKG_MGR=%s\n' "$pkg_mgr"
 printf 'SYSTEMD=%s\n' "$systemd"
 printf 'XRAY_PRESENT=%s\n' "$xray_present"
-printf 'PORT_CHECK=%s\n' "$port_check"
+printf 'IPV4_ADDR=%s\n' "$ipv4_addr"
+printf 'PORT_CHECK=%s\n' "$port_check_first"
 printf 'PORT_OWNER=%s\n' "$port_owner"
 printf 'OUTBOUND_HTTPS=%s\n' "$outbound_https"
 EOF
@@ -121,6 +124,7 @@ remote_arch="$(printf '%s\n' "$remote_facts" | sed -n 's/^ARCH=//p' | sed -n '1p
 remote_pkg_mgr="$(printf '%s\n' "$remote_facts" | sed -n 's/^PKG_MGR=//p' | sed -n '1p')"
 remote_systemd="$(printf '%s\n' "$remote_facts" | sed -n 's/^SYSTEMD=//p' | sed -n '1p')"
 remote_xray_present="$(printf '%s\n' "$remote_facts" | sed -n 's/^XRAY_PRESENT=//p' | sed -n '1p')"
+remote_ipv4_addr="$(printf '%s\n' "$remote_facts" | sed -n 's/^IPV4_ADDR=//p' | sed -n '1p')"
 remote_port_check="$(printf '%s\n' "$remote_facts" | sed -n 's/^PORT_CHECK=//p' | sed -n '1p')"
 remote_port_owner="$(printf '%s\n' "$remote_facts" | sed -n 's/^PORT_OWNER=//p' | sed -n '1p')"
 remote_outbound_https="$(printf '%s\n' "$remote_facts" | sed -n 's/^OUTBOUND_HTTPS=//p' | sed -n '1p')"
@@ -150,13 +154,18 @@ if ! printf '%s' "$remote_arch" | grep -Eq "$VPS_SUPPORTED_ARCH_REGEX"; then
   exit 1
 fi
 
+if [[ -z "$remote_ipv4_addr" ]]; then
+  echo "VPS has no global IPv4 address. This stack requires IPv4 (redsocks/iptables are IPv4-only)." >&2
+  exit 1
+fi
+
 if [[ -n "$remote_port_check" && "$remote_port_owner" != "xray" ]]; then
   echo "Port $XRAY_PORT is already in use on VPS: $remote_port_check" >&2
   exit 1
 fi
 
 if [[ "$remote_xray_present" != "1" && "$remote_outbound_https" != "1" ]]; then
-  echo "VPS cannot reach GitHub over HTTPS. Automatic Xray install will fail." >&2
+  echo "VPS has IPv4 ($remote_ipv4_addr) but cannot reach GitHub over it. Check firewall or egress rules." >&2
   exit 1
 fi
 

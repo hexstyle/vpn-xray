@@ -35,6 +35,7 @@ Before you start:
 
 - the router must already be reachable over `root` SSH after factory reset
 - the VPS must already be reachable over `root` SSH
+- the VPS must have a usable global IPv4 address; this stack is IPv4-only
 - the router must have a working uplink during install
 - the VPS must have outbound internet during install
 - your local machine needs `bash`, `curl`, `ssh`, `tar`, `unzip`, and `python3`

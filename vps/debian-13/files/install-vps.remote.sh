@@ -32,6 +32,13 @@ chmod 600 "$REMOTE_META_PATH"
 
 systemctl enable "$XRAY_SERVICE" >/dev/null 2>&1
 systemctl restart "$XRAY_SERVICE"
-sleep 2
+systemctl is-active "$XRAY_SERVICE" >/dev/null
+i=0
+while [ "$i" -lt 15 ]; do
+  ss -ltnp 2>/dev/null | grep -q ":${XRAY_PORT} " && break
+  systemctl is-active "$XRAY_SERVICE" >/dev/null
+  i=$((i + 1))
+  sleep 1
+done
 systemctl is-active "$XRAY_SERVICE" >/dev/null
 ss -ltnp 2>/dev/null | grep -q ":${XRAY_PORT} "
