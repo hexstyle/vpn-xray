@@ -53,12 +53,6 @@ ssh root@192.168.8.1
 
 Use the same password you set in the GL.iNet web interface.
 
-If you just factory-reset the router and `ssh` says `REMOTE HOST IDENTIFICATION HAS CHANGED`, remove the old entry once:
-
-```sh
-ssh-keygen -R 192.168.8.1
-```
-
 ### 2. Prepare the VPS
 
 Before you touch this repository, make sure this already works:
@@ -75,28 +69,13 @@ Requirements:
 
 ### 3. Bootstrap the Platform on the Router
 
-If you downloaded or cloned this repository locally, the easiest path is:
+The normal path is:
 
 ```sh
 ./bootstrap-router-ssh.sh root@192.168.8.1
 ```
 
-That helper uses only local `ssh`, keeps its own installer SSH cache, and runs the real bootstrap on the router itself.
-
-If you do not have the repository locally, use the manual two-step path instead.
-
-First SSH into the router:
-
-```sh
-ssh root@192.168.8.1
-```
-
-Then run this directly on the router:
-
-```sh
-sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)" || \
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)"
-```
+That helper uses only local `ssh`, keeps its own installer SSH cache, survives router factory resets, and runs the real bootstrap on the router itself. You do not need `ssh-keygen`, `wget`, or `curl` on your computer for the normal path.
 
 What this does:
 

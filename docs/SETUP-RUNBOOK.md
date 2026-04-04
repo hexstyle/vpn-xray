@@ -32,19 +32,21 @@ It assumes only:
 
 ### Commands
 
-1. If you have the repository locally, use:
+1. Recommended path:
 
 ```sh
 ./bootstrap-router-ssh.sh root@192.168.8.1
 ```
 
-2. If you do not have the repository locally, SSH into the router:
+That helper is the intended user-facing entrypoint. It isolates installer host keys from the operator's personal SSH config and handles the real bootstrap on the router.
+
+2. Manual fallback only if you are debugging or do not have the helper locally. SSH into the router:
 
 ```sh
 ssh root@192.168.8.1
 ```
 
-3. Then run the router bootstrap on the router:
+3. Then run the router bootstrap on the router itself:
 
 ```sh
 sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)" || \

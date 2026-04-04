@@ -8,7 +8,6 @@ ROUTER_SSH="${1:-${ROUTER_SSH:-root@192.168.8.1}}"
 SSH_CACHE_DIR="${VPN_XRAY_SSH_CACHE_DIR:-$HOME/.cache/vpn-xray}"
 KNOWN_HOSTS="$SSH_CACHE_DIR/known_hosts"
 SSH_BIN="${SSH_BIN:-ssh}"
-SSH_KEYGEN_BIN="${SSH_KEYGEN_BIN:-ssh-keygen}"
 ROUTER_HOST="${ROUTER_SSH##*@}"
 
 info() {
@@ -28,7 +27,6 @@ mkdir -p "$SSH_CACHE_DIR"
 touch "$KNOWN_HOSTS"
 
 need_cmd "$SSH_BIN"
-need_cmd "$SSH_KEYGEN_BIN"
 
 REMOTE_URL="https://raw.githubusercontent.com/${REPO_SLUG}/${REPO_REF}/bootstrap-router.sh"
 
@@ -67,7 +65,8 @@ fi
 if grep -Eq 'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed' "$ERR_LOG"; then
 	info
 	info "Detected a stale cached SSH host key for $ROUTER_HOST. Cleaning the installer cache and retrying once..."
-	"$SSH_KEYGEN_BIN" -R "$ROUTER_HOST" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
+	rm -f "$KNOWN_HOSTS"
+	touch "$KNOWN_HOSTS"
 	if remote_bootstrap; then
 		exit 0
 	fi
