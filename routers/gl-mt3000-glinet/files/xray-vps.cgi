@@ -208,13 +208,24 @@ vps_profile_ids() {
 	done | sort
 }
 
+default_vps_profile() {
+	local profile
+
+	for profile in $(vps_profile_ids); do
+		printf '%s' "$profile"
+		return 0
+	done
+
+	printf 'debian-13'
+}
+
 normalize_vps_profile() {
 	local profile="$1"
-	[ -n "$profile" ] || profile='debian-13'
+	[ -n "$profile" ] || profile="$(default_vps_profile)"
 	if vps_profile_exists "$profile"; then
 		printf '%s' "$profile"
 	else
-		printf 'debian-13'
+		printf '%s' "$(default_vps_profile)"
 	fi
 }
 
@@ -843,7 +854,7 @@ ensure_profile_store() {
 		set_active_profile 'default'
 		uci -q set "${PROFILE_PACKAGE}.default=profile"
 		profile_set default label 'Current VPS'
-		profile_set default vps_profile 'debian-13'
+		profile_set default vps_profile "$(default_vps_profile)"
 		profile_set default auth_mode 'managed_key'
 		profile_set default ssh_host "$(router_live_value server_address)"
 		profile_set default ssh_port '22'
@@ -1202,7 +1213,7 @@ create_profile_action() {
 
 	uci -q set "${PROFILE_PACKAGE}.${profile_id}=profile"
 	profile_set "$profile_id" label 'New VPS'
-	profile_set "$profile_id" vps_profile 'debian-13'
+	profile_set "$profile_id" vps_profile "$(default_vps_profile)"
 	profile_set "$profile_id" auth_mode 'password'
 	profile_set "$profile_id" ssh_host ''
 	profile_set "$profile_id" ssh_port '22'

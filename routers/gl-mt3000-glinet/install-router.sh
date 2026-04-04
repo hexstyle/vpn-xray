@@ -85,6 +85,7 @@ binary="$extract_dir/xray"
 libevent_pkg="$cache_dir/$LIBEVENT_PACKAGE"
 redsocks_pkg="$cache_dir/$REDSOCKS_PACKAGE"
 vps_bundle_tar="$tmpdir/vps-bundles.tar"
+vps_bundle_root="$tmpdir/router-vps-bundles"
 
 mkdir -p "$cache_dir"
 if [[ -f "$cached_archive" ]]; then
@@ -148,7 +149,22 @@ render_template "$ROUTER_PROFILE_DIR/files/codex-xray.json.template" "$json_cfg"
 render_template "$ROUTER_PROFILE_DIR/files/redsocks.conf.template" "$redsocks_cfg"
 render_template "$ROUTER_COMMON_DIR/files/router-rules.config.template" "$router_rules_cfg"
 
-tar -C "$ROOT_DIR" -cf "$vps_bundle_tar" vps
+mkdir -p "$vps_bundle_root/vps"
+for profile_dir in "$ROOT_DIR"/vps/*; do
+  [[ -d "$profile_dir" ]] || continue
+  [[ -f "$profile_dir/profile.env" ]] || continue
+  profile_name="$(basename "$profile_dir")"
+  mkdir -p "$vps_bundle_root/vps/$profile_name"
+  cp "$profile_dir/profile.env" "$vps_bundle_root/vps/$profile_name/profile.env"
+  if [[ -f "$profile_dir/README.md" ]]; then
+    cp "$profile_dir/README.md" "$vps_bundle_root/vps/$profile_name/README.md"
+  fi
+  if [[ -d "$profile_dir/files" ]]; then
+    mkdir -p "$vps_bundle_root/vps/$profile_name/files"
+    cp -R "$profile_dir/files/." "$vps_bundle_root/vps/$profile_name/files/"
+  fi
+done
+tar -C "$vps_bundle_root" -cf "$vps_bundle_tar" vps
 
 fetch_pkg() {
   local url="$1"

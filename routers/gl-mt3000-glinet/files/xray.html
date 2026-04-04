@@ -1031,8 +1031,8 @@
       const select = document.getElementById("vpsProfile");
       const profiles = Array.isArray(state.vps?.vps_profiles) ? state.vps.vps_profiles : [];
       if (!profiles.length) {
-        select.innerHTML = `<option value="debian-13">Debian 13</option>`;
-        select.value = "debian-13";
+        select.innerHTML = `<option value="">No supported VPS profiles on router</option>`;
+        select.value = "";
         return;
       }
       select.innerHTML = profiles.map((profile) => (
@@ -1049,7 +1049,7 @@
         return;
       }
       document.getElementById("profileId").value = profile.id || "";
-      populateVpsProfileSelect(profile.vps_profile || "debian-13");
+      populateVpsProfileSelect(profile.vps_profile || "");
       document.getElementById("profileLabel").value = profile.label || "";
       document.getElementById("authMode").value = profile.auth_mode || "managed_key";
       document.getElementById("vpsHost").value = profile.endpoint_host || profile.server_address || profile.ssh_host || "";

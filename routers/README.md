@@ -15,6 +15,23 @@ Each profile describes one router or firmware family and ships:
 - `README.md`
   - profile-specific notes
 
+## Profile Contract
+
+To add another router or firmware target, create `routers/<profile-id>/` with the same contract:
+
+- `profile.env`
+  - router-specific defaults, package URLs, checksums, ports, and runtime toggles
+- `install-router.sh`
+  - installs or updates the router runtime for that profile
+- `verify-router.sh`
+  - verifies the installed path for that profile
+- `files/`
+  - payload copied to the router itself
+- `README.md`
+  - profile-specific setup notes
+
+Router profiles may reuse shared OpenWrt-side assets from [`common/`](./common/README.md), but the top-level installer only needs the profile directory and its `profile.env` to resolve the target.
+
 ## Supported Profiles
 
 - `gl-mt3000-glinet`

@@ -78,7 +78,21 @@ During router install, the supported VPS profile bundles are copied to the route
 
 - `/usr/share/vpn-xray/vps`
 
+Only the router-consumable bundle is copied there:
+
+- `profile.env`
+- `README.md`
+- `files/`
+
+Local desktop-side entrypoints such as `install-vps.sh` stay in the repository on the operator machine and are not copied to the router.
+
 That lets the router UI provision a supported VPS directly over SSH later, without hardcoding Debian install logic into the UI layer.
+
+Profile discovery is directory-based:
+
+- every bundled `vps/<profile-id>/profile.env` is treated as a candidate VPS profile
+- the router UI renders the selectable list from those bundled profiles
+- if no saved profile explicitly names a VPS OS, the router falls back to the first bundled VPS profile instead of relying on a hardcoded Debian value
 
 In practice:
 
