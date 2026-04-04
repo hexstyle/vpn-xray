@@ -96,21 +96,14 @@ derive_github_repo_slug() {
   return 1
 }
 
-default_router_env_file() {
+default_install_env_file() {
   local root_dir="$1"
-
-  if [[ -f "$root_dir/config/router.env" ]]; then
-    printf '%s\n' "$root_dir/config/router.env"
-  elif [[ -f "$root_dir/config/router-prod.env" ]]; then
-    printf '%s\n' "$root_dir/config/router-prod.env"
-  else
-    printf '%s\n' "$root_dir/config/router.env"
-  fi
+  printf '%s/install.env\n' "$root_dir"
 }
 
-default_vps_env_file() {
+default_install_env_example() {
   local root_dir="$1"
-  printf '%s\n' "$root_dir/config/vps.env"
+  printf '%s/install.env.example\n' "$root_dir"
 }
 
 host_from_ssh_target() {
@@ -149,4 +142,29 @@ vps_profile_dir() {
   local root_dir="$1"
   local profile="${2:-debian-13}"
   printf '%s\n' "$root_dir/vps/$profile"
+}
+
+require_supported_profile() {
+  local kind="$1"
+  local root_dir="$2"
+  local profile="$3"
+  local profile_dir
+
+  case "$kind" in
+    router)
+      profile_dir="$(router_profile_dir "$root_dir" "$profile")"
+      ;;
+    vps)
+      profile_dir="$(vps_profile_dir "$root_dir" "$profile")"
+      ;;
+    *)
+      echo "Unknown profile kind: $kind" >&2
+      exit 1
+      ;;
+  esac
+
+  if [[ ! -f "$profile_dir/profile.env" ]]; then
+    echo "Unsupported $kind profile: $profile" >&2
+    exit 1
+  fi
 }

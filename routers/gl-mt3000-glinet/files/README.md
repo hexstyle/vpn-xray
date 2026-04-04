@@ -8,3 +8,4 @@ They include:
 - router-side Xray and redsocks templates
 - GL-specific switch integration
 - the standalone web UI and its CGI backends
+- router-side logic that reads bundled VPS profiles from `/usr/share/vpn-xray/vps`

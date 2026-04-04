@@ -5,13 +5,13 @@
   },
   "inbounds": [
     {
-      "port": 443,
+      "port": ${XRAY_PORT},
       "protocol": "vless",
       "settings": {
         "clients": [
           {
             "id": "${XRAY_UUID}",
-            "flow": ""
+            "flow": "${XRAY_FLOW}"
           }
         ],
         "decryption": "none"

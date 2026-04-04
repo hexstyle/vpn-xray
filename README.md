@@ -6,7 +6,7 @@
 
 The reference device in this repository is the compact `GL.iNet GL-MT3000` travel router shown above. It runs from `5V`, can be powered from a Mac over USB, and is easy to keep in a bag as a personal network edge. The physical switch visible on the front edge is the source of truth for `path on / path off`.
 
-The main use case is split routing from a work laptop: keep normal traffic on the ordinary uplink, but send selected destinations through your own VPS instead of through a corporate VPN. That is useful when you need stable access to specific external services, including foreign LLM agents, without touching proxy settings on the client. If your current VPS is blocked or lost, the router UI can read another reachable Debian VPS over SSH and move the Xray config there quickly.
+The main use case is split routing from a work laptop: keep normal traffic on the ordinary uplink, but send selected destinations through your own VPS instead of through a corporate VPN. That is useful when you need stable access to specific external services, including foreign LLM agents, without touching proxy settings on the client. If your current VPS is blocked or lost, the router UI can read another reachable server over SSH and reconfigure it from the router.
 
 ## Thanks
 
@@ -20,14 +20,46 @@ See [NOTICE.md](./NOTICE.md) for attribution and scope.
 
 ## Supported Profiles
 
-Current supported combinations are intentionally explicit:
+Current supported combinations are explicit:
 
 - Router profiles:
   - [`gl-mt3000-glinet`](./routers/gl-mt3000-glinet/README.md)
 - VPS profiles:
   - [`debian-13`](./vps/debian-13/README.md)
 
-The repository is structured so more profiles can be added later under [`routers/`](./routers/README.md) and [`vps/`](./vps/README.md) without changing the top-level flow.
+The repository is structured so more router firmware profiles and more VPS OS profiles can be added later under [`routers/`](./routers/README.md) and [`vps/`](./vps/README.md) without changing the top-level install flow.
+
+## Hello World
+
+1. Create your local install file:
+
+```bash
+cp install.env.example install.env
+```
+
+2. Edit only these two values:
+
+- `ROUTER_SSH`
+- `VPS_SSH`
+
+3. Run the full install:
+
+```bash
+./install.sh
+```
+
+That installer will:
+
+- derive router and VPS hostnames from the SSH targets
+- generate the Xray UUID, Reality keypair, short ID, and default SNI automatically
+- validate the chosen router and VPS profiles
+- deploy the VPS config using the selected VPS profile
+- deploy the router runtime, UI, shared-rules engine, and bundled VPS profiles
+- run a post-deploy verification pass
+
+4. Open the router UI:
+
+- `https://<router-host>/xray.html`
 
 ## What This Wrapper Gives You
 
@@ -35,65 +67,24 @@ The repository is structured so more profiles can be added later under [`routers
 - `VLESS + Reality` transport over your own VPS
 - router-side web UI at `https://<router-host>/xray.html`
 - SSH-first provisioning and switching between saved VPS profiles
+- router-side provisioning of supported VPS OS profiles bundled during install
 - local `full` and `selective` routing modes on the router
 - optional GitHub-backed list of domains / IPv4 / CIDR for selective routing
 
-## Hello World
-
-1. Create local config files:
-
-```bash
-cp config/router.env.example config/router.env
-cp config/vps.env.example config/vps.env
-```
-
-2. Edit only these two values:
-
-- `config/router.env`
-  - `ROUTER_SSH`
-- `config/vps.env`
-  - `VPS_SSH`
-
-3. Run the full install:
-
-```bash
-./scripts/install-stack.sh
-```
-
-That script will:
-
-- derive router and VPS hostnames from the SSH targets
-- generate the Xray UUID, Reality keypair, short ID, and default SNI automatically
-- validate the generated config
-- deploy the VPS config
-- deploy the router runtime and UI
-- run a post-deploy verification pass
-
-4. Open the router UI:
-
-- `https://<router-host>/xray.html`
-
-## Main Docs
-
-- [Documentation Index](./docs/README.md)
-- [Setup Runbook](./docs/SETUP-RUNBOOK.md)
-- [Current Supported State](./docs/CURRENT-LAB-STATE.md)
-- [Web UI](./docs/WEB-UI.md)
-- [Shared Rules](./docs/SHARED-RULES.md)
-- [Architecture](./docs/ARCHITECTURE.md)
-
 ## Repository Layout
 
-- [`config/`](./config/README.md)
-  - local `.env` templates and quickstart notes
-- [`scripts/`](./scripts/README.md)
-  - entrypoints such as `install-stack.sh`, deploy, verify, and validation scripts
+Every main folder has its own `README.md`.
+
+- [`install.env.example`](./install.env.example)
+  - the only file you copy for a fresh setup
+- [`common/`](./common/README.md)
+  - shared bootstrap and validation helpers
 - [`routers/`](./routers/README.md)
-  - router profiles, router-side files, and future firmware targets
+  - router profiles and shared OpenWrt-side assets
 - [`vps/`](./vps/README.md)
-  - VPS OS profiles and server-side config templates
+  - VPS profiles and server-side payloads
 - [`docs/`](./docs/README.md)
-  - human-facing usage, architecture, and UI documentation
+  - setup notes, web UI behavior, shared rules, and architecture
 
 ## Current Defaults
 

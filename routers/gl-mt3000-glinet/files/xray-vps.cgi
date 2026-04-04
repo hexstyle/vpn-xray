@@ -15,7 +15,7 @@ ROUTER_HTTP_PORT='1083'
 ROUTER_SOCKS_PORT='1084'
 ROUTER_ACCESS_LOG='/var/log/xray/codex-xray-access.log'
 ROUTER_ERROR_LOG='/var/log/xray/codex-xray-error.log'
-REMOTE_META_PATH='/usr/local/etc/xray/codex-router-meta.env'
+VPS_PROFILE_ROOT='/usr/share/vpn-xray/vps'
 
 REQUEST_DATA=''
 
@@ -175,6 +175,63 @@ sanitize_id() {
 	out="$(printf '%s' "$raw" | tr '[:upper:] ' '[:lower:]_' | tr -cd 'a-z0-9_-')"
 	[ -n "$out" ] || out='profile'
 	printf '%s' "$out"
+}
+
+vps_profile_env_path() {
+	printf '%s/%s/profile.env\n' "$VPS_PROFILE_ROOT" "$1"
+}
+
+vps_profile_exists() {
+	[ -f "$(vps_profile_env_path "$1")" ]
+}
+
+vps_profile_value() {
+	local profile="$1"
+	local key="$2"
+	local env_file value
+
+	env_file="$(vps_profile_env_path "$profile")"
+	[ -f "$env_file" ] || return 0
+	value="$(sh -c '. "$1"; eval "printf %s \"\${'"$key"':-}\""' sh "$env_file" 2>/dev/null || true)"
+	printf '%s' "$value"
+}
+
+vps_profile_ids() {
+	local dir item
+
+	[ -d "$VPS_PROFILE_ROOT" ] || return 0
+	for item in "$VPS_PROFILE_ROOT"/*; do
+		[ -d "$item" ] || continue
+		[ -f "$item/profile.env" ] || continue
+		dir="${item##*/}"
+		printf '%s\n' "$dir"
+	done | sort
+}
+
+normalize_vps_profile() {
+	local profile="$1"
+	[ -n "$profile" ] || profile='debian-13'
+	if vps_profile_exists "$profile"; then
+		printf '%s' "$profile"
+	else
+		printf 'debian-13'
+	fi
+}
+
+vps_profiles_json() {
+	local first=1 profile label
+	printf '['
+	for profile in $(vps_profile_ids); do
+		label="$(vps_profile_value "$profile" VPS_PROFILE_LABEL)"
+		[ -n "$label" ] || label="$profile"
+		[ "$first" = '1' ] || printf ','
+		first=0
+		printf '{'
+		printf '"id":"%s",' "$(json_escape "$profile")"
+		printf '"label":"%s"' "$(json_escape "$label")"
+		printf '}'
+	done
+	printf ']'
 }
 
 profile_ids() {
@@ -505,72 +562,68 @@ render_router_config() {
 EOF
 }
 
+template_escape() {
+	printf '%s' "${1:-}" | sed 's/[\/&]/\\&/g'
+}
+
+selected_vps_profile() {
+	normalize_vps_profile "$(profile_get "$1" vps_profile)"
+}
+
+vps_profile_file_path() {
+	local profile="$1"
+	local relpath="$2"
+	printf '%s/%s/%s\n' "$VPS_PROFILE_ROOT" "$profile" "$relpath"
+}
+
+render_vps_profile_template() {
+	local profile_id="$1"
+	local template_path="$2"
+	local output="$3"
+	local vps_profile xray_port xray_flow xray_uuid xray_server_name xray_private_key xray_short_id
+	local vps_xray_binary vps_xray_config_dir vps_xray_config_path vps_xray_log_dir vps_xray_service vps_remote_meta_path
+
+	vps_profile="$(selected_vps_profile "$profile_id")"
+	xray_port="$(profile_get "$profile_id" server_port)"
+	[ -n "$xray_port" ] || xray_port='443'
+	xray_flow="$(profile_get "$profile_id" flow)"
+	xray_uuid="$(profile_get "$profile_id" uuid)"
+	xray_server_name="$(profile_get "$profile_id" server_name)"
+	xray_private_key="$(profile_get "$profile_id" private_key)"
+	xray_short_id="$(profile_get "$profile_id" short_id)"
+	vps_xray_binary="$(vps_profile_value "$vps_profile" VPS_XRAY_BINARY)"
+	vps_xray_config_dir="$(vps_profile_value "$vps_profile" VPS_XRAY_CONFIG_DIR)"
+	vps_xray_config_path="$(vps_profile_value "$vps_profile" VPS_XRAY_CONFIG_PATH)"
+	vps_xray_log_dir="$(vps_profile_value "$vps_profile" VPS_XRAY_LOG_DIR)"
+	vps_xray_service="$(vps_profile_value "$vps_profile" VPS_XRAY_SERVICE)"
+	vps_remote_meta_path="$(vps_profile_value "$vps_profile" VPS_REMOTE_META_PATH)"
+
+	sed \
+		-e "s|\${XRAY_PORT}|$(template_escape "$xray_port")|g" \
+		-e "s|\${XRAY_FLOW}|$(template_escape "$xray_flow")|g" \
+		-e "s|\${XRAY_UUID}|$(template_escape "$xray_uuid")|g" \
+		-e "s|\${XRAY_SERVER_NAME}|$(template_escape "$xray_server_name")|g" \
+		-e "s|\${XRAY_PRIVATE_KEY}|$(template_escape "$xray_private_key")|g" \
+		-e "s|\${XRAY_SHORT_ID}|$(template_escape "$xray_short_id")|g" \
+		-e "s|\${VPS_XRAY_BINARY}|$(template_escape "$vps_xray_binary")|g" \
+		-e "s|\${VPS_XRAY_CONFIG_DIR}|$(template_escape "$vps_xray_config_dir")|g" \
+		-e "s|\${VPS_XRAY_CONFIG_PATH}|$(template_escape "$vps_xray_config_path")|g" \
+		-e "s|\${VPS_XRAY_LOG_DIR}|$(template_escape "$vps_xray_log_dir")|g" \
+		-e "s|\${VPS_XRAY_SERVICE}|$(template_escape "$vps_xray_service")|g" \
+		-e "s|\${VPS_REMOTE_META_PATH}|$(template_escape "$vps_remote_meta_path")|g" \
+		"$template_path" > "$output"
+}
+
 render_server_config() {
 	local path="$1"
 	local profile_id="$2"
-	local server_port server_name uuid short_id private_key flow
+	local vps_profile template_rel template_path
 
-	server_port="$(profile_get "$profile_id" server_port)"
-	server_name="$(profile_get "$profile_id" server_name)"
-	uuid="$(profile_get "$profile_id" uuid)"
-	short_id="$(profile_get "$profile_id" short_id)"
-	private_key="$(profile_get "$profile_id" private_key)"
-	flow="$(profile_get "$profile_id" flow)"
-
-	cat > "$path" <<EOF
-{
-  "log": {
-    "error": "/var/log/xray/error.log",
-    "loglevel": "warning"
-  },
-  "inbounds": [
-    {
-      "port": ${server_port},
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "id": "${uuid}",
-            "flow": "${flow}"
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "raw",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "target": "${server_name}:443",
-          "xver": 0,
-          "serverNames": [
-            "${server_name}"
-          ],
-          "privateKey": "${private_key}",
-          "shortIds": [
-            "${short_id}"
-          ],
-          "limitFallbackUpload": {
-            "afterBytes": 1048576,
-            "bytesPerSec": 16384,
-            "burstBytesPerSec": 32768
-          },
-          "limitFallbackDownload": {
-            "afterBytes": 1048576,
-            "bytesPerSec": 16384,
-            "burstBytesPerSec": 32768
-          }
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom"
-    }
-  ]
-}
-EOF
+	vps_profile="$(selected_vps_profile "$profile_id")"
+	template_rel="$(vps_profile_value "$vps_profile" VPS_SERVER_CONFIG_TEMPLATE)"
+	template_path="$(vps_profile_file_path "$vps_profile" "$template_rel")"
+	[ -f "$template_path" ] || return 1
+	render_vps_profile_template "$profile_id" "$template_path" "$path"
 }
 
 render_remote_meta() {
@@ -588,6 +641,50 @@ XRAY_PRIVATE_KEY=$(profile_get "$profile_id" private_key)
 XRAY_PUBLIC_KEY=$(profile_get "$profile_id" public_key)
 XRAY_FLOW=$(profile_get "$profile_id" flow)
 EOF
+}
+
+remote_install_support() {
+	local profile_id="$1"
+	local cache="$2"
+	local vps_profile label os_id os_version pkg_mgr systemd arch xray_present
+	local expected_os_id expected_os_version expected_pkg expected_systemd expected_arch
+	local supported='0'
+	local notes='Selected VPS profile is not ready for automatic install.'
+
+	vps_profile="$(normalize_vps_profile "$(profile_get "$profile_id" vps_profile)")"
+	label="$(vps_profile_value "$vps_profile" VPS_PROFILE_LABEL)"
+	expected_os_id="$(vps_profile_value "$vps_profile" VPS_OS_ID)"
+	expected_os_version="$(vps_profile_value "$vps_profile" VPS_OS_VERSION_PREFIX)"
+	expected_pkg="$(vps_profile_value "$vps_profile" VPS_REQUIRED_PKG_MGR)"
+	expected_systemd="$(vps_profile_value "$vps_profile" VPS_REQUIRES_SYSTEMD)"
+	expected_arch="$(vps_profile_value "$vps_profile" VPS_SUPPORTED_ARCH_REGEX)"
+
+	os_id="$(cache_get "$cache" REMOTE_OS_ID)"
+	os_version="$(cache_get "$cache" REMOTE_OS_VERSION)"
+	pkg_mgr="$(cache_get "$cache" REMOTE_PKG_MGR)"
+	systemd="$(cache_get "$cache" REMOTE_SYSTEMD)"
+	arch="$(cache_get "$cache" REMOTE_ARCH)"
+	xray_present="$(cache_get "$cache" REMOTE_XRAY_PRESENT)"
+
+	if [ "$xray_present" = '1' ]; then
+		supported='1'
+		notes='Xray already installed on the selected VPS.'
+	elif [ -n "$expected_os_id" ] && [ "$os_id" != "$expected_os_id" ]; then
+		notes="Selected VPS profile expects ${label:-$vps_profile}; remote host reports ${os_id:-unknown}."
+	elif [ -n "$expected_os_version" ] && [ "${os_version#${expected_os_version}}" = "$os_version" ]; then
+		notes="Selected VPS profile expects version ${expected_os_version}*; remote host reports ${os_version:-unknown}."
+	elif [ -n "$expected_pkg" ] && [ "$pkg_mgr" != "$expected_pkg" ]; then
+		notes="Selected VPS profile expects package manager ${expected_pkg}; remote host reports ${pkg_mgr:-unknown}."
+	elif [ "$expected_systemd" = '1' ] && [ "$systemd" != '1' ]; then
+		notes='Selected VPS profile requires systemd.'
+	elif [ -n "$expected_arch" ] && ! printf '%s' "$arch" | grep -Eq "$expected_arch"; then
+		notes="Selected VPS profile expects architecture matching ${expected_arch}; remote host reports ${arch:-unknown}."
+	else
+		supported='1'
+		notes="Automatic install path available for ${label:-$vps_profile}."
+	fi
+
+	printf '%s|%s|%s|%s\n' "$vps_profile" "${label:-$vps_profile}" "$supported" "$notes"
 }
 
 profile_diff_fields() {
@@ -634,9 +731,13 @@ remote_cache_json() {
 	printf '"kernel":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_KERNEL)")"
 	printf '"arch":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_ARCH)")"
 	printf '"pretty_name":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_PRETTY_NAME)")"
+	printf '"os_id":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_OS_ID)")"
+	printf '"os_version":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_OS_VERSION)")"
 	printf '"virt":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_VIRT)")"
 	printf '"systemd":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_SYSTEMD)")"
 	printf '"pkg_mgr":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_PKG_MGR)")"
+	printf '"install_profile":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_INSTALL_PROFILE)")"
+	printf '"install_label":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_INSTALL_LABEL)")"
 	printf '"install_supported":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_INSTALL_SUPPORTED)")"
 	printf '"install_notes":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_INSTALL_NOTES)")"
 	printf '"memory":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_MEMORY)")"
@@ -677,6 +778,7 @@ profile_json() {
 	printf '{'
 	printf '"id":"%s",' "$(json_escape "$profile_id")"
 	printf '"label":"%s",' "$(json_escape "$(profile_get "$profile_id" label)")"
+	printf '"vps_profile":"%s",' "$(json_escape "$(normalize_vps_profile "$(profile_get "$profile_id" vps_profile)")")"
 	printf '"auth_mode":"%s",' "$(json_escape "$(profile_get "$profile_id" auth_mode)")"
 	printf '"endpoint_host":"%s",' "$(json_escape "$endpoint_host")"
 	printf '"ssh_host":"%s",' "$(json_escape "$(profile_get "$profile_id" ssh_host)")"
@@ -721,6 +823,9 @@ status_json() {
 	printf '{'
 	printf '"ok":true,'
 	printf '"active_profile_id":"%s",' "$(json_escape "$active")"
+	printf '"vps_profiles":'
+	vps_profiles_json
+	printf ','
 	printf '"router_current":'
 	router_current_json
 	printf ','
@@ -738,6 +843,7 @@ ensure_profile_store() {
 		set_active_profile 'default'
 		uci -q set "${PROFILE_PACKAGE}.default=profile"
 		profile_set default label 'Current VPS'
+		profile_set default vps_profile 'debian-13'
 		profile_set default auth_mode 'managed_key'
 		profile_set default ssh_host "$(router_live_value server_address)"
 		profile_set default ssh_port '22'
@@ -773,7 +879,15 @@ ensure_profile_store() {
 
 remote_inspect_output() {
 	local profile_id="$1"
-	ssh_cmd "$profile_id" 'sh -s' <<'EOF'
+	local vps_profile meta_path config_path
+
+	vps_profile="$(selected_vps_profile "$profile_id")"
+	meta_path="$(vps_profile_value "$vps_profile" VPS_REMOTE_META_PATH)"
+	config_path="$(vps_profile_value "$vps_profile" VPS_XRAY_CONFIG_PATH)"
+	[ -n "$meta_path" ] || meta_path='/usr/local/etc/xray/codex-router-meta.env'
+	[ -n "$config_path" ] || config_path='/usr/local/etc/xray/config.json'
+
+	ssh_cmd "$profile_id" "REMOTE_META_PATH='$meta_path' REMOTE_CONFIG_PATH='$config_path' sh -s" <<'EOF'
 line() {
 	printf '%s=%s\n' "$1" "$2"
 }
@@ -787,6 +901,8 @@ fqdn_v="$(hostname -f 2>/dev/null || true)"
 kernel_v="$(uname -srmo 2>/dev/null || true)"
 arch_v="$(uname -m 2>/dev/null || true)"
 pretty_name_v="$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release 2>/dev/null | tr -d '"' | sed -n '1p')"
+os_id_v="$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | sed -n '1p')"
+os_version_v="$(sed -n 's/^VERSION_ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | sed -n '1p')"
 [ -n "$pretty_name_v" ] || pretty_name_v="$(one_line_file /etc/issue)"
 virt_v="$(command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt 2>/dev/null || true)"
 [ -n "$virt_v" ] || virt_v='none'
@@ -827,9 +943,9 @@ remote_private_key=''
 remote_short_id=''
 remote_flow=''
 
-if [ -f /usr/local/etc/xray/codex-router-meta.env ]; then
+if [ -f "$REMOTE_META_PATH" ]; then
 	managed_meta_v='1'
-	. /usr/local/etc/xray/codex-router-meta.env
+	. "$REMOTE_META_PATH"
 	remote_server_port="${XRAY_PORT:-}"
 	remote_server_name="${XRAY_SERVER_NAME:-}"
 	remote_uuid="${XRAY_UUID:-}"
@@ -837,13 +953,15 @@ if [ -f /usr/local/etc/xray/codex-router-meta.env ]; then
 	remote_private_key="${XRAY_PRIVATE_KEY:-}"
 	remote_short_id="${XRAY_SHORT_ID:-}"
 	remote_flow="${XRAY_FLOW:-}"
-elif [ -f /usr/local/etc/xray/config.json ]; then
+elif [ -f "$REMOTE_CONFIG_PATH" ]; then
 	if command -v python3 >/dev/null 2>&1; then
 		eval "$(python3 - <<'PY'
 import json
 import shlex
 
-with open('/usr/local/etc/xray/config.json', 'r', encoding='utf-8') as fh:
+import os
+
+with open(os.environ['REMOTE_CONFIG_PATH'], 'r', encoding='utf-8') as fh:
     cfg = json.load(fh)
 
 inbounds = cfg.get('inbounds') or [{}]
@@ -880,7 +998,7 @@ emit('remote_flow', client.get('flow', ''))
 PY
 )"
 	else
-		config_json_v="$(tr -d '\n' < /usr/local/etc/xray/config.json 2>/dev/null || true)"
+		config_json_v="$(tr -d '\n' < "$REMOTE_CONFIG_PATH" 2>/dev/null || true)"
 		remote_server_port="$(printf '%s' "$config_json_v" | sed -n 's/.*"port":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | sed -n '1p')"
 		remote_server_name="$(printf '%s' "$config_json_v" | sed -n 's/.*"target":[[:space:]]*"\([^":]*\):443".*/\1/p' | sed -n '1p')"
 		[ -n "$remote_server_name" ] || remote_server_name="$(printf '%s' "$config_json_v" | sed -n 's/.*"serverNames":[[:space:]]*\["\([^"]*\)".*/\1/p' | sed -n '1p')"
@@ -895,16 +1013,6 @@ if [ -z "$remote_public_key" ] && [ -n "$remote_private_key" ] && [ -n "$xray_bi
 	remote_public_key="$($xray_bin x25519 -i "$remote_private_key" 2>/dev/null | sed -n 's/^Password (PublicKey): //p' | sed -n '1p')"
 fi
 
-install_supported='0'
-install_notes='Unsupported for automatic install.'
-if [ "$xray_present" = '1' ]; then
-	install_supported='1'
-	install_notes='Xray already installed.'
-elif [ "$systemd_v" = '1' ] && [ "$pkg_mgr_v" = 'apt-get' ] && printf '%s' "$arch_v" | grep -Eq 'x86_64|aarch64'; then
-	install_supported='1'
-	install_notes='Automatic install path available for Debian/Ubuntu-like system with systemd.'
-fi
-
 line REMOTE_STATUS ok
 line REMOTE_SSH_OK 1
 line REMOTE_HOSTNAME "$hostname_v"
@@ -912,11 +1020,11 @@ line REMOTE_FQDN "$fqdn_v"
 line REMOTE_KERNEL "$kernel_v"
 line REMOTE_ARCH "$arch_v"
 line REMOTE_PRETTY_NAME "$pretty_name_v"
+line REMOTE_OS_ID "$os_id_v"
+line REMOTE_OS_VERSION "$os_version_v"
 line REMOTE_VIRT "$virt_v"
 line REMOTE_SYSTEMD "$systemd_v"
 line REMOTE_PKG_MGR "$pkg_mgr_v"
-line REMOTE_INSTALL_SUPPORTED "$install_supported"
-line REMOTE_INSTALL_NOTES "$install_notes"
 line REMOTE_MEMORY "$memory_v"
 line REMOTE_DISK_ROOT "$disk_root_v"
 line REMOTE_UPTIME "$uptime_v"
@@ -939,7 +1047,7 @@ EOF
 
 refresh_remote_cache() {
 	local profile_id="$1"
-	local output
+	local output cache install_profile install_label install_supported install_notes tmp_cache
 
 	if ! ssh_works "$profile_id"; then
 		return 1
@@ -951,6 +1059,17 @@ refresh_remote_cache() {
 	fi
 
 	write_cache "$profile_id" "$output"
+	cache="$(profile_cache_path "$profile_id")"
+	IFS='|' read -r install_profile install_label install_supported install_notes <<EOF
+$(remote_install_support "$profile_id" "$cache")
+EOF
+	tmp_cache="$(mktemp)"
+	cat "$cache" > "$tmp_cache"
+	printf 'REMOTE_INSTALL_PROFILE=%s\n' "$install_profile" >> "$tmp_cache"
+	printf 'REMOTE_INSTALL_LABEL=%s\n' "$install_label" >> "$tmp_cache"
+	printf 'REMOTE_INSTALL_SUPPORTED=%s\n' "$install_supported" >> "$tmp_cache"
+	printf 'REMOTE_INSTALL_NOTES=%s\n' "$install_notes" >> "$tmp_cache"
+	mv "$tmp_cache" "$cache"
 	profile_set "$profile_id" last_inspect_status 'ok'
 	profile_set "$profile_id" last_inspect_at "$(date +%s)"
 	uci commit "$PROFILE_PACKAGE"
@@ -1000,13 +1119,14 @@ drop_profile_store_backup() {
 }
 
 save_profile_from_request() {
-	local current requested_id profile_id label auth_mode ssh_host ssh_port ssh_user server_address server_port server_name uuid public_key private_key short_id flow bootstrap_key ssh_password
+	local current requested_id profile_id label vps_profile auth_mode ssh_host ssh_port ssh_user server_address server_port server_name uuid public_key private_key short_id flow bootstrap_key ssh_password
 
 	current="$(active_profile_id)"
 	requested_id="$(sanitize_id "$(request_value profile_id)")"
 	[ -n "$requested_id" ] || requested_id="$current"
 	profile_id="$requested_id"
 	label="$(request_value label)"
+	vps_profile="$(normalize_vps_profile "$(request_value vps_profile)")"
 	auth_mode="$(request_value auth_mode)"
 	ssh_host="$(request_value ssh_host)"
 	ssh_port="$(request_value ssh_port)"
@@ -1023,6 +1143,7 @@ save_profile_from_request() {
 	ssh_password="$(request_value ssh_password)"
 
 	[ -n "$label" ] || label='VPS Profile'
+	[ -n "$vps_profile" ] || vps_profile="$(normalize_vps_profile "$(profile_get "$profile_id" vps_profile)")"
 	[ -n "$auth_mode" ] || auth_mode="$(profile_get "$profile_id" auth_mode)"
 	[ -n "$auth_mode" ] || auth_mode='managed_key'
 	[ -n "$ssh_host" ] || ssh_host="$server_address"
@@ -1039,6 +1160,7 @@ save_profile_from_request() {
 	fi
 
 	profile_set "$profile_id" label "$label"
+	profile_set "$profile_id" vps_profile "$vps_profile"
 	profile_set "$profile_id" auth_mode "$auth_mode"
 	profile_set "$profile_id" ssh_host "$ssh_host"
 	profile_set "$profile_id" ssh_port "$ssh_port"
@@ -1080,6 +1202,7 @@ create_profile_action() {
 
 	uci -q set "${PROFILE_PACKAGE}.${profile_id}=profile"
 	profile_set "$profile_id" label 'New VPS'
+	profile_set "$profile_id" vps_profile 'debian-13'
 	profile_set "$profile_id" auth_mode 'password'
 	profile_set "$profile_id" ssh_host ''
 	profile_set "$profile_id" ssh_port '22'
@@ -1399,7 +1522,7 @@ apply_profile_to_router_action() {
 
 setup_vps_internal() {
 	local profile_id="$1"
-	local rendered meta install_supported
+	local rendered meta rendered_install install_supported vps_profile install_script_rel install_script_path remote_meta_path
 
 	if [ -z "$(profile_get "$profile_id" private_key)" ]; then
 		return 1
@@ -1414,47 +1537,39 @@ setup_vps_internal() {
 		return 1
 	fi
 
+	vps_profile="$(selected_vps_profile "$profile_id")"
+	install_script_rel="$(vps_profile_value "$vps_profile" VPS_INSTALL_SCRIPT)"
+	install_script_path="$(vps_profile_file_path "$vps_profile" "$install_script_rel")"
+	remote_meta_path="$(vps_profile_value "$vps_profile" VPS_REMOTE_META_PATH)"
+	[ -f "$install_script_path" ] || return 1
+	[ -n "$remote_meta_path" ] || remote_meta_path='/usr/local/etc/xray/codex-router-meta.env'
+
 	rendered='/tmp/codex-router-vps-config.json'
 	meta='/tmp/codex-router-vps-meta.env'
+	rendered_install='/tmp/codex-router-install.remote.sh'
 	render_server_config "$rendered" "$profile_id"
 	render_remote_meta "$meta" "$profile_id"
-
-	if ! ssh_cmd "$profile_id" '[ -x /usr/local/bin/xray ] || [ -x /usr/bin/xray ]' >/dev/null 2>&1; then
-		ssh_cmd "$profile_id" 'set -e; tmp=/tmp/install-xray.sh; curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh -o "$tmp" || wget -qO "$tmp" https://github.com/XTLS/Xray-install/raw/main/install-release.sh; bash "$tmp" install; rm -f "$tmp"' >/dev/null 2>&1 || {
-			rm -f "$rendered" "$meta"
-			return 1
-		}
-	fi
+	render_vps_profile_template "$profile_id" "$install_script_path" "$rendered_install"
 
 	ssh_stdin_cmd "$profile_id" 'cat > /tmp/codex-router-vps-config.json' "$rendered" >/dev/null 2>&1 || {
-		rm -f "$rendered" "$meta"
+		rm -f "$rendered" "$meta" "$rendered_install"
 		return 1
 	}
 	ssh_stdin_cmd "$profile_id" 'cat > /tmp/codex-router-meta.env' "$meta" >/dev/null 2>&1 || {
-		rm -f "$rendered" "$meta"
+		rm -f "$rendered" "$meta" "$rendered_install"
+		return 1
+	}
+	ssh_stdin_cmd "$profile_id" 'cat > /tmp/install-vps.remote.sh && chmod 755 /tmp/install-vps.remote.sh' "$rendered_install" >/dev/null 2>&1 || {
+		rm -f "$rendered" "$meta" "$rendered_install"
 		return 1
 	}
 
-	ssh_cmd "$profile_id" "set -e
-XRAY_BIN=''
-for p in /usr/local/bin/xray /usr/bin/xray; do
-  [ -x \"\$p\" ] && XRAY_BIN=\"\$p\" && break
-done
-[ -n \"\$XRAY_BIN\" ]
-\$XRAY_BIN run -test -config /tmp/codex-router-vps-config.json >/dev/null 2>&1
-install -d -m 750 /usr/local/etc/xray /var/log/xray
-[ -f /usr/local/etc/xray/config.json ] && cp /usr/local/etc/xray/config.json /usr/local/etc/xray/config.json.bak.\$(date +%Y%m%d%H%M%S)
-cat /tmp/codex-router-vps-config.json > /usr/local/etc/xray/config.json
-chmod 600 /usr/local/etc/xray/config.json
-cat /tmp/codex-router-meta.env > ${REMOTE_META_PATH}
-chmod 600 ${REMOTE_META_PATH}
-systemctl restart xray
-systemctl is-active xray >/dev/null" >/dev/null 2>&1 || {
-		rm -f "$rendered" "$meta"
+	ssh_cmd "$profile_id" "VPS_REMOTE_META_PATH='$remote_meta_path' sh /tmp/install-vps.remote.sh" >/dev/null 2>&1 || {
+		rm -f "$rendered" "$meta" "$rendered_install"
 		return 1
 	}
 
-	rm -f "$rendered" "$meta"
+	rm -f "$rendered" "$meta" "$rendered_install"
 	refresh_remote_cache "$profile_id" >/dev/null 2>&1 || true
 	return 0
 }

@@ -2,22 +2,18 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/common/lib/env.sh"
 
-ROUTER_ENV="${ROUTER_ENV:-$ROOT_DIR/config/router.env}"
-VPS_ENV="${VPS_ENV:-$ROOT_DIR/config/vps.env}"
-ROUTER_TEMPLATE="$ROOT_DIR/config/router.env.example"
-VPS_TEMPLATE="$ROOT_DIR/config/vps.env.example"
+ENV_FILE="${1:-${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}}"
+EXAMPLE_FILE="$(default_install_env_example "$ROOT_DIR")"
 DEFAULT_SERVER_NAME="${DEFAULT_SERVER_NAME:-www.microsoft.com}"
 DEFAULT_ROUTER_PROFILE="${DEFAULT_ROUTER_PROFILE:-gl-mt3000-glinet}"
 DEFAULT_VPS_PROFILE="${DEFAULT_VPS_PROFILE:-debian-13}"
 
-mkdir -p "$(dirname "$ROUTER_ENV")" "$(dirname "$VPS_ENV")"
-[[ -f "$ROUTER_ENV" ]] || cp "$ROUTER_TEMPLATE" "$ROUTER_ENV"
-[[ -f "$VPS_ENV" ]] || cp "$VPS_TEMPLATE" "$VPS_ENV"
+[[ -f "$ENV_FILE" ]] || cp "$EXAMPLE_FILE" "$ENV_FILE"
 
-python3 - <<'PY' "$ROUTER_ENV" "$VPS_ENV" "$DEFAULT_SERVER_NAME" "$DEFAULT_ROUTER_PROFILE" "$DEFAULT_VPS_PROFILE"
+python3 - <<'PY' "$ENV_FILE" "$DEFAULT_SERVER_NAME" "$DEFAULT_ROUTER_PROFILE" "$DEFAULT_VPS_PROFILE"
 import base64
-import os
 import secrets
 import sys
 import uuid
@@ -50,15 +46,12 @@ def is_placeholder(value: str) -> bool:
 def parse_env(path: Path):
     lines = path.read_text().splitlines()
     values = {}
-    order = []
     for line in lines:
         if "=" not in line or line.lstrip().startswith("#"):
             continue
         key, value = line.split("=", 1)
-        key = key.strip()
-        values[key] = value
-        order.append(key)
-    return lines, values, order
+        values[key.strip()] = value
+    return lines, values
 
 
 def set_value(lines, key, value):
@@ -135,92 +128,75 @@ def generate_reality_pair():
     return b64url_no_pad(private_raw), b64url_no_pad(public_raw)
 
 
-router_path = Path(sys.argv[1])
-vps_path = Path(sys.argv[2])
-default_server_name = sys.argv[3]
-default_router_profile = sys.argv[4]
-default_vps_profile = sys.argv[5]
+env_path = Path(sys.argv[1])
+default_server_name = sys.argv[2]
+default_router_profile = sys.argv[3]
+default_vps_profile = sys.argv[4]
 
-router_lines, router, _ = parse_env(router_path)
-vps_lines, vps, _ = parse_env(vps_path)
+lines, values = parse_env(env_path)
 
-if is_placeholder(router.get("ROUTER_PROFILE", "").strip()):
-    set_value(router_lines, "ROUTER_PROFILE", default_router_profile)
+if is_placeholder(values.get("ROUTER_PROFILE", "")):
+    set_value(lines, "ROUTER_PROFILE", default_router_profile)
 
-if is_placeholder(vps.get("VPS_PROFILE", "").strip()):
-    set_value(vps_lines, "VPS_PROFILE", default_vps_profile)
+if is_placeholder(values.get("VPS_PROFILE", "")):
+    set_value(lines, "VPS_PROFILE", default_vps_profile)
 
-router_ssh = router.get("ROUTER_SSH", "").strip()
-vps_ssh = vps.get("VPS_SSH", "").strip()
-
-router_host = router.get("ROUTER_HOST", "").strip()
+router_ssh = values.get("ROUTER_SSH", "").strip()
+router_host = values.get("ROUTER_HOST", "").strip()
 if is_placeholder(router_host) and not is_placeholder(router_ssh):
     router_host = host_from_ssh_target(router_ssh)
-    set_value(router_lines, "ROUTER_HOST", router_host)
+    set_value(lines, "ROUTER_HOST", router_host)
 
-vps_host = vps.get("VPS_HOST", "").strip()
+vps_ssh = values.get("VPS_SSH", "").strip()
+vps_host = values.get("VPS_HOST", "").strip()
 if is_placeholder(vps_host) and not is_placeholder(vps_ssh):
     vps_host = host_from_ssh_target(vps_ssh)
-    set_value(vps_lines, "VPS_HOST", vps_host)
+    set_value(lines, "VPS_HOST", vps_host)
 
-uuid_value = None
-for candidate in (router.get("XRAY_UUID"), vps.get("XRAY_UUID")):
-    if candidate and not is_placeholder(candidate):
-        uuid_value = candidate.strip()
-        break
-if uuid_value is None:
+router_lan_ip = values.get("ROUTER_LAN_IP", "").strip()
+if is_placeholder(router_lan_ip) and not is_placeholder(router_host):
+    set_value(lines, "ROUTER_LAN_IP", router_host)
+
+xray_server = values.get("XRAY_SERVER", "").strip()
+if is_placeholder(xray_server) and not is_placeholder(vps_host):
+    set_value(lines, "XRAY_SERVER", vps_host)
+
+uuid_value = values.get("XRAY_UUID", "").strip()
+if is_placeholder(uuid_value):
     uuid_value = str(uuid.uuid4())
 
-server_name = None
-for candidate in (router.get("XRAY_SERVER_NAME"), vps.get("XRAY_SERVER_NAME")):
-    if candidate and not is_placeholder(candidate):
-        server_name = candidate.strip()
-        break
-if server_name is None:
+server_name = values.get("XRAY_SERVER_NAME", "").strip()
+if is_placeholder(server_name):
     server_name = default_server_name
 
-short_id = None
-for candidate in (router.get("XRAY_SHORT_ID"), vps.get("XRAY_SHORT_ID")):
-    if candidate and not is_placeholder(candidate):
-        short_id = candidate.strip()
-        break
-if short_id is None:
+short_id = values.get("XRAY_SHORT_ID", "").strip()
+if is_placeholder(short_id):
     short_id = secrets.token_hex(8)
 
-public_key = router.get("XRAY_PUBLIC_KEY", "").strip()
-private_key = vps.get("XRAY_PRIVATE_KEY", "").strip()
-
+public_key = values.get("XRAY_PUBLIC_KEY", "").strip()
+private_key = values.get("XRAY_PRIVATE_KEY", "").strip()
 if is_placeholder(private_key) and is_placeholder(public_key):
     private_key, public_key = generate_reality_pair()
 elif is_placeholder(private_key) and not is_placeholder(public_key):
-    raise SystemExit("XRAY_PUBLIC_KEY is set in router.env but XRAY_PRIVATE_KEY is still missing in vps.env")
+    raise SystemExit("XRAY_PUBLIC_KEY is set but XRAY_PRIVATE_KEY is still missing.")
 elif not is_placeholder(private_key) and is_placeholder(public_key):
-    # Derive public key from the private key already present in vps.env.
     raw = base64.urlsafe_b64decode(private_key + "=" * ((4 - len(private_key) % 4) % 4))
     private_int = int.from_bytes(raw, "little")
     public_raw = x25519(private_int, 9).to_bytes(32, "little")
     public_key = b64url_no_pad(public_raw)
 
-set_value(router_lines, "XRAY_UUID", uuid_value)
-set_value(vps_lines, "XRAY_UUID", uuid_value)
-set_value(router_lines, "XRAY_SERVER_NAME", server_name)
-set_value(vps_lines, "XRAY_SERVER_NAME", server_name)
-set_value(router_lines, "XRAY_SHORT_ID", short_id)
-set_value(vps_lines, "XRAY_SHORT_ID", short_id)
-set_value(router_lines, "XRAY_PUBLIC_KEY", public_key)
-set_value(vps_lines, "XRAY_PRIVATE_KEY", private_key)
+set_value(lines, "XRAY_UUID", uuid_value)
+set_value(lines, "XRAY_SERVER_NAME", server_name)
+set_value(lines, "XRAY_SHORT_ID", short_id)
+set_value(lines, "XRAY_PUBLIC_KEY", public_key)
+set_value(lines, "XRAY_PRIVATE_KEY", private_key)
 
-router_xray_server = router.get("XRAY_SERVER", "").strip()
-if not is_placeholder(vps_host) and is_placeholder(router_xray_server):
-    set_value(router_lines, "XRAY_SERVER", vps_host)
-
-router_path.write_text("\n".join(router_lines) + "\n")
-vps_path.write_text("\n".join(vps_lines) + "\n")
+env_path.write_text("\n".join(lines) + "\n")
 
 print("Generated / synchronized Xray values:")
 print(f"  XRAY_UUID={uuid_value}")
 print(f"  XRAY_SERVER_NAME={server_name}")
 print(f"  XRAY_SHORT_ID={short_id}")
 print(f"  XRAY_PUBLIC_KEY={public_key}")
-print("  XRAY_PRIVATE_KEY=<written to vps.env>")
+print("  XRAY_PRIVATE_KEY=<written to install.env>")
 PY

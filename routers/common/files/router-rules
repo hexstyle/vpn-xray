@@ -22,10 +22,7 @@ DEFAULT_ENABLE_PUSH='0'
 DEFAULT_XRAY_MODE='full'
 DEFAULT_XRAY_IPSET='xray_selective_dst'
 DEFAULT_XRAY_DNSMASQ_CONF='/tmp/dnsmasq.d/router-rules-xray-ipset.conf'
-DEFAULT_SS_PACKAGE='shadowsocks-libev'
-DEFAULT_SS_SECTION='ss_rules'
 DEFAULT_SYNC_INTERVAL='30'
-DEFAULT_CONSUMER='xray'
 STATUS_FILE='/tmp/router-rules.status'
 LOCK_DIR='/tmp/router-rules.lock.d'
 
@@ -79,10 +76,7 @@ enable_push() { cfg_get enable_push "$DEFAULT_ENABLE_PUSH"; }
 xray_mode() { cfg_get xray_mode "$DEFAULT_XRAY_MODE"; }
 xray_ipset() { cfg_get xray_ipset "$DEFAULT_XRAY_IPSET"; }
 xray_dnsmasq_conf() { cfg_get xray_dnsmasq_conf "$DEFAULT_XRAY_DNSMASQ_CONF"; }
-ss_package() { cfg_get ss_package "$DEFAULT_SS_PACKAGE"; }
-ss_section() { cfg_get ss_section "$DEFAULT_SS_SECTION"; }
 sync_interval() { cfg_get sync_interval "$DEFAULT_SYNC_INTERVAL"; }
-consumer() { cfg_get consumer "$DEFAULT_CONSUMER"; }
 
 repo_rules_path() {
 	printf '%s/%s\n' "$(repo_path)" "$(rules_relpath)"
@@ -521,35 +515,6 @@ resolve_rules_internal() {
 	status_set source_count "$(rule_count "$source_file")"
 }
 
-apply_shadowsocks_internal() {
-	local pkg section resolved current tmp_current changed value
-
-	pkg="$(ss_package)"
-	section="$(ss_section)"
-	resolved="$(resolved_file)"
-	tmp_current="$(mktemp)"
-
-	uci -q show "${pkg}.${section}" 2>/dev/null | sed -n "s/^${pkg}\.${section}\.dst_ips_forward='\(.*\)'$/\1/p" | sort -u > "$tmp_current"
-	if [ -f "$resolved" ] && cmp -s "$resolved" "$tmp_current"; then
-		set_apply_status shadowsocks 'no changes'
-		rm -f "$tmp_current"
-		return 0
-	fi
-
-	while uci -q delete "${pkg}.${section}.dst_ips_forward" >/dev/null 2>&1; do :; done
-	if [ -f "$resolved" ]; then
-		while IFS= read -r value || [ -n "$value" ]; do
-			[ -n "$value" ] || continue
-			uci add_list "${pkg}.${section}.dst_ips_forward=$value"
-		done < "$resolved"
-	fi
-	uci commit "$pkg"
-	/etc/init.d/shadowsocks-libev restart >/dev/null 2>&1 || true
-	/etc/init.d/firewall restart >/dev/null 2>&1 || true
-	set_apply_status shadowsocks "applied $(wc -l < "$resolved" | awk '{print $1}') targets"
-	rm -f "$tmp_current"
-}
-
 build_xray_ipset_internal() {
 	local setname literals domains conf tmp_conf count
 
@@ -821,7 +786,7 @@ set_xray_mode_internal() {
 
 status_json() {
 	local repo rel rules_file resolved map domains literals file_text profile_status repo_head repo_dirty mode
-	local source_count resolved_count domain_count literal_count xray_ipset_count last_sync_at last_sync_status last_sync_message last_apply_xray last_apply_shadowsocks
+	local source_count resolved_count domain_count literal_count xray_ipset_count last_sync_at last_sync_status last_sync_message last_apply_xray
 	local setname current_signature last_cutover_at last_cutover_status last_cutover_message last_cutover_signature cutover_required
 	local sync_phase sync_phase_at sync_phase_message sync_trace last_verified_at last_sync_actor rules_checksum last_apply_signature interval
 
@@ -859,7 +824,6 @@ status_json() {
 	last_sync_status="$(status_get last_sync_status)"
 	last_sync_message="$(status_get last_sync_message)"
 	last_apply_xray="$(status_get last_apply_xray)"
-	last_apply_shadowsocks="$(status_get last_apply_shadowsocks)"
 	last_sync_actor="$(status_get last_sync_actor)"
 	current_signature="$(xray_state_signature)"
 	rules_checksum="$(file_signature "$rules_file")"
@@ -905,7 +869,6 @@ status_json() {
 	printf '"rules_checksum":"%s",' "$(json_escape "$rules_checksum")"
 	printf '"last_apply_signature":"%s",' "$(json_escape "$last_apply_signature")"
 	printf '"last_apply_xray":"%s",' "$(json_escape "$last_apply_xray")"
-	printf '"last_apply_shadowsocks":"%s",' "$(json_escape "$last_apply_shadowsocks")"
 	printf '"last_cutover_at":"%s",' "$(json_escape "$last_cutover_at")"
 	printf '"last_cutover_status":"%s",' "$(json_escape "$last_cutover_status")"
 	printf '"last_cutover_message":"%s",' "$(json_escape "$last_cutover_message")"
@@ -953,12 +916,9 @@ router-rules commands:
   ensure-git-key
   sync
   resolve
-  apply-shadowsocks
   build-xray-ipset
   apply-xray
   cutover-xray
-  sync-apply-current
-  sync-apply-shadowsocks
   sync-apply-xray
   save-file <path>
   set-xray-mode <full|selective>
@@ -979,9 +939,6 @@ case "$cmd" in
 	resolve)
 		with_lock resolve_rules_internal
 		;;
-	apply-shadowsocks)
-		with_lock apply_shadowsocks_internal
-		;;
 	build-xray-ipset)
 		with_lock build_xray_ipset_internal
 		;;
@@ -990,23 +947,6 @@ case "$cmd" in
 		;;
 	cutover-xray)
 		with_lock hard_cutover_xray_internal
-		;;
-	sync-apply-current)
-		case "$(consumer)" in
-			shadowsocks)
-				with_lock sync_repo_internal
-				with_lock resolve_rules_internal
-				with_lock apply_shadowsocks_internal
-				;;
-			*)
-				with_lock sync_apply_xray_internal
-				;;
-		esac
-		;;
-	sync-apply-shadowsocks)
-		with_lock sync_repo_internal
-		with_lock resolve_rules_internal
-		with_lock apply_shadowsocks_internal
 		;;
 	sync-apply-xray)
 		with_lock sync_apply_xray_internal

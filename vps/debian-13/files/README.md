@@ -1,8 +1,8 @@
 # Debian 13 VPS Payload
 
-These files are rendered and uploaded to a Debian 13 VPS profile.
-
-Current file:
+These files are part of the Debian 13 VPS profile bundle.
 
 - `xray-vps-config.template.json`
-  - server-side Xray config template
+  - the server-side Xray config template
+- `install-vps.remote.sh`
+  - the remote install/apply script executed over SSH

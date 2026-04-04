@@ -15,10 +15,9 @@ This is the main supported router profile.
 - `codex-xray`
 - `codex-transproxy`
 - `xray-switch-watchdog`
+- `router-rules-sync`
 - standalone web UI at `https://<router-host>/xray.html`
-- shared-rules consumer for:
-  - `full` mode
-  - `selective` mode
+- bundled VPS profiles under `/usr/share/vpn-xray/vps`
 
 ## First-Run Input
 
@@ -27,4 +26,4 @@ For the default quickstart, the operator only needs:
 - `ROUTER_SSH`
 - `VPS_SSH`
 
-Everything else is generated or defaulted by the scripts unless you intentionally turn on advanced features such as Git-backed shared rules.
+Everything else is generated or defaulted by the profile unless you intentionally turn on advanced features such as Git-backed shared rules.

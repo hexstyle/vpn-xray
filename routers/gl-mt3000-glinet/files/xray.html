@@ -544,6 +544,10 @@
             <select id="profileSelect"></select>
           </div>
           <div class="field">
+            <label for="vpsProfile">VPS OS Profile</label>
+            <select id="vpsProfile"></select>
+          </div>
+          <div class="field">
             <label for="profileLabel">Label</label>
             <input id="profileLabel" autocomplete="off" spellcheck="false">
           </div>
@@ -708,8 +712,7 @@
       <h2>Selective Address Filter</h2>
       <p class="subcopy">
         One shared list of domains, IPv4 addresses and CIDRs. On GL in <code>selective</code> mode, literal IP/CIDR entries are routed directly and
-        domain entries are tracked live through <code>dnsmasq -&gt; ipset</code>. The resolved IPv4 snapshot is kept for diagnostics and for
-        consumers like <code>shadowsocks-libev</code> that cannot route by domain.
+        domain entries are tracked live through <code>dnsmasq -&gt; ipset</code>. The resolved IPv4 snapshot is kept only for diagnostics and state checks.
       </p>
       <div class="subhead" style="align-items:flex-start;">
         <div style="flex:1 1 auto;">
@@ -836,6 +839,7 @@
       state.foregroundBusy = busy;
       [
         "profileSelect",
+        "vpsProfile",
         "createProfileBtn",
         "checkProfileBtn",
         "applyProfileBtn",
@@ -855,6 +859,7 @@
     function setStartupControlsDisabled(disabled) {
       [
         "profileSelect",
+        "vpsProfile",
         "createProfileBtn",
         "checkProfileBtn",
         "applyProfileBtn",
@@ -947,6 +952,7 @@
       return {
         profile_id: document.getElementById("profileId").value.trim(),
         label: document.getElementById("profileLabel").value.trim(),
+        vps_profile: document.getElementById("vpsProfile").value,
         auth_mode: document.getElementById("authMode").value,
         ssh_host: host,
         ssh_port: document.getElementById("sshPort").value.trim(),
@@ -1021,6 +1027,21 @@
       select.value = profiles.some((profile) => profile.id === current) ? current : profiles[0].id;
     }
 
+    function populateVpsProfileSelect(currentValue) {
+      const select = document.getElementById("vpsProfile");
+      const profiles = Array.isArray(state.vps?.vps_profiles) ? state.vps.vps_profiles : [];
+      if (!profiles.length) {
+        select.innerHTML = `<option value="debian-13">Debian 13</option>`;
+        select.value = "debian-13";
+        return;
+      }
+      select.innerHTML = profiles.map((profile) => (
+        `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.label || profile.id)}</option>`
+      )).join("");
+      const nextValue = profiles.some((profile) => profile.id === currentValue) ? currentValue : profiles[0].id;
+      select.value = nextValue;
+    }
+
     function populateProfileForm(profile, force = false) {
       if (!profile) return;
       if (!force && state.formDirty && formProfileId() === (profile.id || "")) {
@@ -1028,6 +1049,7 @@
         return;
       }
       document.getElementById("profileId").value = profile.id || "";
+      populateVpsProfileSelect(profile.vps_profile || "debian-13");
       document.getElementById("profileLabel").value = profile.label || "";
       document.getElementById("authMode").value = profile.auth_mode || "managed_key";
       document.getElementById("vpsHost").value = profile.endpoint_host || profile.server_address || profile.ssh_host || "";
@@ -1125,6 +1147,7 @@
     function renderRemoteInfo(profile) {
       const remote = profile.remote_cache || {};
       const rows = [
+        ["VPS profile", profile.vps_profile || "(unknown)"],
         ["Selected host", profile.endpoint_host || "(unknown)"],
         ["Last read", `${remote.status || profile.last_inspect_status || "never"}${profile.last_inspect_at ? ` at ${formatUnixTime(profile.last_inspect_at)}` : ""}`],
         ["Router client", state.runtime?.xray_running ? "running" : "stopped"],
@@ -1604,6 +1627,7 @@
       markDirty();
       updateAuthUi();
     });
+    document.getElementById("vpsProfile").addEventListener("change", markDirty);
 
     [
       "profileId",

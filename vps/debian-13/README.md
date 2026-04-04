@@ -1,19 +1,22 @@
 # Debian 13 VPS Profile
 
-This is the main supported server profile.
+This is the main supported VPS profile.
 
 ## Assumptions
 
 - Debian 13
-- SSH access as `root` or an equivalent account already handled through your SSH config
-- `xray` installed at `/usr/local/bin/xray`
-- systemd service name `xray`
+- SSH access to the host
+- `systemd`
+- `apt-get`
+- architecture matching `x86_64|aarch64`
 
-## What The Deploy Script Does
+## What This Profile Ships
 
-- renders the server-side Xray config
-- uploads it to the VPS
-- runs `xray run -test`
-- backs up the previous config if present
-- installs the new config
-- restarts the `xray` systemd service
+- a server-side Xray config template
+- a remote install/apply script
+- defaults for config path, log path, service name, and Xray binary path
+
+The same profile bundle is used in two places:
+
+- by the local root installer during the initial setup
+- by the router UI later when you provision another VPS over SSH

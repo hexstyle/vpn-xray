@@ -2,8 +2,4 @@ artifacts/
 tmp/
 *.log
 .DS_Store
-domain-filter/
-config/router.env
-config/router-prod.env
-config/vps.env
-config/asus-router.env
+install.env

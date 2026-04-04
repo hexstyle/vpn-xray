@@ -12,23 +12,11 @@ Optional background:
 
 - [UI Extensibility Notes](./UI-EXTENSIBILITY.md)
 
-## Human-First Index
+## Human / Agent Index
 
-- `SETUP-RUNBOOK.md`
-  - quickest supported install path
-- `CURRENT-LAB-STATE.md`
-  - what is supported right now
-- `WEB-UI.md`
-  - what the router UI does and how to use it
-- `SHARED-RULES.md`
-  - how GitHub-backed selective routing works
-- `ARCHITECTURE.md`
-  - component map and responsibilities
+The same documentation should work both for a person and for automation:
 
-## Automation Note
-
-Automation should follow the same structure humans do:
-
-- supported router profiles live in [`../routers/`](../routers/README.md)
-- supported VPS profiles live in [`../vps/`](../vps/README.md)
-- entrypoint scripts live in [`../scripts/`](../scripts/README.md)
+- start from [`../README.md`](../README.md)
+- use [`SETUP-RUNBOOK.md`](./SETUP-RUNBOOK.md) for the supported install flow
+- choose profiles from [`../routers/`](../routers/README.md) and [`../vps/`](../vps/README.md)
+- only then dive into [`WEB-UI.md`](./WEB-UI.md), [`SHARED-RULES.md`](./SHARED-RULES.md), and [`ARCHITECTURE.md`](./ARCHITECTURE.md)

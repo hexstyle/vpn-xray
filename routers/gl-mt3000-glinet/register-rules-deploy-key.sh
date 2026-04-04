@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT_DIR/scripts/lib/required-env.sh"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/common/lib/env.sh"
 
-ENV_FILE="${ENV_FILE:-$(default_router_env_file "$ROOT_DIR")}"
-
+ENV_FILE="${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}"
 if [[ -f "$ENV_FILE" ]]; then
-  load_env_file "$ENV_FILE" "$ROOT_DIR/config/router.env.example"
+  load_env_file "$ENV_FILE" "$(default_install_env_example "$ROOT_DIR")"
 fi
 
 ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"

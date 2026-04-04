@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT_DIR/scripts/lib/required-env.sh"
-ENV_FILE="${ENV_FILE:-$(default_router_env_file "$ROOT_DIR")}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/common/lib/env.sh"
+
+ENV_FILE="${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}"
 ENV_ROUTER_SSH="${ROUTER_SSH:-}"
 ENV_ROUTER_HOST="${ROUTER_HOST:-}"
 ENV_ROUTER_LAN_IP="${ROUTER_LAN_IP:-}"
 NETWORK_RELOAD="${NETWORK_RELOAD:-0}"
 
-load_env_file "$ENV_FILE" "$ROOT_DIR/config/router.env.example"
+load_env_file "$ENV_FILE" "$(default_install_env_example "$ROOT_DIR")"
 ROUTER_PROFILE="${ROUTER_PROFILE:-gl-mt3000-glinet}"
+require_supported_profile router "$ROOT_DIR" "$ROUTER_PROFILE"
 ROUTER_PROFILE_DIR="$(router_profile_dir "$ROOT_DIR" "$ROUTER_PROFILE")"
 ROUTER_COMMON_DIR="$(router_common_dir "$ROOT_DIR")"
-[[ -f "$ROUTER_PROFILE_DIR/profile.env" ]] || { echo "Unsupported router profile: $ROUTER_PROFILE" >&2; exit 1; }
 load_profile_defaults "$ROUTER_PROFILE_DIR/profile.env"
 
 if [[ -n "$ENV_ROUTER_SSH" ]]; then
@@ -83,6 +84,7 @@ extract_dir="$tmpdir/extract"
 binary="$extract_dir/xray"
 libevent_pkg="$cache_dir/$LIBEVENT_PACKAGE"
 redsocks_pkg="$cache_dir/$REDSOCKS_PACKAGE"
+vps_bundle_tar="$tmpdir/vps-bundles.tar"
 
 mkdir -p "$cache_dir"
 if [[ -f "$cached_archive" ]]; then
@@ -112,7 +114,6 @@ PY
 fi
 
 cp "$archive" "$cached_archive"
-
 mkdir -p "$extract_dir"
 unzip -oq "$archive" -d "$extract_dir"
 
@@ -127,38 +128,27 @@ if [[ "$binary_sha" != "$XRAY_CORE_BINARY_SHA256" ]]; then
   exit 1
 fi
 
+render_template() {
+  local input="$1"
+  local output="$2"
+  python3 - <<'PY' "$input" "$output"
+import os, pathlib, re, sys
+template = pathlib.Path(sys.argv[1]).read_text()
+def repl(match):
+    key = match.group(1)
+    return os.environ[key]
+pathlib.Path(sys.argv[2]).write_text(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
+PY
+}
+
 json_cfg="$tmpdir/codex-xray.json"
-python3 - <<'PY' "$ROUTER_PROFILE_DIR/files/codex-xray.json.template" "$json_cfg"
-import os, pathlib, re, sys
-template = pathlib.Path(sys.argv[1]).read_text()
-def repl(match):
-    key = match.group(1)
-    return os.environ[key]
-out = re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template)
-pathlib.Path(sys.argv[2]).write_text(out)
-PY
-
 redsocks_cfg="$tmpdir/redsocks.conf"
-python3 - <<'PY' "$ROUTER_PROFILE_DIR/files/redsocks.conf.template" "$redsocks_cfg"
-import os, pathlib, re, sys
-template = pathlib.Path(sys.argv[1]).read_text()
-def repl(match):
-    key = match.group(1)
-    return os.environ[key]
-out = re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template)
-pathlib.Path(sys.argv[2]).write_text(out)
-PY
-
 router_rules_cfg="$tmpdir/router-rules.config"
-python3 - <<'PY' "$ROUTER_COMMON_DIR/files/router-rules.config.template" "$router_rules_cfg"
-import os, pathlib, re, sys
-template = pathlib.Path(sys.argv[1]).read_text()
-def repl(match):
-    key = match.group(1)
-    return os.environ[key]
-out = re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template)
-pathlib.Path(sys.argv[2]).write_text(out)
-PY
+render_template "$ROUTER_PROFILE_DIR/files/codex-xray.json.template" "$json_cfg"
+render_template "$ROUTER_PROFILE_DIR/files/redsocks.conf.template" "$redsocks_cfg"
+render_template "$ROUTER_COMMON_DIR/files/router-rules.config.template" "$router_rules_cfg"
+
+tar -C "$ROOT_DIR" -cf "$vps_bundle_tar" vps
 
 fetch_pkg() {
   local url="$1"
@@ -203,12 +193,12 @@ ssh "$ROUTER_SSH" '
   for pid in $(ps w | awk '\''$5=="/bin/sh" && $6=="/usr/bin/router-rules" {print $1}'\''); do
     kill "$pid" 2>/dev/null || true
   done
-  rm -rf /root/xray-staging 2>/dev/null || true
+  rm -rf /root/xray-staging /usr/share/vpn-xray 2>/dev/null || true
   rm -f /usr/bin/xray /usr/local/bin/sing-box /usr/local/bin/sing-box-1.12.22 /usr/local/bin/sing-box-1.8.0 /usr/local/bin/sing-box-xray 2>/dev/null || true
-  mkdir -p /usr/local/bin /etc/xray /var/log/xray /etc/router-rules/generated /etc/router-rules/ssh
+  mkdir -p /usr/local/bin /etc/xray /var/log/xray /etc/router-rules/generated /etc/router-rules/ssh /usr/share/vpn-xray
 '
-ssh "$ROUTER_SSH" 'cat > /tmp/'"$LIBEVENT_PACKAGE" < "$libevent_pkg"
-ssh "$ROUTER_SSH" 'cat > /tmp/'"$REDSOCKS_PACKAGE" < "$redsocks_pkg"
+ssh "$ROUTER_SSH" "cat > /tmp/$LIBEVENT_PACKAGE" < "$libevent_pkg"
+ssh "$ROUTER_SSH" "cat > /tmp/$REDSOCKS_PACKAGE" < "$redsocks_pkg"
 ssh "$ROUTER_SSH" 'opkg install /tmp/'"$LIBEVENT_PACKAGE"' /tmp/'"$REDSOCKS_PACKAGE"' >/dev/null 2>&1 || true; command -v redsocks >/dev/null'
 ssh "$ROUTER_SSH" 'opkg install git git-http curl ca-bundle ca-certificates >/dev/null 2>&1 || true'
 ssh "$ROUTER_SSH" 'cat > /usr/local/bin/codex-xray-core && chmod 755 /usr/local/bin/codex-xray-core' < "$binary"
@@ -225,6 +215,8 @@ ssh "$ROUTER_SSH" 'cat > /www/xray.html && chmod 644 /www/xray.html' < "$ROUTER_
 ssh "$ROUTER_SSH" 'cat > /www/cgi-bin/xray-admin && chmod 755 /www/cgi-bin/xray-admin' < "$ROUTER_PROFILE_DIR/files/xray-admin.cgi"
 ssh "$ROUTER_SSH" 'cat > /www/cgi-bin/xray-vps && chmod 755 /www/cgi-bin/xray-vps' < "$ROUTER_PROFILE_DIR/files/xray-vps.cgi"
 ssh "$ROUTER_SSH" 'cat > /www/cgi-bin/xray-rules && chmod 755 /www/cgi-bin/xray-rules' < "$ROUTER_PROFILE_DIR/files/xray-rules.cgi"
+ssh "$ROUTER_SSH" 'cat > /tmp/vpn-xray-vps.tar' < "$vps_bundle_tar"
+ssh "$ROUTER_SSH" 'mkdir -p /usr/share/vpn-xray && tar -xf /tmp/vpn-xray-vps.tar -C /usr/share/vpn-xray && rm -f /tmp/vpn-xray-vps.tar'
 
 ssh "$ROUTER_SSH" "
   killall sing-box 2>/dev/null || true

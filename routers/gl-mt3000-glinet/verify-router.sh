@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT_DIR/scripts/lib/required-env.sh"
-ENV_FILE="${ENV_FILE:-$(default_router_env_file "$ROOT_DIR")}"
-ENV_ROUTER_SSH="${ROUTER_SSH:-}"
-ENV_ROUTER_HOST="${ROUTER_HOST:-}"
-load_env_file "$ENV_FILE" "$ROOT_DIR/config/router.env.example"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/common/lib/env.sh"
 
-if [[ -n "$ENV_ROUTER_SSH" ]]; then
-  ROUTER_SSH="$ENV_ROUTER_SSH"
-fi
-
-if [[ -n "$ENV_ROUTER_HOST" ]]; then
-  ROUTER_HOST="$ENV_ROUTER_HOST"
-fi
+ENV_FILE="${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}"
+load_env_file "$ENV_FILE" "$(default_install_env_example "$ROOT_DIR")"
+load_profile_defaults "$(router_profile_dir "$ROOT_DIR" "${ROUTER_PROFILE:-gl-mt3000-glinet}")/profile.env"
 
 ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"
 ROUTER_HOST="${ROUTER_HOST:-$(host_from_ssh_target "$ROUTER_SSH")}"

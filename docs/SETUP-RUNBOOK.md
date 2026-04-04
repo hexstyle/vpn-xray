@@ -1,116 +1,81 @@
 # Setup Runbook
 
-This is the shortest supported path to a working install.
+## Supported Hello-World Path
 
-## Goal
+This repository currently ships one primary supported combination:
 
-Use a supported OpenWrt router profile as a transparent client-side wrapper around Xray, and use a supported VPS profile as the remote server side.
+- router profile: [`gl-mt3000-glinet`](../routers/gl-mt3000-glinet/README.md)
+- VPS profile: [`debian-13`](../vps/debian-13/README.md)
 
-Current reference combination:
+## What You Need Before Starting
 
-- router:
-  - `gl-mt3000-glinet`
-- VPS:
-  - `debian-13`
+- SSH access to the router
+- SSH access to the VPS
+- local `bash`, `curl`, `ssh`, `tar`, `unzip`, and `python3`
 
-## Prerequisites
+Nothing else is required for the first install.
 
-- one supported router reachable over SSH
-- one supported VPS reachable over SSH
-- local shell with:
-  - `bash`
-  - `ssh`
-  - `curl`
-  - `python3`
-  - `git`
+## Quickstart
 
-## 1. Create Local Config Files
+1. Create your local install file:
 
 ```bash
-cp config/router.env.example config/router.env
-cp config/vps.env.example config/vps.env
+cp install.env.example install.env
 ```
 
-Edit only:
+2. Edit only:
 
-- `config/router.env`
-  - `ROUTER_SSH`
-- `config/vps.env`
-  - `VPS_SSH`
+- `ROUTER_SSH`
+- `VPS_SSH`
 
-That is the only required human input for the supported hello-world path.
-
-## 2. Run The Full Installer
+3. Run:
 
 ```bash
-./scripts/install-stack.sh
+./install.sh
 ```
 
-This script runs, in order:
+## What Happens Automatically
 
-1. `scripts/init-config.sh`
-2. `scripts/validate-env.sh vps`
-3. `scripts/validate-env.sh router`
-4. `scripts/deploy-vps-config.sh`
-5. `scripts/deploy-child-router.sh`
-6. `scripts/verify-child-router.sh`
+The installer fills the rest:
 
-## 3. Open The Router UI
+- `ROUTER_HOST`
+- `ROUTER_LAN_IP`
+- `VPS_HOST`
+- `XRAY_SERVER`
+- `XRAY_UUID`
+- `XRAY_SERVER_NAME`
+- `XRAY_SHORT_ID`
+- `XRAY_PUBLIC_KEY`
+- `XRAY_PRIVATE_KEY`
+
+It then:
+
+- validates the selected profiles
+- deploys the VPS payload using the chosen VPS profile
+- deploys the router runtime and web UI
+- uploads the supported VPS profile bundles to the router
+- runs a verification pass
+
+## After Install
+
+Open:
 
 - `https://<router-host>/xray.html`
 
 From there you can:
 
-- inspect the current VPS
-- create another VPS profile
-- read a reachable Debian VPS over SSH
-- sync router and VPS settings
-- manage selective routing rules
+- switch between saved VPS profiles
+- read a VPS over SSH
+- sync router + VPS
+- choose `full` or `selective` routing on the router
+- manage the shared selective-rules list
 
-## Step-By-Step Entry Points
+## Optional Shared Rules
 
-If you do not want the all-in-one installer, the supported manual sequence is:
-
-```bash
-./scripts/init-config.sh
-./scripts/validate-env.sh vps
-./scripts/validate-env.sh router
-./scripts/deploy-vps-config.sh
-./scripts/deploy-child-router.sh
-./scripts/verify-child-router.sh
-```
-
-## Shared Rules Are Optional
-
-GitHub-backed shared rules are not required for the first install.
-
-You can leave these empty initially:
+If you also want GitHub-backed selective routing, fill these extra values in `install.env`:
 
 - `RULES_REPO_FETCH_URL`
 - `RULES_REPO_PUSH_URL`
+- `RULES_ENABLE_PUSH=1`
 
-The basic Xray path still works without them.
-
-## Known Runtime Behaviors
-
-### Selective domain rule looks delayed
-
-That usually means one of:
-
-- the client still has a DNS cache entry
-- the client kept an old TCP session open
-- the client is not using router DNS
-
-### Some sites hang while others work
-
-Check in this order:
-
-1. uplink quality and topology
-2. VPS transport path
-3. whether the site is inside or outside the selective set
-
-### `chatgpt.com` challenge
-
-That is usually VPS IP reputation, not a broken Xray transport path.
-
-Use `api.openai.com`, `ifconfig.me`, and `ipinfo.io` as the health checks instead.
+If they are left empty, the router/VPS transport still works, but shared-rule Git sync is inactive.

@@ -13,9 +13,9 @@ Backends:
 ## Design Rules
 
 - the UI is a friendly wrapper around the real Xray state
-- the physical GL switch is the source of truth for path enable/disable
+- the physical GL switch is the source of truth for path enable / disable
 - switch enforcement belongs to the router service, not the browser page
-- the page should auto-refresh only lightweight status
+- the page should auto-refresh lightweight status only
 - logs stay manual
 
 ## Main Sections
@@ -28,7 +28,7 @@ It contains:
 
 - existing profiles
 - create new profile
-- label
+- VPS OS profile selector
 - one combined `VPS Host / Address` field
 - SSH auth method and matching auth fields
 - `Read VPS And Update Profile`
@@ -38,11 +38,13 @@ Behavior:
 
 - `Read VPS And Update Profile`
   - reads the selected VPS over SSH
-  - may adopt live VPS-side Xray values into the saved profile
+  - refreshes saved values from the live VPS when possible
 - `Sync Router + VPS`
   - is the authoritative write/apply action
+  - applies the selected VPS profile bundle on the remote host
+  - then syncs the router to the same settings
 
-### `Current State`
+### `Live State`
 
 This is the operational summary.
 
@@ -54,19 +56,18 @@ It shows:
 - remote public IP
 - sync state
 
-Technical details should stay secondary and collapsible.
+Technical details stay secondary and collapsible.
 
 ### `Selective Address Filter`
 
-This block controls the optional shared GitHub-backed destination list.
+This block controls the optional GitHub-backed destination list.
 
 It shows:
 
 - current local routing mode
 - shared rules textarea
-- a compact sync/apply state
-- last verification time
-- whether runtime already matches the last checked ruleset
+- compact GitHub sync / runtime status
+- whether the router runtime already matches the latest verified ruleset
 
 ### `Logs`
 
@@ -78,7 +79,7 @@ Logs are manual:
 ## What The Page Must Not Do
 
 - it must not try to own switch reconciliation
-- it must not auto-run VPS SSH inspection loops
+- it must not run heavy VPS SSH loops in the background
 - it must not auto-load logs
 - it must not flood the CGI backends with overlapping requests
 

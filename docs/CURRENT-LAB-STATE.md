@@ -1,64 +1,35 @@
 # Current Supported State
 
-This document tracks the supported baseline without storing live secrets, private hosts, or local addressing.
+This file describes the supported reference state without embedding personal data.
 
-## Supported Router Profile
+## Reference Combination
 
-- router family:
-  - `GL.iNet GL-MT3000`
-- firmware family:
-  - GL.iNet firmware on OpenWrt
-- profile id:
-  - `gl-mt3000-glinet`
+- router profile: `gl-mt3000-glinet`
+- VPS profile: `debian-13`
+- router UI: `https://<router-host>/xray.html`
 
-## Supported VPS Profile
+## What Is Expected To Work
 
-- operating system:
-  - `Debian 13`
-- profile id:
-  - `debian-13`
+- transparent TCP forwarding for LAN clients
+- `VLESS + Reality` over the selected VPS
+- physical switch as the source of truth for path on / off
+- router-side switching between saved VPS profiles
+- router-side provisioning of supported VPS profiles over SSH
+- local `full` / `selective` mode
+- optional GitHub-backed selective rules
 
-## Transport Baseline
+## Operational Caveats
 
-- client runtime:
-  - `xray-core 26.3.27`
-- transport:
-  - `VLESS + Reality`
-- transparent layer:
-  - `redsocks`
-- shared-rules sync interval:
-  - `30s` by default
+- `selective` mode depends on router-side DNS visibility for domains
+- already-open client connections may continue using the old path until cutover state is resolved
+- poor Wi-Fi uplink quality can look like a broken proxy even when Xray itself is healthy
+- `chatgpt.com` is not a reliable smoke test because VPS IP reputation can trigger Cloudflare challenges
 
-## User-Facing Features
+## Reference Checks
 
-- transparent browsing without client-side proxy settings
-- physical router switch for `path on / off`
-- web UI at `https://<router-host>/xray.html`
-- SSH-first onboarding of another Debian VPS
-- switching between saved VPS profiles
-- local `full` and `selective` routing modes on the router
-- GitHub-backed shared rules list
-- domain-aware selective routing on GL through `dnsmasq -> ipset`
+Use these as primary checks:
 
-## Values That Must Stay Local
-
-These belong only in local untracked files:
-
-- router SSH target
-- router management host
-- VPS SSH target
-- VPS host
-- Xray UUID
-- Reality keys
-- Reality short ID
-- GitHub repo URLs for shared rules
-
-## Healthy Runtime Shape
-
-Healthy day-to-day behavior looks like this:
-
-- hardware switch state matches intended path state
-- `xray` and `redsocks` are active when the switch is `ON`
-- router UI and CGI endpoints answer at the router host
-- rules sync reports `verified` once GitHub and runtime align
-- no local config file still contains placeholders
+- `https://www.google.com`
+- `https://ifconfig.me/ip`
+- `https://ipinfo.io/ip`
+- `https://api.openai.com/v1/models`
