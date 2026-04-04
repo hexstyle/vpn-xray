@@ -130,3 +130,4 @@ Prefer these checks:
 - `https://api.openai.com/v1/models`
 
 Do not use `chatgpt.com` as the main success criterion. VPS IP reputation can still trigger Cloudflare challenges even when the transport path is healthy.
+Treat `api.openai.com/v1/models` as an advisory check, not as the install gate: some VPS IPs can be filtered by OpenAI even when the proxy path itself is working correctly.

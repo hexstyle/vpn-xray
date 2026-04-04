@@ -25,6 +25,13 @@ require_vars ROUTER_SSH ROUTER_HOST PROXY_PORT
 reject_placeholder_vars ROUTER_SSH ROUTER_HOST
 
 proxy="http://$ROUTER_HOST:$PROXY_PORT"
+warning_count=0
+
+warn_verify() {
+  printf 'WARNING: %s\n' "$1" >&2
+  warning_count=$((warning_count + 1))
+}
+
 switch_state="$(router_ssh ". /lib/functions/gl_util.sh; get_switch_button_status 2>/dev/null || echo unknown" | sed -n '1p')"
 
 if [[ "$switch_state" != "on" ]]; then
@@ -60,10 +67,24 @@ echo "== egress ip through proxy =="
 curl -m 25 -x "$proxy" https://ifconfig.me/ip
 echo
 
-echo "== api reachability through proxy =="
-curl -I -m 25 -x "$proxy" https://api.openai.com/v1/models
+echo "== api reachability through proxy (advisory) =="
+if ! curl -I -m 25 -x "$proxy" https://api.openai.com/v1/models; then
+  warn_verify "api.openai.com did not answer through the proxy."
+  warn_verify "This does not prove the transport is broken: OpenAI may reject the current VPS IP or region."
+  warn_verify "If Google and the egress IP checks above succeeded, the proxy path itself is likely healthy."
+  warn_verify "Immediate options: keep using the stack, switch to another saved VPS in the router UI, or reprovision a new VPS profile."
+fi
 
 echo
 echo "== secondary egress ip check through proxy =="
 curl -m 25 -x "$proxy" https://ipinfo.io/ip
 echo
+
+if [[ "$warning_count" -gt 0 ]]; then
+  echo
+  echo "Verification completed with $warning_count warning(s)." >&2
+  echo "Deployment succeeded, but one or more advisory checks need attention." >&2
+else
+  echo
+  echo "Verification passed."
+fi
