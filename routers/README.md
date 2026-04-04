@@ -40,8 +40,9 @@ Router profiles may reuse shared OpenWrt-side assets from [`common/`](./common/R
 The intended product shape is:
 
 - primary path
-  - SSH into the router
-  - run the profile's `install-platform.sh` through [`../bootstrap-router.sh`](../bootstrap-router.sh)
+  - run [`../bootstrap-router-ssh.sh`](../bootstrap-router-ssh.sh) from any computer that has `ssh`
+  - or SSH into the router and run [`../bootstrap-router.sh`](../bootstrap-router.sh) there
+  - the router then runs the profile's `install-platform.sh` itself
 - advanced path
   - use `install-router.sh` from a workstation when you want local orchestration
 

@@ -41,6 +41,12 @@ ssh root@192.168.8.1
 
 Use the same password you set in the GL.iNet web panel.
 
+If you see `REMOTE HOST IDENTIFICATION HAS CHANGED` after a factory reset, remove the old SSH host key once:
+
+```sh
+ssh-keygen -R 192.168.8.1
+```
+
 What must be true before you continue:
 
 - `ssh root@192.168.8.1` works
@@ -65,16 +71,27 @@ What must be true before you continue:
 
 ## Bootstrap the Router Platform
 
-SSH into the router:
+If you downloaded or cloned this repository locally, use the helper:
+
+```sh
+./bootstrap-router-ssh.sh root@192.168.8.1
+```
+
+That helper needs only local `ssh`. It does not depend on your personal `~/.ssh/known_hosts`, and it runs the actual bootstrap on the router.
+
+If you do not have the repository locally, use the manual two-step path.
+
+First SSH into the router:
 
 ```sh
 ssh root@192.168.8.1
 ```
 
-Run the bootstrap command on the router:
+Then run the bootstrap command on the router:
 
 ```sh
-sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)"
+sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)" || \
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)"
 ```
 
 This installs the router-side platform only:

@@ -53,6 +53,12 @@ ssh root@192.168.8.1
 
 Use the same password you set in the GL.iNet web interface.
 
+If you just factory-reset the router and `ssh` says `REMOTE HOST IDENTIFICATION HAS CHANGED`, remove the old entry once:
+
+```sh
+ssh-keygen -R 192.168.8.1
+```
+
 ### 2. Prepare the VPS
 
 Before you touch this repository, make sure this already works:
@@ -69,7 +75,17 @@ Requirements:
 
 ### 3. Bootstrap the Platform on the Router
 
-SSH into the router:
+If you downloaded or cloned this repository locally, the easiest path is:
+
+```sh
+./bootstrap-router-ssh.sh root@192.168.8.1
+```
+
+That helper uses only local `ssh`, keeps its own installer SSH cache, and runs the real bootstrap on the router itself.
+
+If you do not have the repository locally, use the manual two-step path instead.
+
+First SSH into the router:
 
 ```sh
 ssh root@192.168.8.1
@@ -78,7 +94,8 @@ ssh root@192.168.8.1
 Then run this directly on the router:
 
 ```sh
-sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)"
+sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)" || \
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)"
 ```
 
 What this does:
@@ -204,7 +221,9 @@ For most users, the recommended path is still:
 Every main folder has its own `README.md`.
 
 - [`bootstrap-router.sh`](./bootstrap-router.sh)
-  - SSH-only router bootstrap entrypoint for the primary path
+  - router-side bootstrap entrypoint that runs on the router itself
+- [`bootstrap-router-ssh.sh`](./bootstrap-router-ssh.sh)
+  - easiest local helper for the primary path; requires only `ssh` on your computer
 - [`install.sh`](./install.sh)
   - advanced local installer for developers and CI
 - [`install.env.example`](./install.env.example)

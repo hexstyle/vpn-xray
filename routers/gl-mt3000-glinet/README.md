@@ -33,8 +33,8 @@ This profile expects:
 
 Primary path:
 
-- SSH into the router
-- run [`../../bootstrap-router.sh`](../../bootstrap-router.sh) on the router
+- run [`../../bootstrap-router-ssh.sh`](../../bootstrap-router-ssh.sh) from a computer that has local `ssh`
+- or SSH into the router and run [`../../bootstrap-router.sh`](../../bootstrap-router.sh) there
 - finish VPS setup from `xray.html`
 
 Advanced path:

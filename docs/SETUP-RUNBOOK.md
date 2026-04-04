@@ -32,25 +32,32 @@ It assumes only:
 
 ### Commands
 
-1. SSH into the router:
+1. If you have the repository locally, use:
+
+```sh
+./bootstrap-router-ssh.sh root@192.168.8.1
+```
+
+2. If you do not have the repository locally, SSH into the router:
 
 ```sh
 ssh root@192.168.8.1
 ```
 
-2. Run the router bootstrap:
+3. Then run the router bootstrap on the router:
 
 ```sh
-sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)"
+sh -c "$(wget -qO- https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)" || \
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/hexstyle/vpn-xray/main/bootstrap-router.sh)"
 ```
 
-3. Open:
+4. Open:
 
 ```text
 https://192.168.8.1/xray.html
 ```
 
-4. In the web UI, create/select a VPS and click `Sync Router + VPS`.
+5. In the web UI, create/select a VPS and click `Sync Router + VPS`.
 
 ### What the Router Bootstrap Installs
 
