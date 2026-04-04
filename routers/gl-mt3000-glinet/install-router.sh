@@ -5,6 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/common/lib/env.sh"
 
 ENV_FILE="${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}"
+PREFLIGHT_ONLY=0
+if [[ "${1:-}" == "--preflight" ]]; then
+  PREFLIGHT_ONLY=1
+fi
 ENV_ROUTER_SSH="${ROUTER_SSH:-}"
 ENV_ROUTER_HOST="${ROUTER_HOST:-}"
 ENV_ROUTER_LAN_IP="${ROUTER_LAN_IP:-}"
@@ -32,10 +36,19 @@ fi
 ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"
 ROUTER_HOST="${ROUTER_HOST:-$(host_from_ssh_target "$ROUTER_SSH")}"
 ROUTER_LAN_IP="${ROUTER_LAN_IP:-$ROUTER_HOST}"
+SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
+ROUTER_SSH_OPTS=(
+  -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
+  -o StrictHostKeyChecking=accept-new
+)
 
 RULES_REPO_FETCH_URL="${RULES_REPO_FETCH_URL:-}"
 RULES_REPO_PUSH_URL="${RULES_REPO_PUSH_URL:-}"
 RULES_DEVICE_ID="${RULES_DEVICE_ID:-gl-router}"
+
+router_ssh() {
+  ssh "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" "$@"
+}
 
 require_vars \
   ROUTER_SSH \
@@ -70,7 +83,7 @@ reject_placeholder_vars \
   XRAY_SHORT_ID
 
 router_facts="$(
-  ssh "$ROUTER_SSH" ROUTER_REQUIRED_COMMANDS="$ROUTER_REQUIRED_COMMANDS" 'sh -s' <<'EOF'
+  router_ssh ROUTER_REQUIRED_COMMANDS="$ROUTER_REQUIRED_COMMANDS" 'sh -s' <<'EOF'
 model="$(cat /proc/gl-hw-info/model 2>/dev/null | sed -n '1p')"
 missing=''
 for c in $ROUTER_REQUIRED_COMMANDS; do
@@ -103,6 +116,11 @@ fi
 if [[ "$ROUTER_REQUIRES_DNSMASQ_IPSET" == "1" && "$router_dnsmasq_ipset" != "1" ]]; then
   echo "Router dnsmasq does not expose ipset support, which this profile requires for selective routing." >&2
   exit 1
+fi
+
+if [[ "$PREFLIGHT_ONLY" == "1" ]]; then
+  echo "Router preflight passed for profile $ROUTER_PROFILE on $ROUTER_HOST"
+  exit 0
 fi
 
 if [[ "${ISOLATE_WIFI_LAN_ONLY:-0}" == "1" && "$ROUTER_HOST" == "$ROUTER_LAN_IP" ]]; then
@@ -238,7 +256,7 @@ PY
 fetch_pkg "$LIBEVENT_URL" "$libevent_pkg" "$LIBEVENT_SHA256"
 fetch_pkg "$REDSOCKS_URL" "$redsocks_pkg" "$REDSOCKS_SHA256"
 
-ssh "$ROUTER_SSH" '
+router_ssh '
   /etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
   /etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
   /etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
@@ -252,28 +270,28 @@ ssh "$ROUTER_SSH" '
   rm -f /usr/bin/xray /usr/local/bin/sing-box /usr/local/bin/sing-box-1.12.22 /usr/local/bin/sing-box-1.8.0 /usr/local/bin/sing-box-xray 2>/dev/null || true
   mkdir -p /usr/local/bin /etc/xray /var/log/xray /etc/router-rules/generated /etc/router-rules/ssh /usr/share/vpn-xray
 '
-ssh "$ROUTER_SSH" "cat > /tmp/$LIBEVENT_PACKAGE" < "$libevent_pkg"
-ssh "$ROUTER_SSH" "cat > /tmp/$REDSOCKS_PACKAGE" < "$redsocks_pkg"
-ssh "$ROUTER_SSH" 'opkg install /tmp/'"$LIBEVENT_PACKAGE"' /tmp/'"$REDSOCKS_PACKAGE"' >/dev/null 2>&1 || true; command -v redsocks >/dev/null'
-ssh "$ROUTER_SSH" 'opkg install git git-http curl ca-bundle ca-certificates >/dev/null 2>&1 || true'
-ssh "$ROUTER_SSH" 'cat > /usr/local/bin/codex-xray-core && chmod 755 /usr/local/bin/codex-xray-core' < "$binary"
-ssh "$ROUTER_SSH" 'cat > /etc/xray/codex-xray.json && chmod 600 /etc/xray/codex-xray.json' < "$json_cfg"
-ssh "$ROUTER_SSH" 'cat > /etc/redsocks.conf && chmod 600 /etc/redsocks.conf' < "$redsocks_cfg"
-ssh "$ROUTER_SSH" 'cat > /etc/config/router_rules && chmod 600 /etc/config/router_rules' < "$router_rules_cfg"
-ssh "$ROUTER_SSH" 'cat > /etc/init.d/codex-xray && chmod 755 /etc/init.d/codex-xray' < "$ROUTER_PROFILE_DIR/files/codex-xray.init"
-ssh "$ROUTER_SSH" 'cat > /etc/init.d/codex-transproxy && chmod 755 /etc/init.d/codex-transproxy' < "$ROUTER_PROFILE_DIR/files/codex-transproxy.init"
-ssh "$ROUTER_SSH" 'cat > /etc/init.d/xray-switch-watchdog && chmod 755 /etc/init.d/xray-switch-watchdog' < "$ROUTER_PROFILE_DIR/files/xray-switch-watchdog.init"
-ssh "$ROUTER_SSH" 'cat > /etc/init.d/router-rules-sync && chmod 755 /etc/init.d/router-rules-sync' < "$ROUTER_COMMON_DIR/files/router-rules-sync.init"
-ssh "$ROUTER_SSH" 'cat > /etc/gl-switch.d/xray.sh && chmod 755 /etc/gl-switch.d/xray.sh' < "$ROUTER_PROFILE_DIR/files/gl-switch-xray.sh"
-ssh "$ROUTER_SSH" 'cat > /usr/bin/router-rules && chmod 755 /usr/bin/router-rules' < "$ROUTER_COMMON_DIR/files/router-rules"
-ssh "$ROUTER_SSH" 'cat > /www/xray.html && chmod 644 /www/xray.html' < "$ROUTER_PROFILE_DIR/files/xray.html"
-ssh "$ROUTER_SSH" 'cat > /www/cgi-bin/xray-admin && chmod 755 /www/cgi-bin/xray-admin' < "$ROUTER_PROFILE_DIR/files/xray-admin.cgi"
-ssh "$ROUTER_SSH" 'cat > /www/cgi-bin/xray-vps && chmod 755 /www/cgi-bin/xray-vps' < "$ROUTER_PROFILE_DIR/files/xray-vps.cgi"
-ssh "$ROUTER_SSH" 'cat > /www/cgi-bin/xray-rules && chmod 755 /www/cgi-bin/xray-rules' < "$ROUTER_PROFILE_DIR/files/xray-rules.cgi"
-ssh "$ROUTER_SSH" 'cat > /tmp/vpn-xray-vps.tar' < "$vps_bundle_tar"
-ssh "$ROUTER_SSH" 'mkdir -p /usr/share/vpn-xray && tar -xf /tmp/vpn-xray-vps.tar -C /usr/share/vpn-xray && rm -f /tmp/vpn-xray-vps.tar'
+router_ssh "cat > /tmp/$LIBEVENT_PACKAGE" < "$libevent_pkg"
+router_ssh "cat > /tmp/$REDSOCKS_PACKAGE" < "$redsocks_pkg"
+router_ssh 'opkg install /tmp/'"$LIBEVENT_PACKAGE"' /tmp/'"$REDSOCKS_PACKAGE"' >/dev/null 2>&1 || true; command -v redsocks >/dev/null'
+router_ssh 'opkg install git git-http curl ca-bundle ca-certificates >/dev/null 2>&1 || true'
+router_ssh 'cat > /usr/local/bin/codex-xray-core && chmod 755 /usr/local/bin/codex-xray-core' < "$binary"
+router_ssh 'cat > /etc/xray/codex-xray.json && chmod 600 /etc/xray/codex-xray.json' < "$json_cfg"
+router_ssh 'cat > /etc/redsocks.conf && chmod 600 /etc/redsocks.conf' < "$redsocks_cfg"
+router_ssh 'cat > /etc/config/router_rules && chmod 600 /etc/config/router_rules' < "$router_rules_cfg"
+router_ssh 'cat > /etc/init.d/codex-xray && chmod 755 /etc/init.d/codex-xray' < "$ROUTER_PROFILE_DIR/files/codex-xray.init"
+router_ssh 'cat > /etc/init.d/codex-transproxy && chmod 755 /etc/init.d/codex-transproxy' < "$ROUTER_PROFILE_DIR/files/codex-transproxy.init"
+router_ssh 'cat > /etc/init.d/xray-switch-watchdog && chmod 755 /etc/init.d/xray-switch-watchdog' < "$ROUTER_PROFILE_DIR/files/xray-switch-watchdog.init"
+router_ssh 'cat > /etc/init.d/router-rules-sync && chmod 755 /etc/init.d/router-rules-sync' < "$ROUTER_COMMON_DIR/files/router-rules-sync.init"
+router_ssh 'cat > /etc/gl-switch.d/xray.sh && chmod 755 /etc/gl-switch.d/xray.sh' < "$ROUTER_PROFILE_DIR/files/gl-switch-xray.sh"
+router_ssh 'cat > /usr/bin/router-rules && chmod 755 /usr/bin/router-rules' < "$ROUTER_COMMON_DIR/files/router-rules"
+router_ssh 'cat > /www/xray.html && chmod 644 /www/xray.html' < "$ROUTER_PROFILE_DIR/files/xray.html"
+router_ssh 'cat > /www/cgi-bin/xray-admin && chmod 755 /www/cgi-bin/xray-admin' < "$ROUTER_PROFILE_DIR/files/xray-admin.cgi"
+router_ssh 'cat > /www/cgi-bin/xray-vps && chmod 755 /www/cgi-bin/xray-vps' < "$ROUTER_PROFILE_DIR/files/xray-vps.cgi"
+router_ssh 'cat > /www/cgi-bin/xray-rules && chmod 755 /www/cgi-bin/xray-rules' < "$ROUTER_PROFILE_DIR/files/xray-rules.cgi"
+router_ssh 'cat > /tmp/vpn-xray-vps.tar' < "$vps_bundle_tar"
+router_ssh 'mkdir -p /usr/share/vpn-xray && tar -xf /tmp/vpn-xray-vps.tar -C /usr/share/vpn-xray && rm -f /tmp/vpn-xray-vps.tar'
 
-ssh "$ROUTER_SSH" "
+router_ssh "
   killall sing-box 2>/dev/null || true
   killall sing-box-1.8.0 2>/dev/null || true
   killall sing-box-1.12.22 2>/dev/null || true
@@ -311,18 +329,18 @@ ssh "$ROUTER_SSH" "
 "
 
 if [[ "${ISOLATE_WIFI_LAN_ONLY:-0}" == "1" ]]; then
-  ssh "$ROUTER_SSH" "
+  router_ssh "
     uci del_list network.@device[0].ports='eth1' 2>/dev/null || true
     uci commit network
   "
 else
-  ssh "$ROUTER_SSH" "
+  router_ssh "
     uci add_list network.@device[0].ports='eth1' 2>/dev/null || true
     uci commit network
   "
 fi
 
-ssh "$ROUTER_SSH" "
+router_ssh "
   /etc/init.d/firewall reload >/dev/null 2>&1
   /etc/init.d/stubby stop >/dev/null 2>&1 || true
   /etc/init.d/stubby disable >/dev/null 2>&1 || true
@@ -351,7 +369,7 @@ ssh "$ROUTER_SSH" "
 "
 
 if [[ "$NETWORK_RELOAD" == "1" ]]; then
-  ssh "$ROUTER_SSH" '/etc/init.d/network reload >/dev/null 2>&1 || true'
+  router_ssh '/etc/init.d/network reload >/dev/null 2>&1 || true'
 fi
 
 echo "Deployed to $ROUTER_HOST"

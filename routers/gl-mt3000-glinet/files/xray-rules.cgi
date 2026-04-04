@@ -150,22 +150,6 @@ set_mode_action() {
 	status_action
 }
 
-cutover_action() {
-	if command -v timeout >/dev/null 2>&1; then
-		ROUTER_RULES_SYNC_ACTOR='ui-cutover' timeout 45 /usr/bin/router-rules cutover-xray >/dev/null 2>&1 || {
-			emit_error hard_cutover 'Failed to perform hard cutover on this router.'
-			return 0
-		}
-	else
-		ROUTER_RULES_SYNC_ACTOR='ui-cutover' /usr/bin/router-rules cutover-xray >/dev/null 2>&1 || {
-			emit_error hard_cutover 'Failed to perform hard cutover on this router.'
-			return 0
-		}
-	fi
-
-	status_action
-}
-
 REQUEST_DATA="$(load_request_data)"
 
 case "$(request_value action)" in
@@ -177,9 +161,6 @@ case "$(request_value action)" in
 		;;
 	set_mode)
 		set_mode_action
-		;;
-	hard_cutover)
-		cutover_action
 		;;
 	*)
 		emit_error "$(request_value action)" 'Unknown action.'

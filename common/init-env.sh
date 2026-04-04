@@ -6,11 +6,18 @@ source "$ROOT_DIR/common/lib/env.sh"
 
 ENV_FILE="${1:-${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}}"
 EXAMPLE_FILE="$(default_install_env_example "$ROOT_DIR")"
-DEFAULT_SERVER_NAME="${DEFAULT_SERVER_NAME:-www.microsoft.com}"
 DEFAULT_ROUTER_PROFILE="${DEFAULT_ROUTER_PROFILE:-gl-mt3000-glinet}"
 DEFAULT_VPS_PROFILE="${DEFAULT_VPS_PROFILE:-debian-13}"
 
 [[ -f "$ENV_FILE" ]] || cp "$EXAMPLE_FILE" "$ENV_FILE"
+
+ENV_VPS_PROFILE="$(sed -n 's/^VPS_PROFILE=//p' "$ENV_FILE" | sed -n '1p')"
+if ! is_placeholder_value "$ENV_VPS_PROFILE"; then
+  DEFAULT_VPS_PROFILE="$ENV_VPS_PROFILE"
+fi
+
+load_profile_defaults "$(vps_profile_dir "$ROOT_DIR" "$DEFAULT_VPS_PROFILE")/profile.env"
+DEFAULT_SERVER_NAME="${VPS_DEFAULT_SERVER_NAME:-${DEFAULT_SERVER_NAME:-www.microsoft.com}}"
 
 python3 - <<'PY' "$ENV_FILE" "$DEFAULT_SERVER_NAME" "$DEFAULT_ROUTER_PROFILE" "$DEFAULT_VPS_PROFILE"
 import base64

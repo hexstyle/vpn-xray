@@ -5,6 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/common/lib/env.sh"
 
 ENV_FILE="${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}"
+PREFLIGHT_ONLY=0
+if [[ "${1:-}" == "--preflight" ]]; then
+  PREFLIGHT_ONLY=1
+fi
 load_env_file "$ENV_FILE" "$(default_install_env_example "$ROOT_DIR")"
 
 VPS_PROFILE="${VPS_PROFILE:-debian-13}"
@@ -14,6 +18,15 @@ load_profile_defaults "$VPS_PROFILE_DIR/profile.env"
 
 VPS_SSH="${VPS_SSH:-root@${VPS_HOST:-}}"
 VPS_HOST="${VPS_HOST:-$(host_from_ssh_target "$VPS_SSH")}"
+SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
+VPS_SSH_OPTS=(
+  -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
+  -o StrictHostKeyChecking=accept-new
+)
+
+vps_ssh() {
+  ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "$@"
+}
 
 require_vars \
   VPS_SSH VPS_HOST XRAY_UUID XRAY_SERVER_NAME XRAY_SHORT_ID XRAY_PRIVATE_KEY XRAY_PUBLIC_KEY \
@@ -61,7 +74,7 @@ EOF
 render_template "$VPS_PROFILE_DIR/$VPS_INSTALL_SCRIPT" "$rendered_install"
 
 remote_facts="$(
-  ssh "$VPS_SSH" 'sh -s' <<'EOF'
+  vps_ssh 'sh -s' <<'EOF'
 os_id="$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | sed -n '1p')"
 os_version="$(sed -n 's/^VERSION_ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | sed -n '1p')"
 arch="$(uname -m 2>/dev/null || true)"
@@ -113,9 +126,14 @@ if ! printf '%s' "$remote_arch" | grep -Eq "$VPS_SUPPORTED_ARCH_REGEX"; then
   exit 1
 fi
 
-ssh "$VPS_SSH" 'cat > /tmp/codex-router-vps-config.json && chmod 600 /tmp/codex-router-vps-config.json' < "$rendered_config"
-ssh "$VPS_SSH" 'cat > /tmp/codex-router-meta.env && chmod 600 /tmp/codex-router-meta.env' < "$rendered_meta"
-ssh "$VPS_SSH" 'cat > /tmp/install-vps.remote.sh && chmod 755 /tmp/install-vps.remote.sh' < "$rendered_install"
-ssh "$VPS_SSH" 'sh /tmp/install-vps.remote.sh'
+if [[ "$PREFLIGHT_ONLY" == "1" ]]; then
+  echo "VPS preflight passed for profile $VPS_PROFILE on $VPS_HOST"
+  exit 0
+fi
+
+vps_ssh 'cat > /tmp/codex-router-vps-config.json && chmod 600 /tmp/codex-router-vps-config.json' < "$rendered_config"
+vps_ssh 'cat > /tmp/codex-router-meta.env && chmod 600 /tmp/codex-router-meta.env' < "$rendered_meta"
+vps_ssh 'cat > /tmp/install-vps.remote.sh && chmod 755 /tmp/install-vps.remote.sh' < "$rendered_install"
+vps_ssh 'sh /tmp/install-vps.remote.sh'
 
 echo "Deployed Xray server config to $VPS_HOST using VPS profile $VPS_PROFILE"

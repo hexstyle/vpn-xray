@@ -11,12 +11,21 @@ load_profile_defaults "$(router_profile_dir "$ROOT_DIR" "${ROUTER_PROFILE:-gl-mt
 ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"
 ROUTER_HOST="${ROUTER_HOST:-$(host_from_ssh_target "$ROUTER_SSH")}"
 PROXY_PORT="${PROXY_PORT:-1083}"
+SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
+ROUTER_SSH_OPTS=(
+  -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
+  -o StrictHostKeyChecking=accept-new
+)
+
+router_ssh() {
+  ssh "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" "$@"
+}
 
 require_vars ROUTER_SSH ROUTER_HOST PROXY_PORT
 reject_placeholder_vars ROUTER_SSH ROUTER_HOST
 
 proxy="http://$ROUTER_HOST:$PROXY_PORT"
-switch_state="$(ssh "$ROUTER_SSH" ". /lib/functions/gl_util.sh; get_switch_button_status 2>/dev/null || echo unknown" | sed -n '1p')"
+switch_state="$(router_ssh ". /lib/functions/gl_util.sh; get_switch_button_status 2>/dev/null || echo unknown" | sed -n '1p')"
 
 if [[ "$switch_state" != "on" ]]; then
   echo "Router hardware switch is '$switch_state'." >&2
@@ -25,7 +34,7 @@ if [[ "$switch_state" != "on" ]]; then
 fi
 
 echo "== remote service status =="
-ssh "$ROUTER_SSH" ". /lib/functions/gl_util.sh; echo switch-button=\$(get_switch_button_status 2>/dev/null || echo unknown); pid=\$(cat /var/run/codex-xray.pid 2>/dev/null || true); if [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null; then echo codex-xray running pid=\$pid; else echo codex-xray stopped; fi; redpid=\$(cat /var/run/redsocks.pid 2>/dev/null || true); if [ -n \"\$redpid\" ] && kill -0 \"\$redpid\" 2>/dev/null; then echo redsocks running pid=\$redpid; else echo redsocks stopped; fi; /etc/init.d/codex-xray enabled || true; /etc/init.d/codex-transproxy enabled || true; uci -q get switch-button.@main[0].func || true; sysctl net.mptcp.enabled; netstat -ltnp 2>/dev/null | grep ':$PROXY_PORT' || true; iptables -t nat -S CODEX_TRANSPROXY 2>/dev/null || true; iptables -t nat -S PREROUTING | grep CODEX_TRANSPROXY || true; iptables -S FORWARD | grep 'br-lan.*udp.*REJECT' || true"
+router_ssh ". /lib/functions/gl_util.sh; echo switch-button=\$(get_switch_button_status 2>/dev/null || echo unknown); pid=\$(cat /var/run/codex-xray.pid 2>/dev/null || true); if [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null; then echo codex-xray running pid=\$pid; else echo codex-xray stopped; fi; redpid=\$(cat /var/run/redsocks.pid 2>/dev/null || true); if [ -n \"\$redpid\" ] && kill -0 \"\$redpid\" 2>/dev/null; then echo redsocks running pid=\$redpid; else echo redsocks stopped; fi; /etc/init.d/codex-xray enabled || true; /etc/init.d/codex-transproxy enabled || true; uci -q get switch-button.@main[0].func || true; sysctl net.mptcp.enabled; netstat -ltnp 2>/dev/null | grep ':$PROXY_PORT' || true; iptables -t nat -S CODEX_TRANSPROXY 2>/dev/null || true; iptables -t nat -S PREROUTING | grep CODEX_TRANSPROXY || true; iptables -S FORWARD | grep 'br-lan.*udp.*REJECT' || true"
 
 echo
 echo "== https browsing through proxy =="

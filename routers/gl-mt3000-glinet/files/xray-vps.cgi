@@ -252,6 +252,16 @@ default_vps_profile() {
 	printf ''
 }
 
+default_server_name_for_profile() {
+	local profile="$1"
+	local value
+
+	profile="$(normalize_vps_profile "$profile")"
+	value="$(vps_profile_value "$profile" VPS_DEFAULT_SERVER_NAME)"
+	[ -n "$value" ] || value='www.microsoft.com'
+	printf '%s' "$value"
+}
+
 normalize_vps_profile() {
 	local profile="$1"
 	[ -n "$profile" ] || profile="$(default_vps_profile)"
@@ -740,7 +750,7 @@ profile_diff_fields() {
 	if [ "$source" = 'router' ]; then
 		keys='server_address server_port server_name uuid public_key short_id flow'
 	else
-		keys='server_port server_name uuid public_key short_id flow private_key'
+		keys='server_port server_name uuid public_key short_id flow'
 	fi
 
 	for key in $keys; do
@@ -798,7 +808,6 @@ remote_cache_json() {
 	printf '"server_name":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_server_name)")"
 	printf '"uuid":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_uuid)")"
 	printf '"public_key":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_public_key)")"
-	printf '"private_key":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_private_key)")"
 	printf '"short_id":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_short_id)")"
 	printf '"flow":"%s"' "$(json_escape "$(cache_get "$cache_path" REMOTE_flow)")"
 	printf '}'
@@ -806,14 +815,13 @@ remote_cache_json() {
 
 profile_json() {
 	local profile_id="$1"
-	local cache_path managed_path bootstrap_path managed_present bootstrap_present password_present router_diff remote_diff endpoint_host
+	local cache_path managed_path bootstrap_path managed_present bootstrap_present router_diff remote_diff endpoint_host
 
 	cache_path="$(profile_cache_path "$profile_id")"
 	managed_path="$(profile_get "$profile_id" managed_key_path)"
 	bootstrap_path="$(profile_get "$profile_id" bootstrap_key_path)"
 	[ -n "$managed_path" ] && [ -f "$managed_path" ] && managed_present=1 || managed_present=0
 	[ -n "$bootstrap_path" ] && [ -f "$bootstrap_path" ] && bootstrap_present=1 || bootstrap_present=0
-	[ -n "$(profile_get "$profile_id" ssh_password)" ] && password_present=1 || password_present=0
 	router_diff="$(profile_diff_fields "$profile_id" router)"
 	remote_diff="$(profile_diff_fields "$profile_id" remote)"
 	endpoint_host="$(profile_get "$profile_id" server_address)"
@@ -833,14 +841,12 @@ profile_json() {
 	printf '"server_name":"%s",' "$(json_escape "$(profile_get "$profile_id" server_name)")"
 	printf '"uuid":"%s",' "$(json_escape "$(profile_get "$profile_id" uuid)")"
 	printf '"public_key":"%s",' "$(json_escape "$(profile_get "$profile_id" public_key)")"
-	printf '"private_key":"%s",' "$(json_escape "$(profile_get "$profile_id" private_key)")"
 	printf '"short_id":"%s",' "$(json_escape "$(profile_get "$profile_id" short_id)")"
 	printf '"flow":"%s",' "$(json_escape "$(profile_get "$profile_id" flow)")"
 	printf '"managed_key_path":"%s",' "$(json_escape "$managed_path")"
 	printf '"managed_pubkey":"%s",' "$(json_escape "$(profile_get "$profile_id" managed_pubkey)")"
 	printf '"managed_key_present":'; json_bool "$managed_present"; printf ','
 	printf '"bootstrap_key_present":'; json_bool "$bootstrap_present"; printf ','
-	printf '"ssh_password_present":'; json_bool "$password_present"; printf ','
 	printf '"last_inspect_status":"%s",' "$(json_escape "$(profile_get "$profile_id" last_inspect_status)")"
 	printf '"last_inspect_at":"%s",' "$(json_escape "$(profile_get "$profile_id" last_inspect_at)")"
 	printf '"router_diff":"%s",' "$(json_escape "$router_diff")"
@@ -893,20 +899,20 @@ ensure_profile_store() {
 		profile_set default ssh_port '22'
 		profile_set default ssh_user 'root'
 		profile_set default server_address "$(router_live_value server_address)"
-		profile_set default server_port "$(router_live_value server_port)"
-		profile_set default server_name "$(router_live_value server_name)"
-		profile_set default uuid "$(router_live_value uuid)"
-		profile_set default public_key "$(router_live_value public_key)"
-		profile_set default short_id "$(router_live_value short_id)"
-		profile_set default flow "$(router_live_value flow)"
-		profile_set default private_key ''
-		profile_set default managed_key_path "${KEY_DIR}/default_ed25519"
-		profile_set default bootstrap_key_path "${KEY_DIR}/default_bootstrap"
-		profile_set default managed_pubkey ''
-		profile_set default ssh_password ''
-		profile_set default last_inspect_status 'never'
-		profile_set default last_inspect_at ''
-		uci commit "$PROFILE_PACKAGE"
+			profile_set default server_port "$(router_live_value server_port)"
+			profile_set default server_name "$(router_live_value server_name)"
+			profile_set default uuid "$(router_live_value uuid)"
+			profile_set default public_key "$(router_live_value public_key)"
+			profile_set default short_id "$(router_live_value short_id)"
+			profile_set default flow "$(router_live_value flow)"
+			profile_set default private_key ''
+			profile_set default managed_key_path "${KEY_DIR}/default_ed25519"
+			profile_set default bootstrap_key_path "${KEY_DIR}/default_bootstrap"
+			profile_set default managed_pubkey ''
+			profile_del default ssh_password
+			profile_set default last_inspect_status 'never'
+			profile_set default last_inspect_at ''
+			uci commit "$PROFILE_PACKAGE"
 	fi
 
 	active="$(active_profile_id)"
@@ -915,6 +921,7 @@ ensure_profile_store() {
 	fi
 
 	for profile_id in $(profile_ids); do
+		profile_del "$profile_id" ssh_password
 		ensure_profile_material "$profile_id"
 		ensure_profile_keypair "$profile_id"
 	done
@@ -1163,7 +1170,7 @@ drop_profile_store_backup() {
 }
 
 save_profile_from_request() {
-	local current requested_id profile_id label vps_profile auth_mode ssh_host ssh_port ssh_user server_address server_port server_name uuid public_key private_key short_id flow bootstrap_key ssh_password
+	local current requested_id profile_id label vps_profile auth_mode ssh_host ssh_port ssh_user server_address server_port server_name uuid public_key private_key short_id flow bootstrap_key
 
 	current="$(active_profile_id)"
 	requested_id="$(sanitize_id "$(request_value profile_id)")"
@@ -1184,8 +1191,6 @@ save_profile_from_request() {
 	short_id="$(request_value short_id)"
 	flow="$(request_value flow)"
 	bootstrap_key="$(request_value bootstrap_private_key)"
-	ssh_password="$(request_value ssh_password)"
-
 	[ -n "$label" ] || label='VPS Profile'
 	[ -n "$vps_profile" ] || vps_profile="$(normalize_vps_profile "$(profile_get "$profile_id" vps_profile)")"
 	[ -n "$auth_mode" ] || auth_mode="$(profile_get "$profile_id" auth_mode)"
@@ -1195,7 +1200,7 @@ save_profile_from_request() {
 	[ -n "$ssh_port" ] || ssh_port='22'
 	[ -n "$ssh_user" ] || ssh_user='root'
 	[ -n "$server_port" ] || server_port='443'
-	[ -n "$server_name" ] || server_name='www.microsoft.com'
+	[ -n "$server_name" ] || server_name="$(default_server_name_for_profile "$vps_profile")"
 
 	if ! profile_exists "$profile_id"; then
 		uci -q set "${PROFILE_PACKAGE}.${profile_id}=profile"
@@ -1219,11 +1224,7 @@ save_profile_from_request() {
 	profile_set "$profile_id" flow "$flow"
 	profile_set "$profile_id" managed_key_path "${KEY_DIR}/${profile_id}_ed25519"
 	profile_set "$profile_id" bootstrap_key_path "${KEY_DIR}/${profile_id}_bootstrap"
-	if [ -n "$ssh_password" ]; then
-		profile_set "$profile_id" ssh_password "$ssh_password"
-	elif [ "$auth_mode" != 'password' ]; then
-		profile_del "$profile_id" ssh_password
-	fi
+	profile_del "$profile_id" ssh_password
 
 	ensure_profile_material "$profile_id"
 	ensure_profile_keypair "$profile_id"
@@ -1253,9 +1254,9 @@ create_profile_action() {
 	profile_set "$profile_id" ssh_user 'root'
 	profile_set "$profile_id" server_address ''
 	profile_set "$profile_id" server_port '443'
-	profile_set "$profile_id" server_name 'www.microsoft.com'
+	profile_set "$profile_id" server_name "$(default_server_name_for_profile "$(default_vps_profile)")"
 	profile_set "$profile_id" flow ''
-	profile_set "$profile_id" ssh_password ''
+	profile_del "$profile_id" ssh_password
 	profile_set "$profile_id" private_key ''
 	profile_set "$profile_id" managed_key_path "${KEY_DIR}/${profile_id}_ed25519"
 	profile_set "$profile_id" bootstrap_key_path "${KEY_DIR}/${profile_id}_bootstrap"
@@ -1320,7 +1321,8 @@ install_managed_key_with_password() {
 	host="$(profile_get "$profile_id" ssh_host)"
 	port="$(profile_get "$profile_id" ssh_port)"
 	user="$(profile_get "$profile_id" ssh_user)"
-	password="$(profile_get "$profile_id" ssh_password)"
+	password="$(request_value ssh_password)"
+	[ -n "$password" ] || password="$(profile_get "$profile_id" ssh_password)"
 	pub="$(profile_get "$profile_id" managed_pubkey)"
 
 	[ -n "$host" ] || return 1

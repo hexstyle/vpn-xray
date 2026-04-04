@@ -31,6 +31,15 @@ The repository is structured so more router firmware profiles and more VPS OS pr
 
 ## Hello World
 
+Before you start:
+
+- the router must already be reachable over `root` SSH after factory reset
+- the VPS must already be reachable over `root` SSH
+- the router must have a working uplink during install
+- the VPS must have outbound internet during install
+- your local machine needs `bash`, `curl`, `ssh`, `tar`, `unzip`, and `python3`
+- the installer accepts first-seen SSH host keys automatically with `StrictHostKeyChecking=accept-new`
+
 1. Create your local install file:
 
 ```bash
@@ -50,6 +59,7 @@ cp install.env.example install.env
 
 That installer will:
 
+- run router and VPS preflight checks before making changes
 - derive router and VPS hostnames from the SSH targets
 - generate the Xray UUID, Reality keypair, short ID, and default SNI automatically
 - validate the chosen router and VPS profiles
@@ -66,6 +76,12 @@ Important for the reference GL.iNet router:
 - keep the physical switch in the `ON` position before the final verification pass
 - the switch is the source of truth for `path on / path off`
 - if the switch is `OFF`, install still completes, but the verification step will stop with an explicit message instead of pretending the proxy path is broken
+
+If you want to test only readiness before the real install:
+
+```bash
+PREFLIGHT_ONLY=1 ./install.sh
+```
 
 ## What This Wrapper Gives You
 

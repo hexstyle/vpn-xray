@@ -612,10 +612,6 @@
               <label for="publicKey">Reality Public Key</label>
               <textarea id="publicKey" class="mono" spellcheck="false" readonly></textarea>
             </div>
-            <div class="field field-full">
-              <label for="privateKey">Reality Private Key</label>
-              <textarea id="privateKey" class="mono" spellcheck="false" readonly></textarea>
-            </div>
             <div class="field">
               <label for="shortId">Short ID</label>
               <input id="shortId" class="mono" autocomplete="off" spellcheck="false" readonly>
@@ -752,7 +748,7 @@
       <details class="readonly-pane" style="margin-top:12px;">
         <summary class="label" style="cursor:pointer;">Diagnostics</summary>
         <pre id="rulesTraceOutput" style="margin-top:12px;">No diagnostics yet.</pre>
-      </div>
+      </details>
       <details class="readonly-pane" style="margin-top:12px;">
         <summary class="label" style="cursor:pointer;">Repo Details</summary>
         <pre id="rulesRepoDetails" style="margin-top:12px;">No repo details yet.</pre>
@@ -797,7 +793,6 @@
       { key: "server_name", label: "Server Name / SNI", routerKey: "server_name", remoteKey: "server_name" },
       { key: "uuid", label: "UUID", routerKey: "uuid", remoteKey: "uuid" },
       { key: "public_key", label: "Reality Public Key", routerKey: "public_key", remoteKey: "public_key" },
-      { key: "private_key", label: "Reality Private Key", routerKey: null, remoteKey: "private_key" },
       { key: "short_id", label: "Short ID", routerKey: "short_id", remoteKey: "short_id" },
       { key: "flow", label: "Flow", routerKey: "flow", remoteKey: "flow" }
     ];
@@ -963,7 +958,6 @@
         server_name: document.getElementById("serverName").value.trim(),
         uuid: document.getElementById("uuid").value.trim(),
         public_key: document.getElementById("publicKey").value.trim(),
-        private_key: document.getElementById("privateKey").value.trim(),
         short_id: document.getElementById("shortId").value.trim(),
         flow: document.getElementById("flow").value.trim(),
         bootstrap_private_key: document.getElementById("bootstrapKey").value.trim()
@@ -1060,7 +1054,6 @@
       document.getElementById("serverName").value = profile.server_name || "";
       document.getElementById("uuid").value = profile.uuid || "";
       document.getElementById("publicKey").value = profile.public_key || "";
-      document.getElementById("privateKey").value = profile.private_key || "";
       document.getElementById("shortId").value = profile.short_id || "";
       document.getElementById("flow").value = profile.flow || "";
       document.getElementById("bootstrapKey").value = "";
@@ -1117,7 +1110,6 @@
       const parts = [
         `Auth mode: ${mode}`,
         `Managed key: ${profile.managed_key_present ? "present" : "missing"}`,
-        `Password saved: ${profile.ssh_password_present ? "yes" : "no"}`,
         `Bootstrap key: ${profile.bootstrap_key_present ? "present" : "not set"}`,
         `Managed key path: ${profile.managed_key_path || "(unset)"}`
       ];
