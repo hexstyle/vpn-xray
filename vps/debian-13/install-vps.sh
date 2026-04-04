@@ -15,6 +15,8 @@ VPS_PROFILE="${VPS_PROFILE:-debian-13}"
 VPS_PROFILE_DIR="$(vps_profile_dir "$ROOT_DIR" "$VPS_PROFILE")"
 require_supported_profile vps "$ROOT_DIR" "$VPS_PROFILE"
 load_profile_defaults "$VPS_PROFILE_DIR/profile.env"
+XRAY_PORT="${XRAY_PORT:-443}"
+XRAY_FLOW="${XRAY_FLOW:-}"
 
 VPS_SSH="${VPS_SSH:-root@${VPS_HOST:-}}"
 VPS_HOST="${VPS_HOST:-$(host_from_ssh_target "$VPS_SSH")}"
@@ -29,7 +31,7 @@ vps_ssh() {
 }
 
 require_vars \
-  VPS_SSH VPS_HOST XRAY_UUID XRAY_SERVER_NAME XRAY_SHORT_ID XRAY_PRIVATE_KEY XRAY_PUBLIC_KEY \
+  VPS_SSH VPS_HOST XRAY_PORT XRAY_UUID XRAY_SERVER_NAME XRAY_SHORT_ID XRAY_PRIVATE_KEY XRAY_PUBLIC_KEY \
   VPS_INSTALL_SCRIPT VPS_SERVER_CONFIG_TEMPLATE VPS_REMOTE_META_PATH \
   VPS_XRAY_BINARY VPS_XRAY_CONFIG_DIR VPS_XRAY_CONFIG_PATH VPS_XRAY_LOG_DIR VPS_XRAY_SERVICE \
   VPS_OS_ID VPS_OS_VERSION_PREFIX VPS_REQUIRED_PKG_MGR VPS_REQUIRES_SYSTEMD VPS_SUPPORTED_ARCH_REGEX
@@ -74,7 +76,7 @@ EOF
 render_template "$VPS_PROFILE_DIR/$VPS_INSTALL_SCRIPT" "$rendered_install"
 
 remote_facts="$(
-  vps_ssh 'sh -s' <<'EOF'
+  vps_ssh XRAY_PORT="$XRAY_PORT" VPS_XRAY_BINARY="$VPS_XRAY_BINARY" 'sh -s' <<'EOF'
 os_id="$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | sed -n '1p')"
 os_version="$(sed -n 's/^VERSION_ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | sed -n '1p')"
 arch="$(uname -m 2>/dev/null || true)"
@@ -87,11 +89,29 @@ for c in apt-get dnf yum apk zypper; do
 done
 systemd='0'
 command -v systemctl >/dev/null 2>&1 && systemd='1'
+xray_present='0'
+for p in ${VPS_XRAY_BINARY} /usr/local/bin/xray /usr/bin/xray; do
+  if [ -x "$p" ]; then
+    xray_present='1'
+    break
+  fi
+done
+port_check="$(ss -ltnp 2>/dev/null | grep \":${XRAY_PORT} \" || true)"
+port_owner='0'
+printf '%s' "$port_check" | grep -qi 'xray' && port_owner='xray'
+outbound_https='0'
+if curl -4fsSI --connect-timeout 8 https://github.com >/dev/null 2>&1 || wget -4 -q --spider --timeout=8 https://github.com >/dev/null 2>&1; then
+  outbound_https='1'
+fi
 printf 'OS_ID=%s\n' "$os_id"
 printf 'OS_VERSION=%s\n' "$os_version"
 printf 'ARCH=%s\n' "$arch"
 printf 'PKG_MGR=%s\n' "$pkg_mgr"
 printf 'SYSTEMD=%s\n' "$systemd"
+printf 'XRAY_PRESENT=%s\n' "$xray_present"
+printf 'PORT_CHECK=%s\n' "$port_check"
+printf 'PORT_OWNER=%s\n' "$port_owner"
+printf 'OUTBOUND_HTTPS=%s\n' "$outbound_https"
 EOF
 )"
 
@@ -100,6 +120,10 @@ remote_os_version="$(printf '%s\n' "$remote_facts" | sed -n 's/^OS_VERSION=//p' 
 remote_arch="$(printf '%s\n' "$remote_facts" | sed -n 's/^ARCH=//p' | sed -n '1p')"
 remote_pkg_mgr="$(printf '%s\n' "$remote_facts" | sed -n 's/^PKG_MGR=//p' | sed -n '1p')"
 remote_systemd="$(printf '%s\n' "$remote_facts" | sed -n 's/^SYSTEMD=//p' | sed -n '1p')"
+remote_xray_present="$(printf '%s\n' "$remote_facts" | sed -n 's/^XRAY_PRESENT=//p' | sed -n '1p')"
+remote_port_check="$(printf '%s\n' "$remote_facts" | sed -n 's/^PORT_CHECK=//p' | sed -n '1p')"
+remote_port_owner="$(printf '%s\n' "$remote_facts" | sed -n 's/^PORT_OWNER=//p' | sed -n '1p')"
+remote_outbound_https="$(printf '%s\n' "$remote_facts" | sed -n 's/^OUTBOUND_HTTPS=//p' | sed -n '1p')"
 
 if [[ "$remote_os_id" != "$VPS_OS_ID" ]]; then
   echo "Unsupported VPS OS for profile $VPS_PROFILE: expected $VPS_OS_ID, got ${remote_os_id:-unknown}" >&2
@@ -123,6 +147,16 @@ fi
 
 if ! printf '%s' "$remote_arch" | grep -Eq "$VPS_SUPPORTED_ARCH_REGEX"; then
   echo "Unsupported VPS architecture for profile $VPS_PROFILE: got ${remote_arch:-unknown}, expected ${VPS_SUPPORTED_ARCH_REGEX}" >&2
+  exit 1
+fi
+
+if [[ -n "$remote_port_check" && "$remote_port_owner" != "xray" ]]; then
+  echo "Port $XRAY_PORT is already in use on VPS: $remote_port_check" >&2
+  exit 1
+fi
+
+if [[ "$remote_xray_present" != "1" && "$remote_outbound_https" != "1" ]]; then
+  echo "VPS cannot reach GitHub over HTTPS. Automatic Xray install will fail." >&2
   exit 1
 fi
 

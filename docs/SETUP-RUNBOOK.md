@@ -29,6 +29,7 @@ cp install.env.example install.env
 
 - `ROUTER_SSH`
 - `VPS_SSH`
+- optionally `XRAY_PORT` if port `443` is already occupied on the VPS
 
 3. Run:
 
@@ -64,6 +65,8 @@ It then:
 - deploys the router runtime and web UI
 - uploads the supported VPS profile bundles to the router
 - runs a verification pass
+
+If the physical switch on the GL.iNet router is `OFF`, deployment still finishes, but the final verification step stops with an explicit reminder to turn the switch `ON` and rerun `verify-router.sh`.
 
 ## After Install
 

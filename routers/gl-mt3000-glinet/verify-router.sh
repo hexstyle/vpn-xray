@@ -30,6 +30,21 @@ switch_state="$(router_ssh ". /lib/functions/gl_util.sh; get_switch_button_statu
 if [[ "$switch_state" != "on" ]]; then
   echo "Router hardware switch is '$switch_state'." >&2
   echo "Turn the physical switch to ON before running verify, then rerun this script." >&2
+  exit 20
+fi
+
+echo "== waiting for proxy path =="
+proxy_ready=0
+for _ in $(seq 1 20); do
+  if router_ssh "pid=\$(cat /var/run/codex-xray.pid 2>/dev/null || true); [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null && netstat -ltnp 2>/dev/null | grep -q ':$PROXY_PORT '" >/dev/null 2>&1; then
+    proxy_ready=1
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$proxy_ready" != "1" ]]; then
+  echo "Timed out waiting for the router proxy path to start listening on port $PROXY_PORT." >&2
   exit 1
 fi
 

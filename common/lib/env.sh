@@ -168,3 +168,17 @@ require_supported_profile() {
     exit 1
   fi
 }
+
+require_local_commands() {
+  local missing=()
+  local cmd
+
+  for cmd in "$@"; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+
+  if ((${#missing[@]} > 0)); then
+    echo "Missing required local commands: ${missing[*]}" >&2
+    exit 1
+  fi
+}

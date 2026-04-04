@@ -8,6 +8,7 @@ XRAY_CONFIG_PATH='${VPS_XRAY_CONFIG_PATH}'
 XRAY_LOG_DIR='${VPS_XRAY_LOG_DIR}'
 XRAY_SERVICE='${VPS_XRAY_SERVICE}'
 REMOTE_META_PATH='${VPS_REMOTE_META_PATH}'
+XRAY_PORT='${XRAY_PORT}'
 
 if [ ! -x "$XRAY_BIN" ]; then
   tmp='/tmp/install-xray.sh'
@@ -29,5 +30,8 @@ chmod 600 "$XRAY_CONFIG_PATH"
 cat /tmp/codex-router-meta.env > "$REMOTE_META_PATH"
 chmod 600 "$REMOTE_META_PATH"
 
+systemctl enable "$XRAY_SERVICE" >/dev/null 2>&1 || true
 systemctl restart "$XRAY_SERVICE"
+sleep 2
 systemctl is-active "$XRAY_SERVICE" >/dev/null
+ss -ltnp 2>/dev/null | grep -q ":${XRAY_PORT} "

@@ -273,7 +273,9 @@ router_ssh '
 router_ssh "cat > /tmp/$LIBEVENT_PACKAGE" < "$libevent_pkg"
 router_ssh "cat > /tmp/$REDSOCKS_PACKAGE" < "$redsocks_pkg"
 router_ssh 'opkg install /tmp/'"$LIBEVENT_PACKAGE"' /tmp/'"$REDSOCKS_PACKAGE"' >/dev/null 2>&1 || true; command -v redsocks >/dev/null'
-router_ssh 'opkg install git git-http curl ca-bundle ca-certificates >/dev/null 2>&1 || true'
+if ! router_ssh 'opkg install git git-http curl ca-bundle ca-certificates 2>&1'; then
+  echo "WARNING: opkg install failed on the router; Git-backed shared-rules sync may not work until packages are installed." >&2
+fi
 router_ssh 'cat > /usr/local/bin/codex-xray-core && chmod 755 /usr/local/bin/codex-xray-core' < "$binary"
 router_ssh 'cat > /etc/xray/codex-xray.json && chmod 600 /etc/xray/codex-xray.json' < "$json_cfg"
 router_ssh 'cat > /etc/redsocks.conf && chmod 600 /etc/redsocks.conf' < "$redsocks_cfg"
@@ -303,6 +305,7 @@ router_ssh "
   uci -q delete firewall.codex_wan_httpd_test
   uci -q delete firewall.codex_wan_http_proxy_test
   uci -q delete firewall.codex_wan_http_proxy_prod
+  uci -q delete firewall.codex_wan_redsocks_drop
   uci -q set firewall.codex_wan_http_proxy_prod=rule
   uci set firewall.codex_wan_http_proxy_prod.name='codex_wan_http_proxy_prod'
   uci set firewall.codex_wan_http_proxy_prod.src='wan'
@@ -311,6 +314,13 @@ router_ssh "
   uci set firewall.codex_wan_http_proxy_prod.src_ip='$HOME_SUBNET'
   uci set firewall.codex_wan_http_proxy_prod.dest_port='$PROXY_PORT'
   uci set firewall.codex_wan_http_proxy_prod.target='ACCEPT'
+  uci set firewall.codex_wan_redsocks_drop=rule
+  uci set firewall.codex_wan_redsocks_drop.name='codex_wan_redsocks_drop'
+  uci set firewall.codex_wan_redsocks_drop.src='wan'
+  uci set firewall.codex_wan_redsocks_drop.family='ipv4'
+  uci set firewall.codex_wan_redsocks_drop.proto='tcp'
+  uci set firewall.codex_wan_redsocks_drop.dest_port='$REDSOCKS_PORT'
+  uci set firewall.codex_wan_redsocks_drop.target='DROP'
   uci commit firewall
   uci -q delete dhcp.lan.dhcp_option
   uci set dhcp.lan.ra='disabled'
@@ -353,6 +363,8 @@ router_ssh "
   /etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
   /etc/init.d/xray-switch-watchdog enable >/dev/null 2>&1 || true
   /etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
+  /etc/init.d/gl_switch_button_check stop >/dev/null 2>&1 || true
+  /etc/init.d/gl_switch_button_check disable >/dev/null 2>&1 || true
   /etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
   /etc/init.d/router-rules-sync enable >/dev/null 2>&1 || true
   /usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
@@ -366,7 +378,6 @@ router_ssh "
   fi
   /usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
   /etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
-  /etc/init.d/gl_switch_button_check start >/dev/null 2>&1 || true
 "
 
 if [[ "$NETWORK_RELOAD" == "1" ]]; then

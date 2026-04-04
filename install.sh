@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/common/lib/env.sh"
 
+require_local_commands bash curl ssh tar unzip python3
+
 ENV_FILE="${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
 PREFLIGHT_ONLY="${PREFLIGHT_ONLY:-0}"
@@ -33,7 +35,18 @@ fi
 "$ROOT_DIR/routers/$ROUTER_PROFILE/install-router.sh"
 
 if [[ "$SKIP_VERIFY" != "1" ]]; then
+  set +e
   "$ROOT_DIR/routers/$ROUTER_PROFILE/verify-router.sh"
+  verify_rc=$?
+  set -e
+  if [[ "$verify_rc" -eq 20 ]]; then
+    echo
+    echo "Verification paused: the router hardware switch is OFF."
+    echo "Turn the switch ON and rerun:"
+    echo "  $ROOT_DIR/routers/$ROUTER_PROFILE/verify-router.sh"
+  elif [[ "$verify_rc" -ne 0 ]]; then
+    exit "$verify_rc"
+  fi
 fi
 
 ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"

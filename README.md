@@ -75,7 +75,8 @@ Important for the reference GL.iNet router:
 
 - keep the physical switch in the `ON` position before the final verification pass
 - the switch is the source of truth for `path on / path off`
-- if the switch is `OFF`, install still completes, but the verification step will stop with an explicit message instead of pretending the proxy path is broken
+- if the switch is `OFF`, deployment still completes and `install.sh` finishes with an explicit verification reminder instead of a fake proxy failure
+- if port `443` is already busy on the VPS, set `XRAY_PORT` in `install.env` before the first real install
 
 If you want to test only readiness before the real install:
 

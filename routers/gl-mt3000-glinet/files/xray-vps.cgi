@@ -568,7 +568,7 @@ write_cache() {
 render_router_config() {
 	local path="$1"
 	local profile_id="$2"
-	local server_address server_port server_name uuid public_key short_id flow
+	local server_address server_port server_name uuid public_key short_id
 
 	server_address="$(profile_get "$profile_id" server_address)"
 	server_port="$(profile_get "$profile_id" server_port)"
@@ -576,7 +576,6 @@ render_router_config() {
 	uuid="$(profile_get "$profile_id" uuid)"
 	public_key="$(profile_get "$profile_id" public_key)"
 	short_id="$(profile_get "$profile_id" short_id)"
-	flow="$(profile_get "$profile_id" flow)"
 
 	cat > "$path" <<EOF
 {
@@ -613,8 +612,7 @@ render_router_config() {
             "users": [
               {
                 "id": "${uuid}",
-                "encryption": "none",
-                "flow": "${flow}"
+                "encryption": "none"
               }
             ]
           }
@@ -630,11 +628,6 @@ render_router_config() {
           "shortId": "${short_id}",
           "spiderX": "/"
         }
-      },
-      "mux": {
-        "enabled": true,
-        "concurrency": 8,
-        "xudpConcurrency": -1
       }
     }
   ]
@@ -1162,9 +1155,7 @@ resync_runtime_to_switch() {
 	switch_state="$(current_switch_state)"
 	[ "$switch_state" = 'on' ] || switch_state='off'
 	if [ -x /etc/gl-switch.d/xray.sh ]; then
-		/etc/gl-switch.d/xray.sh "$switch_state" >/dev/null 2>&1 || /etc/init.d/gl_switch_button_check start >/dev/null 2>&1 || true
-	else
-		/etc/init.d/gl_switch_button_check start >/dev/null 2>&1 || true
+		/etc/gl-switch.d/xray.sh "$switch_state" >/dev/null 2>&1 || true
 	fi
 }
 

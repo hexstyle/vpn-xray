@@ -191,8 +191,7 @@ build_config_file() {
             "users": [
               {
                 "id": "${uuid}",
-                "encryption": "none",
-                "flow": "${flow}"
+                "encryption": "none"
               }
             ]
           }
@@ -208,11 +207,6 @@ build_config_file() {
           "shortId": "${short_id}",
           "spiderX": "/"
         }
-      },
-      "mux": {
-        "enabled": true,
-        "concurrency": 8,
-        "xudpConcurrency": -1
       }
     }
   ]
@@ -275,9 +269,6 @@ probe_cleanup() {
 }
 
 sync_to_hardware_switch() {
-	if /etc/init.d/gl_switch_button_check start >/dev/null 2>&1; then
-		return 0
-	fi
 	/etc/gl-switch.d/xray.sh "$(current_switch_state)" >/dev/null 2>&1
 }
 
