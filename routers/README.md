@@ -20,7 +20,7 @@ Each profile describes one router or firmware family and ships:
 To add another router or firmware target, create `routers/<profile-id>/` with the same contract:
 
 - `profile.env`
-  - router-specific defaults, package URLs, checksums, ports, and runtime toggles
+  - router-specific defaults, package URLs, checksums, ports, runtime toggles, and preflight expectations
 - `install-router.sh`
   - installs or updates the router runtime for that profile
 - `verify-router.sh`
@@ -31,6 +31,12 @@ To add another router or firmware target, create `routers/<profile-id>/` with th
   - profile-specific setup notes
 
 Router profiles may reuse shared OpenWrt-side assets from [`common/`](./common/README.md), but the top-level installer only needs the profile directory and its `profile.env` to resolve the target.
+
+For OpenWrt-based router profiles, `profile.env` is also the place to declare preflight expectations such as:
+
+- expected hardware / firmware identifier
+- required base commands on the target
+- whether `dnsmasq` must expose `ipset` support
 
 ## Supported Profiles
 

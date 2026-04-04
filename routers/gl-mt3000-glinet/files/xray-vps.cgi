@@ -16,6 +16,7 @@ ROUTER_SOCKS_PORT='1084'
 ROUTER_ACCESS_LOG='/var/log/xray/codex-xray-access.log'
 ROUTER_ERROR_LOG='/var/log/xray/codex-xray-error.log'
 VPS_PROFILE_ROOT='/usr/share/vpn-xray/vps'
+LOCK_ROOT='/tmp/xray-vps-locks'
 
 REQUEST_DATA=''
 
@@ -162,10 +163,42 @@ router_current_json() {
 }
 
 ensure_dirs() {
-	mkdir -p "$PROFILE_DIR" "$KEY_DIR" "$INSPECT_DIR"
+	mkdir -p "$PROFILE_DIR" "$KEY_DIR" "$INSPECT_DIR" "$LOCK_ROOT"
 	touch "/etc/config/${PROFILE_PACKAGE}"
 	touch "$KNOWN_HOSTS"
 	chmod 600 "$KNOWN_HOSTS"
+}
+
+with_lock_dir() {
+	local lock_dir="$1"
+	local cmd="$2"
+	local holder tries rc
+
+	shift 2
+	holder=''
+	tries=0
+
+	while ! mkdir "$lock_dir" 2>/dev/null; do
+		holder=''
+		[ -f "$lock_dir/pid" ] && holder="$(cat "$lock_dir/pid" 2>/dev/null | sed -n '1p')"
+		if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+			rm -rf "$lock_dir"
+			continue
+		fi
+		tries=$((tries + 1))
+		if [ "$tries" -ge 60 ]; then
+			return 1
+		fi
+		sleep 1
+	done
+
+	printf '%s\n' "$$" > "$lock_dir/pid"
+	trap 'rm -rf "$lock_dir"' EXIT INT TERM
+	"$cmd" "$@"
+	rc=$?
+	trap - EXIT INT TERM
+	rm -rf "$lock_dir"
+	return "$rc"
 }
 
 sanitize_id() {
@@ -216,7 +249,7 @@ default_vps_profile() {
 		return 0
 	done
 
-	printf 'debian-13'
+	printf ''
 }
 
 normalize_vps_profile() {
@@ -341,7 +374,7 @@ ensure_profile_keypair() {
 	[ -n "$key_path" ] || key_path="${KEY_DIR}/${profile_id}_ed25519"
 	mkdir -p "$KEY_DIR"
 	if [ ! -f "$key_path" ]; then
-		ssh-keygen -t ed25519 -f "$key_path" >/dev/null
+		ssh-keygen -q -t ed25519 -N '' -f "$key_path" >/dev/null 2>&1
 	fi
 	chmod 600 "$key_path"
 	chmod 644 "${key_path}.pub"
@@ -1251,7 +1284,7 @@ save_profile_action() {
 
 ensure_sshpass_available() {
 	command -v sshpass >/dev/null 2>&1 && return 0
-	flock -x /var/lock/xray-vps-opkg.lock sh -c '
+	with_lock_dir "$LOCK_ROOT/opkg.lock.d" sh -c '
 		command -v sshpass >/dev/null 2>&1 && exit 0
 		rm -f /var/lock/opkg.lock
 		timeout 60 opkg update >/tmp/xray-vps-opkg-update.log 2>&1 || exit 1
@@ -1345,30 +1378,28 @@ inspect_profile_ready() {
 	refresh_remote_cache "$profile_id"
 }
 
-inspect_profile_with_retry() {
+inspect_profile_retry_locked() {
 	local profile_id="$1"
-	local attempts="${2:-3}"
-	local delay="${3:-1}"
+	local attempts="$2"
+	local delay="$3"
 	local try=1
-
-	exec 9>/var/lock/xray-vps-inspect.lock || return 1
-	flock -x 9 || {
-		exec 9>&-
-		return 1
-	}
 
 	while [ "$try" -le "$attempts" ]; do
 		if inspect_profile_ready "$profile_id"; then
-			flock -u 9
-			exec 9>&-
 			return 0
 		fi
 		[ "$try" -lt "$attempts" ] && sleep "$delay"
 		try=$((try + 1))
 	done
-	flock -u 9
-	exec 9>&-
 	return 1
+}
+
+inspect_profile_with_retry() {
+	local profile_id="$1"
+	local attempts="${2:-3}"
+	local delay="${3:-1}"
+
+	with_lock_dir "$LOCK_ROOT/inspect.lock.d" inspect_profile_retry_locked "$profile_id" "$attempts" "$delay"
 }
 
 adopt_remote_into_profile() {

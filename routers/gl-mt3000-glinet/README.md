@@ -10,6 +10,14 @@ This is the main supported router profile.
   - `xray-core`
   - `redsocks`
 
+## Profile Preconditions
+
+This profile expects:
+
+- GL.iNet hardware model `mt3000`
+- OpenWrt / GL runtime with `uci`, `jsonfilter`, `iptables`, `ipset`, `dnsmasq`, `start-stop-daemon`, and `opkg`
+- `dnsmasq` build with `ipset` support, because selective routing tracks domains through `dnsmasq -> ipset`
+
 ## What This Profile Installs
 
 - `codex-xray`

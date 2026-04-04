@@ -40,6 +40,9 @@ RULES_DEVICE_ID="${RULES_DEVICE_ID:-gl-router}"
 require_vars \
   ROUTER_SSH \
   ROUTER_HOST \
+  ROUTER_EXPECTED_MODEL \
+  ROUTER_REQUIRED_COMMANDS \
+  ROUTER_REQUIRES_DNSMASQ_IPSET \
   XRAY_CORE_ARCHIVE \
   XRAY_CORE_URL \
   XRAY_CORE_ARCHIVE_SHA256 \
@@ -65,6 +68,42 @@ reject_placeholder_vars \
   XRAY_SERVER_NAME \
   XRAY_PUBLIC_KEY \
   XRAY_SHORT_ID
+
+router_facts="$(
+  ssh "$ROUTER_SSH" ROUTER_REQUIRED_COMMANDS="$ROUTER_REQUIRED_COMMANDS" 'sh -s' <<'EOF'
+model="$(cat /proc/gl-hw-info/model 2>/dev/null | sed -n '1p')"
+missing=''
+for c in $ROUTER_REQUIRED_COMMANDS; do
+  command -v "$c" >/dev/null 2>&1 || missing="${missing}${c} "
+done
+dnsmasq_ipset='0'
+if dnsmasq --help 2>/dev/null | grep -qi 'ipset'; then
+  dnsmasq_ipset='1'
+fi
+printf 'MODEL=%s\n' "$model"
+printf 'MISSING=%s\n' "$missing"
+printf 'DNSMASQ_IPSET=%s\n' "$dnsmasq_ipset"
+EOF
+)"
+
+router_model="$(printf '%s\n' "$router_facts" | sed -n 's/^MODEL=//p' | sed -n '1p')"
+router_missing="$(printf '%s\n' "$router_facts" | sed -n 's/^MISSING=//p' | sed -n '1p')"
+router_dnsmasq_ipset="$(printf '%s\n' "$router_facts" | sed -n 's/^DNSMASQ_IPSET=//p' | sed -n '1p')"
+
+if [[ "$router_model" != "$ROUTER_EXPECTED_MODEL" ]]; then
+  echo "Unsupported router model for profile $ROUTER_PROFILE: expected $ROUTER_EXPECTED_MODEL, got ${router_model:-unknown}" >&2
+  exit 1
+fi
+
+if [[ -n "${router_missing// }" ]]; then
+  echo "Router is missing required commands for profile $ROUTER_PROFILE: $router_missing" >&2
+  exit 1
+fi
+
+if [[ "$ROUTER_REQUIRES_DNSMASQ_IPSET" == "1" && "$router_dnsmasq_ipset" != "1" ]]; then
+  echo "Router dnsmasq does not expose ipset support, which this profile requires for selective routing." >&2
+  exit 1
+fi
 
 if [[ "${ISOLATE_WIFI_LAN_ONLY:-0}" == "1" && "$ROUTER_HOST" == "$ROUTER_LAN_IP" ]]; then
   echo "Warning: ROUTER_HOST matches ROUTER_LAN_IP while ISOLATE_WIFI_LAN_ONLY=1." >&2
