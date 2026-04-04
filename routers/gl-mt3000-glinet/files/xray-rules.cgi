@@ -74,11 +74,6 @@ sync_action() {
 	if request_has_key rules_text; then
 		rules_text="$(request_value rules_text)"
 		printf '%s\n' "$rules_text" > "$tmp"
-		/usr/bin/router-rules save-file "$tmp" >/dev/null 2>&1 || {
-			rm -f "$tmp"
-			emit_error sync_rules 'Failed to save local rules.'
-			return 0
-		}
 	fi
 	if request_has_key base_repo_head; then
 		base_repo_head="$(request_value base_repo_head)"

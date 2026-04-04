@@ -78,6 +78,19 @@ xray_ipset() { cfg_get xray_ipset "$DEFAULT_XRAY_IPSET"; }
 xray_dnsmasq_conf() { cfg_get xray_dnsmasq_conf "$DEFAULT_XRAY_DNSMASQ_CONF"; }
 sync_interval() { cfg_get sync_interval "$DEFAULT_SYNC_INTERVAL"; }
 
+repo_configured() {
+	if is_placeholder_value "$(repo_fetch_url)"; then
+		return 1
+	fi
+	if is_placeholder_value "$(repo_push_url)"; then
+		return 1
+	fi
+	if is_placeholder_value "$(device_id)"; then
+		return 1
+	fi
+	return 0
+}
+
 repo_rules_path() {
 	printf '%s/%s\n' "$(repo_path)" "$(rules_relpath)"
 }
@@ -225,7 +238,7 @@ repo_bootstrap() {
 	ensure_dirs
 	git_env_setup
 
-	if is_placeholder_value "$(repo_fetch_url)" || is_placeholder_value "$(repo_push_url)" || is_placeholder_value "$(device_id)"; then
+	if ! repo_configured; then
 		echo "router-rules is not configured yet; fill router_rules UCI values from local env first" >&2
 		return 1
 	fi
@@ -683,6 +696,20 @@ sync_repo_internal() {
 	local repo rel branch work_file local_snapshot remote_snapshot changed pushed
 	local local_head_before remote_head requested_base_head strategy
 
+	if ! repo_configured; then
+		ensure_dirs
+		mkdir -p "$(dirname "$(repo_rules_path)")"
+		[ -f "$(repo_rules_path)" ] || : > "$(repo_rules_path)"
+		status_set last_sync_changed '0'
+		status_set last_sync_strategy 'local-only'
+		status_set last_sync_remote_head ''
+		status_set last_sync_actor "$(sync_actor)"
+		status_set last_sync_status 'disabled'
+		status_set last_sync_message 'GitHub rules repo is not configured; using local router rules only.'
+		status_set last_sync_at "$(date +%s)"
+		return 0
+	fi
+
 	repo_bootstrap
 	repo="$(repo_path)"
 	rel="$(rules_relpath)"
@@ -755,7 +782,13 @@ save_rules_file_internal() {
 	local src="$1"
 	local dst
 
-	repo_bootstrap
+	ensure_dirs
+	if repo_configured; then
+		repo_bootstrap
+	else
+		mkdir -p "$(repo_path)" "$(dirname "$(repo_rules_path)")"
+		[ -f "$(repo_rules_path)" ] || : > "$(repo_rules_path)"
+	fi
 	dst="$(repo_rules_path)"
 	cp "$src" "$dst"
 }

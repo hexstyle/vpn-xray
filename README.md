@@ -61,6 +61,12 @@ That installer will:
 
 - `https://<router-host>/xray.html`
 
+Important for the reference GL.iNet router:
+
+- keep the physical switch in the `ON` position before the final verification pass
+- the switch is the source of truth for `path on / path off`
+- if the switch is `OFF`, install still completes, but the verification step will stop with an explicit message instead of pretending the proxy path is broken
+
 ## What This Wrapper Gives You
 
 - transparent TCP forwarding for client devices with no proxy settings on the clients
