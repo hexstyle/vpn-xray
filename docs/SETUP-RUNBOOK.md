@@ -84,7 +84,7 @@ From there you can:
 If you also want GitHub-backed selective routing, fill these extra values in `install.env`:
 
 - `RULES_REPO_FETCH_URL`
-- `RULES_REPO_PUSH_URL`
-- `RULES_ENABLE_PUSH=1`
+- `RULES_REPO_PUSH_URL` only if this router should push local edits back upstream
+- `RULES_ENABLE_PUSH=1` only when upstream push is intended
 
-If they are left empty, the router/VPS transport still works, but shared-rule Git sync is inactive.
+If `RULES_REPO_FETCH_URL` is left empty, the router/VPS transport still works, but shared-rule Git sync is inactive.

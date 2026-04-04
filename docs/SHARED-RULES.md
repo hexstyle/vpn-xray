@@ -26,6 +26,15 @@ This means domain-based selective routing follows later DNS changes without requ
 
 The router polls the Git repo in the background every `30s` by default.
 
+Minimum config for background pull:
+
+- `RULES_REPO_FETCH_URL`
+
+Optional extra config for pushing local edits back:
+
+- `RULES_REPO_PUSH_URL`
+- `RULES_ENABLE_PUSH=1`
+
 The UI shows a compact live status:
 
 - whether background checks are running

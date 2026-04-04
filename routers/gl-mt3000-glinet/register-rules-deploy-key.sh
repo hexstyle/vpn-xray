@@ -11,6 +11,15 @@ fi
 
 ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"
 ROUTER_HOST="${ROUTER_HOST:-$(host_from_ssh_target "$ROUTER_SSH")}"
+SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
+ROUTER_SSH_OPTS=(
+  -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
+  -o StrictHostKeyChecking=accept-new
+)
+
+router_ssh() {
+  ssh "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" "$@"
+}
 
 REPO="${REPO:-}"
 if [[ -z "$REPO" ]]; then
@@ -21,7 +30,12 @@ require_vars ROUTER_HOST REPO
 reject_placeholder_vars ROUTER_SSH ROUTER_HOST REPO
 TITLE="${TITLE:-routerRules-${ROUTER_HOST}}"
 
-pubkey="$(ssh "$ROUTER_SSH" '/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true; cat /etc/router-rules/ssh/routerRules_ed25519.pub')"
+command -v gh >/dev/null 2>&1 || {
+  echo "GitHub CLI 'gh' is required for this helper." >&2
+  exit 1
+}
+
+pubkey="$(router_ssh '/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true; cat /etc/router-rules/ssh/routerRules_ed25519.pub')"
 
 if [[ -z "$pubkey" ]]; then
   echo "Failed to read router deploy key from $ROUTER_HOST" >&2

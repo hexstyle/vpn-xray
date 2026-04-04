@@ -78,17 +78,26 @@ xray_ipset() { cfg_get xray_ipset "$DEFAULT_XRAY_IPSET"; }
 xray_dnsmasq_conf() { cfg_get xray_dnsmasq_conf "$DEFAULT_XRAY_DNSMASQ_CONF"; }
 sync_interval() { cfg_get sync_interval "$DEFAULT_SYNC_INTERVAL"; }
 
-repo_configured() {
+repo_fetch_configured() {
 	if is_placeholder_value "$(repo_fetch_url)"; then
-		return 1
-	fi
-	if is_placeholder_value "$(repo_push_url)"; then
 		return 1
 	fi
 	if is_placeholder_value "$(device_id)"; then
 		return 1
 	fi
 	return 0
+}
+
+repo_push_configured() {
+	repo_fetch_configured || return 1
+	if is_placeholder_value "$(repo_push_url)"; then
+		return 1
+	fi
+	return 0
+}
+
+repo_configured() {
+	repo_fetch_configured
 }
 
 repo_rules_path() {
@@ -238,7 +247,7 @@ repo_bootstrap() {
 	ensure_dirs
 	git_env_setup
 
-	if ! repo_configured; then
+	if ! repo_fetch_configured; then
 		echo "router-rules is not configured yet; fill router_rules UCI values from local env first" >&2
 		return 1
 	fi
@@ -251,7 +260,11 @@ repo_bootstrap() {
 	git -C "$repo" config user.name "$(git_user_name)"
 	git -C "$repo" config user.email "$(git_user_email)"
 	git -C "$repo" remote set-url origin "$(repo_fetch_url)"
-	git -C "$repo" remote set-url --push origin "$(repo_push_url)"
+	if repo_push_configured; then
+		git -C "$repo" remote set-url --push origin "$(repo_push_url)"
+	else
+		git -C "$repo" config --unset-all remote.origin.pushurl >/dev/null 2>&1 || true
+	fi
 	mkdir -p "$(dirname "$rules_abs")"
 	[ -f "$rules_abs" ] || : > "$rules_abs"
 }
@@ -762,6 +775,11 @@ sync_repo_internal() {
 
 	pushed=0
 	if [ "$changed" = '1' ] && [ "$(enable_push)" = '1' ]; then
+		if ! repo_push_configured; then
+			set_status_error 'git push requested but RULES_REPO_PUSH_URL is not configured'
+			rm -f "$local_snapshot" "$remote_snapshot"
+			return 1
+		fi
 		if git -C "$repo" push origin "$branch" >/dev/null 2>&1; then
 			pushed=1
 		else
