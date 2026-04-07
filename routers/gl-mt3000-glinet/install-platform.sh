@@ -39,6 +39,9 @@ PLATFORM_ENV="${PLATFORM_DIR}/platform.env"
 WORK_DIR="/tmp/vpn-xray-platform.$$"
 DOWNLOAD_DIR="${WORK_DIR}/downloads"
 EXTRACT_DIR="${WORK_DIR}/extract"
+OPKG_UPDATE_OK='0'
+BUNDLED_PAYLOAD_DIR="${PROFILE_DIR}/packages"
+OPENWRT_FALLBACK_PACKAGES_BASE='https://downloads.openwrt.org/releases/21.02.3/packages'
 
 [ -f "$PROFILE_DIR/profile.env" ] || {
 	echo "Missing router profile defaults: $PROFILE_DIR/profile.env" >&2
@@ -47,6 +50,9 @@ EXTRACT_DIR="${WORK_DIR}/extract"
 
 # shellcheck disable=SC1090
 . "$PROFILE_DIR/profile.env"
+
+: "${IPKG_INSTROOT:=}"
+export IPKG_INSTROOT
 
 mkdir -p "$DOWNLOAD_DIR" "$EXTRACT_DIR"
 
@@ -105,6 +111,97 @@ try_pkg_install() {
 	return 0
 }
 
+router_package_arch() {
+	local arch=''
+
+	if [ -f /etc/openwrt_release ]; then
+		# shellcheck disable=SC1091
+		. /etc/openwrt_release
+		arch="${DISTRIB_ARCH:-}"
+	fi
+
+	if [ -z "$arch" ]; then
+		arch="$(opkg print-architecture 2>/dev/null | awk '/^arch / && $2 != "all" && $2 != "noarch" {if ($3 > best) {best=$3; arch=$2}} END {print arch}')"
+	fi
+
+	[ -n "$arch" ] || return 1
+	printf '%s\n' "$arch"
+}
+
+openwrt_fallback_repo_url() {
+	local arch
+
+	arch="$(router_package_arch)" || return 1
+	printf '%s/%s/packages\n' "$OPENWRT_FALLBACK_PACKAGES_BASE" "$arch"
+}
+
+openwrt_fallback_index_path() {
+	local arch
+
+	arch="$(router_package_arch)" || return 1
+	printf '%s/openwrt-packages-%s.gz\n' "$DOWNLOAD_DIR" "$arch"
+}
+
+openwrt_fallback_package_filename() {
+	local package="$1"
+	local repo_url index_path filename
+
+	repo_url="$(openwrt_fallback_repo_url)" || return 1
+	index_path="$(openwrt_fallback_index_path)" || return 1
+
+	if [ ! -f "$index_path" ]; then
+		download_to_file "$repo_url/Packages.gz" "$index_path" || return 1
+	fi
+
+	filename="$(gzip -dc "$index_path" 2>/dev/null | awk -v pkg="$package" '
+		/^Package: / { found = ($2 == pkg); next }
+		found && /^Filename: / { print $2; exit }
+	')"
+	[ -n "$filename" ] || return 1
+	printf '%s\n' "$filename"
+}
+
+install_pkg_via_openwrt_fallback() {
+	local package="$1"
+	local repo_url filename target
+
+	repo_url="$(openwrt_fallback_repo_url)" || return 1
+	filename="$(openwrt_fallback_package_filename "$package")" || return 1
+	target="${DOWNLOAD_DIR}/$(basename "$filename")"
+	download_to_file "$repo_url/$filename" "$target" || return 1
+	opkg install "$target" >/dev/null 2>&1
+}
+
+ensure_pkg_installed_or_fallback() {
+	local package="$1"
+	local purpose="$2"
+
+	opkg list-installed "$package" >/dev/null 2>&1 && return 0
+	opkg install "$package" >/dev/null 2>&1 && return 0
+
+	warn "Could not install package '$package' from configured feeds for $purpose. Trying the official OpenWrt 21.02.3 package mirror."
+	install_pkg_via_openwrt_fallback "$package" || fail "Could not install package '$package' for $purpose from either opkg feeds or the official OpenWrt package mirror."
+	opkg list-installed "$package" >/dev/null 2>&1 || fail "Package '$package' is still unavailable after fallback install."
+}
+
+git_sync_requested() {
+	[ "${RULES_GIT_SYNC_ENABLED:-0}" = '1' ]
+}
+
+ensure_git_sync_dependencies() {
+	git_sync_requested || return 0
+
+	info "Ensuring Git sync dependencies..."
+	ensure_pkg_installed_or_fallback openssh-client "Git-backed shared rules sync"
+	ensure_pkg_installed_or_fallback openssh-keygen "Git-backed shared rules sync"
+	ensure_pkg_installed_or_fallback git "Git-backed shared rules sync"
+	ensure_pkg_installed_or_fallback git-http "Git-backed shared rules sync"
+
+	ssh -V 2>&1 | grep -q 'OpenSSH_' || fail "ssh is still not provided by OpenSSH after installing openssh-client."
+	command -v ssh-keygen >/dev/null 2>&1 || fail "ssh-keygen is still unavailable after installing openssh-keygen."
+	command -v git >/dev/null 2>&1 || fail "git is still unavailable after installing git."
+}
+
 download_to_file() {
 	local url="$1"
 	local target="$2"
@@ -155,6 +252,24 @@ ensure_file_sha256() {
 	[ "$got" = "$expected" ] || fail "sha256 mismatch for $path: expected $expected, got $got"
 }
 
+stage_bundled_or_download() {
+	local filename="$1"
+	local target="$2"
+	local url="$3"
+	local expected="$4"
+	local bundled_path got
+
+	bundled_path="${BUNDLED_PAYLOAD_DIR}/${filename}"
+	if [ -f "$bundled_path" ]; then
+		cp "$bundled_path" "$target"
+		got="$(sha256_file "$target")"
+		[ "$got" = "$expected" ] || fail "Bundled payload sha256 mismatch for $filename: expected $expected, got $got"
+		return 0
+	fi
+
+	ensure_file_sha256 "$target" "$url" "$expected"
+}
+
 escape_sed_replacement() {
 	printf '%s' "$1" | sed 's/[&|\\]/\\&/g'
 }
@@ -174,11 +289,15 @@ render_redsocks_conf() {
 
 render_router_rules_conf() {
 	local output="$1"
-	local fetch_url push_url branch user_name user_email dns_resolver device_id enable_push mode sync_interval
+	local sync_enabled fetch_url push_url branch auth_mode http_username http_password user_name user_email dns_resolver device_id enable_push mode sync_interval
 
+	sync_enabled="$(escape_sed_replacement "${RULES_GIT_SYNC_ENABLED:-}")"
 	fetch_url="$(escape_sed_replacement "${RULES_REPO_FETCH_URL:-}")"
 	push_url="$(escape_sed_replacement "${RULES_REPO_PUSH_URL:-}")"
 	branch="$(escape_sed_replacement "${RULES_REPO_BRANCH:-main}")"
+	auth_mode="$(escape_sed_replacement "${RULES_GIT_AUTH_MODE:-auto}")"
+	http_username="$(escape_sed_replacement "${RULES_GIT_HTTP_USERNAME:-}")"
+	http_password="$(escape_sed_replacement "${RULES_GIT_HTTP_PASSWORD:-}")"
 	user_name="$(escape_sed_replacement "${RULES_GIT_USER_NAME:-router-rules}")"
 	user_email="$(escape_sed_replacement "${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}")"
 	dns_resolver="$(escape_sed_replacement "${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}")"
@@ -188,9 +307,13 @@ render_router_rules_conf() {
 	sync_interval="$(escape_sed_replacement "${RULES_SYNC_INTERVAL:-30}")"
 
 	sed \
+		-e "s|\${RULES_GIT_SYNC_ENABLED}|$sync_enabled|g" \
 		-e "s|\${RULES_REPO_FETCH_URL}|$fetch_url|g" \
 		-e "s|\${RULES_REPO_PUSH_URL}|$push_url|g" \
 		-e "s|\${RULES_REPO_BRANCH}|$branch|g" \
+		-e "s|\${RULES_GIT_AUTH_MODE}|$auth_mode|g" \
+		-e "s|\${RULES_GIT_HTTP_USERNAME}|$http_username|g" \
+		-e "s|\${RULES_GIT_HTTP_PASSWORD}|$http_password|g" \
 		-e "s|\${RULES_GIT_USER_NAME}|$user_name|g" \
 		-e "s|\${RULES_GIT_USER_EMAIL}|$user_email|g" \
 		-e "s|\${RULES_DNS_RESOLVER}|$dns_resolver|g" \
@@ -268,16 +391,22 @@ install_platform() {
 	fi
 
 	info "Preparing router package manager..."
-	opkg update >/tmp/vpn-xray-opkg-update.log 2>&1 || fail "opkg update failed. Check the router uplink, DNS, time/NTP and package feeds."
+	if opkg update >/tmp/vpn-xray-opkg-update.log 2>&1; then
+		OPKG_UPDATE_OK='1'
+	else
+		warn "opkg update did not fully complete. Continuing with already-present commands and package lists."
+		warn "See /tmp/vpn-xray-opkg-update.log on the router for feed errors."
+	fi
 	ensure_pkg_installed ca-bundle
 	ensure_pkg_installed ca-certificates
 	ensure_cmd_via_package curl curl
 	ensure_cmd_via_package unzip unzip
 	try_pkg_install git "Git-backed shared rules sync" || true
 	try_pkg_install git-http "Git-backed shared rules sync" || true
+	ensure_git_sync_dependencies
 
 	archive="$DOWNLOAD_DIR/$XRAY_CORE_ARCHIVE"
-	ensure_file_sha256 "$archive" "$XRAY_CORE_URL" "$XRAY_CORE_ARCHIVE_SHA256"
+	stage_bundled_or_download "$XRAY_CORE_ARCHIVE" "$archive" "$XRAY_CORE_URL" "$XRAY_CORE_ARCHIVE_SHA256"
 	unzip -oq "$archive" -d "$EXTRACT_DIR"
 	binary="$EXTRACT_DIR/xray"
 	[ -f "$binary" ] || fail "Xray archive unpacked, but the xray binary was not found."
@@ -285,8 +414,8 @@ install_platform() {
 
 	libevent_pkg="$DOWNLOAD_DIR/$LIBEVENT_PACKAGE"
 	redsocks_pkg="$DOWNLOAD_DIR/$REDSOCKS_PACKAGE"
-	ensure_file_sha256 "$libevent_pkg" "$LIBEVENT_URL" "$LIBEVENT_SHA256"
-	ensure_file_sha256 "$redsocks_pkg" "$REDSOCKS_URL" "$REDSOCKS_SHA256"
+	stage_bundled_or_download "$LIBEVENT_PACKAGE" "$libevent_pkg" "$LIBEVENT_URL" "$LIBEVENT_SHA256"
+	stage_bundled_or_download "$REDSOCKS_PACKAGE" "$redsocks_pkg" "$REDSOCKS_URL" "$REDSOCKS_SHA256"
 
 	info "Stopping vpn-xray runtime before file updates..."
 	/etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
@@ -313,6 +442,40 @@ install_platform() {
 		cp "$router_rules_rendered" /etc/config/router_rules
 		chmod 600 /etc/config/router_rules
 	fi
+	uci -q batch <<EOF
+set router_rules.global=global
+set router_rules.global.git_sync_enabled='${RULES_GIT_SYNC_ENABLED:-}'
+set router_rules.global.repo_fetch_url='${RULES_REPO_FETCH_URL:-}'
+set router_rules.global.repo_push_url='${RULES_REPO_PUSH_URL:-}'
+set router_rules.global.repo_branch='${RULES_REPO_BRANCH:-main}'
+set router_rules.global.git_auth_mode='${RULES_GIT_AUTH_MODE:-auto}'
+set router_rules.global.git_http_username='${RULES_GIT_HTTP_USERNAME:-}'
+set router_rules.global.git_http_password='${RULES_GIT_HTTP_PASSWORD:-}'
+set router_rules.global.git_user_name='${RULES_GIT_USER_NAME:-router-rules}'
+set router_rules.global.git_user_email='${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}'
+set router_rules.global.dns_resolver='${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}'
+set router_rules.global.local_device_id='${RULES_DEVICE_ID:-gl-router}'
+set router_rules.global.enable_push='${RULES_ENABLE_PUSH:-0}'
+set router_rules.global.xray_mode='${XRAY_RULES_MODE:-full}'
+set router_rules.global.sync_interval='${RULES_SYNC_INTERVAL:-30}'
+EOF
+	uci commit router_rules
+	chmod 600 /etc/config/router_rules
+	if [ -n "${RULES_GIT_SSH_PRIVATE_KEY_B64:-}" ] || [ -n "${RULES_GIT_SSH_PRIVATE_KEY:-}" ]; then
+		if [ -n "${RULES_GIT_SSH_PRIVATE_KEY_B64:-}" ]; then
+			command -v base64 >/dev/null 2>&1 || fail "base64 is required to decode RULES_GIT_SSH_PRIVATE_KEY_B64."
+			if ! printf '%s' "$RULES_GIT_SSH_PRIVATE_KEY_B64" | base64 -d > /etc/router-rules/ssh/routerRules_ed25519 2>/dev/null; then
+				fail "Provided RULES_GIT_SSH_PRIVATE_KEY_B64 is invalid."
+			fi
+		else
+			printf '%s\n' "$RULES_GIT_SSH_PRIVATE_KEY" > /etc/router-rules/ssh/routerRules_ed25519
+		fi
+		chmod 600 /etc/router-rules/ssh/routerRules_ed25519
+		if ! ssh-keygen -y -f /etc/router-rules/ssh/routerRules_ed25519 > /etc/router-rules/ssh/routerRules_ed25519.pub 2>/dev/null; then
+			fail "Provided RULES_GIT_SSH_PRIVATE_KEY is invalid."
+		fi
+		chmod 644 /etc/router-rules/ssh/routerRules_ed25519.pub
+	fi
 
 	cp "$PROFILE_DIR/files/codex-xray.init" /etc/init.d/codex-xray
 	cp "$PROFILE_DIR/files/codex-transproxy.init" /etc/init.d/codex-transproxy
@@ -332,8 +495,8 @@ install_platform() {
 	cp -R "$VPS_DIR" /usr/share/vpn-xray/vps
 
 	info "Applying router integration settings..."
-	uci -q delete firewall.codex_wan_http_proxy_prod
-	uci -q delete firewall.codex_wan_redsocks_drop
+	uci -q delete firewall.codex_wan_http_proxy_prod >/dev/null 2>&1 || true
+	uci -q delete firewall.codex_wan_redsocks_drop >/dev/null 2>&1 || true
 	uci set firewall.codex_wan_http_proxy_prod=rule
 	uci set firewall.codex_wan_http_proxy_prod.name='codex_wan_http_proxy_prod'
 	uci set firewall.codex_wan_http_proxy_prod.src='wan'
@@ -351,20 +514,20 @@ install_platform() {
 	uci set firewall.codex_wan_redsocks_drop.target='DROP'
 	uci commit firewall
 
-	uci -q delete dhcp.lan.dhcp_option
+	uci -q delete dhcp.lan.dhcp_option >/dev/null 2>&1 || true
 	uci set dhcp.lan.ra='disabled'
 	uci set dhcp.lan.dhcpv6='disabled'
 	uci set dhcp.lan.ndp='disabled'
-	uci -q delete dhcp.@dnsmasq[0].noresolv
+	uci -q delete dhcp.@dnsmasq[0].noresolv >/dev/null 2>&1 || true
 	uci set dhcp.@dnsmasq[0].resolvfile='/tmp/resolv.conf.d/resolv.conf.auto'
-	uci -q delete dhcp.@dnsmasq[0].server
+	uci -q delete dhcp.@dnsmasq[0].server >/dev/null 2>&1 || true
 	uci commit dhcp
 	uci set network.lan.ip6assign='0'
 	uci set stubby.global.enabled='0'
 	uci commit network
 	uci commit stubby
 	uci set switch-button.@main[0].func='xray'
-	uci -q delete switch-button.@main[0].sub_func
+	uci -q delete switch-button.@main[0].sub_func >/dev/null 2>&1 || true
 	uci commit switch-button
 
 	if [ "${ISOLATE_WIFI_LAN_ONLY:-0}" = '1' ]; then

@@ -46,10 +46,35 @@ ROUTER_SSH_OPTS=(
   -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
 )
 
+RULES_GIT_SYNC_ENABLED="${RULES_GIT_SYNC_ENABLED:-}"
 RULES_REPO_FETCH_URL="${RULES_REPO_FETCH_URL:-}"
 RULES_REPO_PUSH_URL="${RULES_REPO_PUSH_URL:-}"
 RULES_REPO_BRANCH="${RULES_REPO_BRANCH:-main}"
+RULES_GIT_AUTH_MODE="${RULES_GIT_AUTH_MODE:-auto}"
+RULES_GIT_HTTP_USERNAME="${RULES_GIT_HTTP_USERNAME:-}"
+RULES_GIT_HTTP_PASSWORD="${RULES_GIT_HTTP_PASSWORD:-}"
+RULES_GIT_SSH_PRIVATE_KEY="${RULES_GIT_SSH_PRIVATE_KEY:-}"
+RULES_GIT_SSH_PRIVATE_KEY_FILE="${RULES_GIT_SSH_PRIVATE_KEY_FILE:-}"
 RULES_DEVICE_ID="${RULES_DEVICE_ID:-gl-router}"
+
+if [[ -z "$RULES_GIT_SSH_PRIVATE_KEY" && -n "$RULES_GIT_SSH_PRIVATE_KEY_FILE" ]]; then
+  [[ -r "$RULES_GIT_SSH_PRIVATE_KEY_FILE" ]] || {
+    echo "RULES_GIT_SSH_PRIVATE_KEY_FILE is not readable: $RULES_GIT_SSH_PRIVATE_KEY_FILE" >&2
+    exit 1
+  }
+  RULES_GIT_SSH_PRIVATE_KEY="$(cat "$RULES_GIT_SSH_PRIVATE_KEY_FILE")"
+fi
+RULES_GIT_SSH_PRIVATE_KEY_B64=''
+if [[ -n "$RULES_GIT_SSH_PRIVATE_KEY" ]]; then
+  RULES_GIT_SSH_PRIVATE_KEY_B64="$(
+    printf '%s' "$RULES_GIT_SSH_PRIVATE_KEY" | python3 - <<'PY'
+import base64
+import sys
+
+sys.stdout.write(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))
+PY
+  )"
+fi
 
 router_ssh() {
   local err rc
@@ -194,9 +219,14 @@ remote_source_root='/tmp/vpn-xray-local-src'
 remote_source_tar='/tmp/vpn-xray-local-src.tar'
 remote_platform_cmd=$(
   cat <<EOF
+RULES_GIT_SYNC_ENABLED=$(shell_quote "$RULES_GIT_SYNC_ENABLED") \
 RULES_REPO_FETCH_URL=$(shell_quote "$RULES_REPO_FETCH_URL") \
 RULES_REPO_PUSH_URL=$(shell_quote "$RULES_REPO_PUSH_URL") \
 RULES_REPO_BRANCH=$(shell_quote "$RULES_REPO_BRANCH") \
+RULES_GIT_AUTH_MODE=$(shell_quote "$RULES_GIT_AUTH_MODE") \
+RULES_GIT_HTTP_USERNAME=$(shell_quote "$RULES_GIT_HTTP_USERNAME") \
+RULES_GIT_HTTP_PASSWORD=$(shell_quote "$RULES_GIT_HTTP_PASSWORD") \
+RULES_GIT_SSH_PRIVATE_KEY_B64=$(shell_quote "$RULES_GIT_SSH_PRIVATE_KEY_B64") \
 RULES_DEVICE_ID=$(shell_quote "$RULES_DEVICE_ID") \
 RULES_ENABLE_PUSH=$(shell_quote "${RULES_ENABLE_PUSH:-0}") \
 RULES_SYNC_INTERVAL=$(shell_quote "${RULES_SYNC_INTERVAL:-30}") \

@@ -62,6 +62,28 @@ Local requirements for this path:
 - `python3`
 - `curl`
 
+### One-Command Quick Start With Shared Rules Git Sync
+
+Use this when the router should come up in one run with shared selective rules pulled from Git over SSH:
+
+```sh
+ROUTER_PASSWORD='ROUTER_ADMIN_PASSWORD' \
+VPS_PASSWORD='VPS_ROOT_PASSWORD' \
+RULES_GIT_SYNC_ENABLED='1' \
+RULES_REPO_FETCH_URL='git@github.com:hexstyle/routerRules.git' \
+RULES_REPO_BRANCH='main' \
+RULES_GIT_AUTH_MODE='ssh' \
+RULES_GIT_SSH_PRIVATE_KEY_FILE="$HOME/.ssh/id_ed25519" \
+./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
+```
+
+This quick start now also:
+
+- installs `git`, `git-http`, `openssh-client`, and `openssh-keygen` on the router when Git sync is enabled and those packages are still missing
+- falls back to the official OpenWrt `21.02.3` package mirror if the default GL.iNet feed does not provide those packages
+- verifies that `lists/shared-targets.txt` exists in the configured repository before considering Git sync healthy
+- prints a warning instead of aborting if the immediate SSH probe cannot confirm shared-rules status right after service restart; the live state is still visible in `xray.html`
+
 ### One-Command Parameters
 
 | Name | Required? | Default | Relationship |
@@ -229,7 +251,16 @@ When you switch the router to `selective`:
 
 - literal `IPv4` / `CIDR` rules are matched directly
 - domain rules are tracked live on the router through `dnsmasq -> ipset`
-- the shared list can be GitHub-backed if you configure that later
+- the shared list can be Git-backed if you configure that later
+- the list affects traffic only while the physical GL.iNet switch is `ON` and the router Routing Mode is `selective`
+
+In `xray.html`:
+
+- keep `Shared Rules Git Sync` disabled if you want a router-local list with no repository access
+- enable `Shared Rules Git Sync` only after you fill the Git connection fields
+- when Git sync is enabled, the router validates that `lists/shared-targets.txt` exists in the selected repository
+- if that file is missing or Git auth fails, the save/check fails and the router stays in local-only mode
+- addresses from `lists/shared-targets.txt` are applied only when the GL.iNet physical switch is `ON` and the router Routing Mode is `selective`
 
 See:
 
@@ -272,7 +303,6 @@ Every main folder has its own `README.md`.
 - [`bootstrap-router-ssh.sh`](./bootstrap-router-ssh.sh)
   - easiest local helper for the primary path; requires only `ssh` on your computer
 - [`install.sh`](./install.sh)
-- [`bootstrap-router-vps.sh`](./bootstrap-router-vps.sh)
   - advanced local installer for developers and CI
 - [`install.env.example`](./install.env.example)
   - optional input file for the advanced local installer

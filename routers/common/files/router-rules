@@ -23,6 +23,10 @@ DEFAULT_XRAY_MODE='full'
 DEFAULT_XRAY_IPSET='xray_selective_dst'
 DEFAULT_XRAY_DNSMASQ_CONF='/tmp/dnsmasq.d/router-rules-xray-ipset.conf'
 DEFAULT_SYNC_INTERVAL='30'
+DEFAULT_GIT_AUTH_MODE='auto'
+DEFAULT_GIT_HTTP_USERNAME=''
+DEFAULT_GIT_HTTP_PASSWORD=''
+DEFAULT_GIT_ASKPASS='/tmp/router-rules-git-askpass.sh'
 STATUS_FILE='/tmp/router-rules.status'
 LOCK_DIR='/tmp/router-rules.lock.d'
 
@@ -61,7 +65,7 @@ cfg_get() {
 }
 
 repo_fetch_url() { cfg_get repo_fetch_url "$DEFAULT_REPO_FETCH_URL"; }
-repo_push_url() { cfg_get repo_push_url "$DEFAULT_REPO_PUSH_URL"; }
+repo_push_url_raw() { cfg_get repo_push_url "$DEFAULT_REPO_PUSH_URL"; }
 repo_branch() { cfg_get repo_branch "$DEFAULT_REPO_BRANCH"; }
 repo_path() { cfg_get repo_path "$DEFAULT_REPO_PATH"; }
 rules_relpath() { cfg_get rules_relpath "$DEFAULT_RULES_RELPATH"; }
@@ -77,8 +81,53 @@ xray_mode() { cfg_get xray_mode "$DEFAULT_XRAY_MODE"; }
 xray_ipset() { cfg_get xray_ipset "$DEFAULT_XRAY_IPSET"; }
 xray_dnsmasq_conf() { cfg_get xray_dnsmasq_conf "$DEFAULT_XRAY_DNSMASQ_CONF"; }
 sync_interval() { cfg_get sync_interval "$DEFAULT_SYNC_INTERVAL"; }
+git_sync_enabled_raw() { cfg_get git_sync_enabled ''; }
+git_auth_mode_raw() { cfg_get git_auth_mode "$DEFAULT_GIT_AUTH_MODE"; }
+git_http_username() { cfg_get git_http_username "$DEFAULT_GIT_HTTP_USERNAME"; }
+git_http_password() { cfg_get git_http_password "$DEFAULT_GIT_HTTP_PASSWORD"; }
+git_askpass_path() { cfg_get git_askpass_path "$DEFAULT_GIT_ASKPASS"; }
 
-repo_fetch_configured() {
+repo_push_url() {
+	local value
+
+	value="$(repo_push_url_raw)"
+	if [ -n "$value" ]; then
+		printf '%s\n' "$value"
+	else
+		printf '%s\n' "$(repo_fetch_url)"
+	fi
+}
+
+git_auth_mode() {
+	local raw url
+
+	raw="$(git_auth_mode_raw)"
+	case "$raw" in
+		none|https|ssh)
+			printf '%s\n' "$raw"
+			return 0
+			;;
+	esac
+
+	url="$(repo_fetch_url)"
+	case "$url" in
+		git@*|ssh://*)
+			printf 'ssh\n'
+			;;
+		http://*|https://*)
+			if [ -n "$(git_http_username)" ] || [ -n "$(git_http_password)" ]; then
+				printf 'https\n'
+			else
+				printf 'none\n'
+			fi
+			;;
+		*)
+			printf 'none\n'
+			;;
+	esac
+}
+
+repo_fetch_url_available() {
 	if is_placeholder_value "$(repo_fetch_url)"; then
 		return 1
 	fi
@@ -86,6 +135,29 @@ repo_fetch_configured() {
 		return 1
 	fi
 	return 0
+}
+
+git_sync_enabled() {
+	local raw
+
+	raw="$(git_sync_enabled_raw)"
+	case "$raw" in
+		0|1)
+			printf '%s\n' "$raw"
+			return 0
+			;;
+	esac
+
+	if repo_fetch_url_available; then
+		printf '1\n'
+	else
+		printf '0\n'
+	fi
+}
+
+repo_fetch_configured() {
+	[ "$(git_sync_enabled)" = '1' ] || return 1
+	repo_fetch_url_available
 }
 
 repo_push_configured() {
@@ -230,10 +302,60 @@ ensure_dirs() {
 	chmod 600 "$(known_hosts_path)"
 }
 
+write_git_askpass() {
+	local path
+
+	path="$(git_askpass_path)"
+	cat > "$path" <<'EOF'
+#!/bin/sh
+case "$1" in
+	*Username*|*username*)
+		printf '%s\n' "${ROUTER_RULES_GIT_USERNAME:-git}"
+		;;
+	*Password*|*password*)
+		printf '%s\n' "${ROUTER_RULES_GIT_PASSWORD:-}"
+		;;
+	*)
+		printf '\n'
+		;;
+esac
+EOF
+	chmod 700 "$path"
+}
+
 git_env_setup() {
-	if [ -f "$(ssh_key_path)" ]; then
-		export GIT_SSH_COMMAND="ssh -i $(ssh_key_path) -o BatchMode=yes -o StrictHostKeyChecking=no"
-	fi
+	unset GIT_SSH_COMMAND GIT_ASKPASS GIT_TERMINAL_PROMPT ROUTER_RULES_GIT_USERNAME ROUTER_RULES_GIT_PASSWORD
+
+	case "$(git_auth_mode)" in
+		ssh)
+			if [ -f "$(ssh_key_path)" ]; then
+				export GIT_SSH_COMMAND="ssh -i $(ssh_key_path) -o BatchMode=yes -o StrictHostKeyChecking=no"
+			fi
+			;;
+		https)
+			export ROUTER_RULES_GIT_USERNAME="$(git_http_username)"
+			export ROUTER_RULES_GIT_PASSWORD="$(git_http_password)"
+			[ -n "$ROUTER_RULES_GIT_USERNAME" ] || export ROUTER_RULES_GIT_USERNAME='git'
+			export GIT_TERMINAL_PROMPT=0
+			write_git_askpass
+			export GIT_ASKPASS="$(git_askpass_path)"
+			;;
+	esac
+}
+
+git_cmd() {
+	git_env_setup
+	git "$@"
+}
+
+repo_is_healthy() {
+	local repo="$1"
+
+	[ -d "$repo/.git" ] || return 1
+	git_cmd -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+	git_cmd -C "$repo" status --short >/dev/null 2>&1 || return 1
+	git_cmd -C "$repo" remote get-url origin >/dev/null 2>&1 || return 1
+	return 0
 }
 
 repo_bootstrap() {
@@ -252,21 +374,63 @@ repo_bootstrap() {
 		return 1
 	fi
 
-	if [ ! -d "$repo/.git" ]; then
+	if [ -d "$repo/.git" ] && ! repo_is_healthy "$repo"; then
 		rm -rf "$repo"
-		git clone --branch "$branch" --depth=1 "$(repo_fetch_url)" "$repo" >/dev/null 2>&1
 	fi
 
-	git -C "$repo" config user.name "$(git_user_name)"
-	git -C "$repo" config user.email "$(git_user_email)"
-	git -C "$repo" remote set-url origin "$(repo_fetch_url)"
+	if [ ! -d "$repo/.git" ]; then
+		rm -rf "$repo"
+		git_cmd clone --branch "$branch" --depth=1 "$(repo_fetch_url)" "$repo" >/dev/null 2>&1 || return 1
+	fi
+
+	git_cmd -C "$repo" config user.name "$(git_user_name)" || return 1
+	git_cmd -C "$repo" config user.email "$(git_user_email)" || return 1
+	git_cmd -C "$repo" remote set-url origin "$(repo_fetch_url)" || return 1
 	if repo_push_configured; then
-		git -C "$repo" remote set-url --push origin "$(repo_push_url)"
+		git_cmd -C "$repo" remote set-url --push origin "$(repo_push_url)" || return 1
 	else
-		git -C "$repo" config --unset-all remote.origin.pushurl >/dev/null 2>&1 || true
+		git_cmd -C "$repo" config --unset-all remote.origin.pushurl >/dev/null 2>&1 || true
 	fi
 	mkdir -p "$(dirname "$rules_abs")"
 	[ -f "$rules_abs" ] || : > "$rules_abs"
+}
+
+check_remote_rules_internal() {
+	local repo rel branch remote_head message
+
+	repo_configured || {
+		message='Git sync is disabled or the repository URL is not configured.'
+		set_status_error "$message"
+		echo "$message" >&2
+		return 1
+	}
+
+	repo_bootstrap || {
+		set_status_error 'git repository bootstrap failed'
+		echo 'Git repository bootstrap failed.' >&2
+		return 1
+	}
+	repo="$(repo_path)"
+	rel="$(rules_relpath)"
+	branch="$(repo_branch)"
+
+	git_cmd -C "$repo" fetch origin "$branch" >/dev/null 2>&1 || {
+		set_status_error 'git fetch failed'
+		echo 'Git fetch failed.' >&2
+		return 1
+	}
+
+	remote_head="$(git_cmd -C "$repo" rev-parse --verify "origin/$branch" 2>/dev/null || true)"
+	status_set last_sync_remote_head "$remote_head"
+	status_set last_sync_actor "$(sync_actor)"
+	if ! git_cmd -C "$repo" show "origin/$branch:$rel" >/dev/null 2>&1; then
+		message="Remote rules file not found in origin/$branch: $rel"
+		set_status_error "$message"
+		echo "$message" >&2
+		return 1
+	fi
+
+	return 0
 }
 
 trim_line() {
@@ -583,6 +747,19 @@ build_xray_ipset_internal() {
 	status_set xray_ipset_count "$count"
 }
 
+xray_dnsmasq_ready_internal() {
+	local conf domains
+
+	conf="$(xray_dnsmasq_conf)"
+	domains="$(domain_file)"
+
+	[ -f "$conf" ] || return 1
+	if [ -s "$domains" ]; then
+		[ -s "$conf" ] || return 1
+	fi
+	return 0
+}
+
 clear_xray_dnsmasq_internal() {
 	local conf
 
@@ -615,7 +792,7 @@ apply_xray_internal() {
 	[ "$last_mode" = "$mode" ] || need_restart=1
 	final_rule="$(iptables -t nat -S CODEX_TRANSPROXY 2>/dev/null | tail -n 1)"
 	if [ "$mode" = 'selective' ]; then
-		[ -s "$conf" ] || need_restart=1
+		xray_dnsmasq_ready_internal || need_restart=1
 		ipset list "$setname" >/dev/null 2>&1 || need_restart=1
 		printf '%s\n' "$final_rule" | grep -q -- "-m set --match-set ${setname} dst -j REDIRECT" || need_restart=1
 		iptables -t nat -C PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || need_restart=1
@@ -658,17 +835,30 @@ hard_cutover_xray_internal() {
 }
 
 sync_apply_xray_internal() {
-	set_sync_phase checking_remote 'Checking GitHub and local rules state'
+	if ! repo_configured && [ "$(sync_actor)" = 'background' ]; then
+		status_set last_sync_changed '0'
+		status_set last_sync_strategy 'local-only'
+		status_set last_sync_remote_head ''
+		status_set last_sync_actor "$(sync_actor)"
+		status_set last_sync_status 'local-only'
+		status_set last_sync_message 'Git sync is not configured; background checks stay idle and the local router rules file remains authoritative.'
+		status_set last_sync_at "$(date +%s)"
+		status_set last_verified_at "$(date +%s)"
+		set_sync_phase verified 'Git sync is disabled; local router rules are authoritative.'
+		return 0
+	fi
+
+	set_sync_phase checking_remote 'Checking Git remote and local rules state'
 	sync_repo_internal || return 1
 	if [ "$(status_get last_sync_changed)" = '1' ]; then
-		set_sync_phase drift_detected 'Found changes between GitHub and the current router ruleset; starting cutover'
+		set_sync_phase drift_detected 'Found changes between Git remote and the current router ruleset; starting cutover'
 		hard_cutover_xray_internal
 	elif xray_needs_apply_internal; then
 		set_sync_phase drift_detected 'Found runtime drift against the current ruleset; starting cutover'
 		hard_cutover_xray_internal
 	else
 		status_set last_verified_at "$(date +%s)"
-		set_sync_phase verified 'Everything is already synchronized with GitHub and active on the router'
+		set_sync_phase verified 'Everything is already synchronized with Git and active on the router'
 	fi
 }
 
@@ -692,7 +882,7 @@ xray_needs_apply_internal() {
 
 	final_rule="$(iptables -t nat -S CODEX_TRANSPROXY 2>/dev/null | tail -n 1)"
 	if [ "$mode" = 'selective' ]; then
-		[ -s "$conf" ] || return 0
+		xray_dnsmasq_ready_internal || return 0
 		ipset list "$setname" >/dev/null 2>&1 || return 0
 		printf '%s\n' "$final_rule" | grep -q -- "-m set --match-set ${setname} dst -j REDIRECT" || return 0
 		iptables -t nat -C PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || return 0
@@ -717,13 +907,17 @@ sync_repo_internal() {
 		status_set last_sync_strategy 'local-only'
 		status_set last_sync_remote_head ''
 		status_set last_sync_actor "$(sync_actor)"
-		status_set last_sync_status 'disabled'
-		status_set last_sync_message 'GitHub rules repo is not configured; using local router rules only.'
+		status_set last_sync_status 'local-only'
+		status_set last_sync_message 'Git sync is not configured; using local router rules only.'
 		status_set last_sync_at "$(date +%s)"
 		return 0
 	fi
 
-	repo_bootstrap
+	repo_bootstrap || {
+		set_status_error 'git repository bootstrap failed'
+		rm -f "$local_snapshot" "$remote_snapshot"
+		return 1
+	}
 	repo="$(repo_path)"
 	rel="$(rules_relpath)"
 	branch="$(repo_branch)"
@@ -732,25 +926,24 @@ sync_repo_internal() {
 	remote_snapshot="$(mktemp)"
 	requested_base_head="${ROUTER_RULES_BASE_HEAD:-}"
 	if [ -n "$requested_base_head" ]; then
-		requested_base_head="$(git -C "$repo" rev-parse --verify "${requested_base_head}^{commit}" 2>/dev/null || printf '%s' "$requested_base_head")"
+		requested_base_head="$(git_cmd -C "$repo" rev-parse --verify "${requested_base_head}^{commit}" 2>/dev/null || printf '%s' "$requested_base_head")"
 	fi
 
 	cp "$work_file" "$local_snapshot" 2>/dev/null || : > "$local_snapshot"
-	local_head_before="$(git -C "$repo" rev-parse --verify HEAD 2>/dev/null || true)"
-	git_env_setup
-	git -C "$repo" fetch origin "$branch" >/dev/null 2>&1 || {
+	local_head_before="$(git_cmd -C "$repo" rev-parse --verify HEAD 2>/dev/null || true)"
+	git_cmd -C "$repo" fetch origin "$branch" >/dev/null 2>&1 || {
 		set_status_error 'git fetch failed'
 		rm -f "$local_snapshot" "$remote_snapshot"
 		return 1
 	}
 
-	if git -C "$repo" show "origin/$branch:$rel" > "$remote_snapshot" 2>/dev/null; then
-		remote_head="$(git -C "$repo" rev-parse --verify "origin/$branch" 2>/dev/null || true)"
-		git -C "$repo" reset --hard "origin/$branch" >/dev/null 2>&1
-	else
-		: > "$remote_snapshot"
-		remote_head=''
+	remote_head="$(git_cmd -C "$repo" rev-parse --verify "origin/$branch" 2>/dev/null || true)"
+	if ! git_cmd -C "$repo" show "origin/$branch:$rel" > "$remote_snapshot" 2>/dev/null; then
+		set_status_error "Remote rules file not found in origin/$branch: $rel"
+		rm -f "$local_snapshot" "$remote_snapshot"
+		return 1
 	fi
+	git_cmd -C "$repo" reset --hard "origin/$branch" >/dev/null 2>&1
 
 	strategy='remote'
 	if cmp -s "$local_snapshot" "$remote_snapshot"; then
@@ -767,10 +960,10 @@ sync_repo_internal() {
 	fi
 
 	changed=0
-	if ! git -C "$repo" diff --quiet -- "$rel"; then
+	if ! git_cmd -C "$repo" diff --quiet -- "$rel"; then
 		changed=1
-		git -C "$repo" add "$rel"
-		git -C "$repo" commit -m "Sync shared targets from $(device_id)" >/dev/null 2>&1 || true
+		git_cmd -C "$repo" add "$rel"
+		git_cmd -C "$repo" commit -m "Sync shared targets from $(device_id)" >/dev/null 2>&1 || true
 	fi
 
 	pushed=0
@@ -780,7 +973,7 @@ sync_repo_internal() {
 			rm -f "$local_snapshot" "$remote_snapshot"
 			return 1
 		fi
-		if git -C "$repo" push origin "$branch" >/dev/null 2>&1; then
+		if git_cmd -C "$repo" push origin "$branch" >/dev/null 2>&1; then
 			pushed=1
 		else
 			set_status_error 'git push failed'
@@ -802,7 +995,7 @@ save_rules_file_internal() {
 
 	ensure_dirs
 	if repo_configured; then
-		repo_bootstrap
+		repo_bootstrap || return 1
 	else
 		mkdir -p "$(repo_path)" "$(dirname "$(repo_rules_path)")"
 		[ -f "$(repo_rules_path)" ] || : > "$(repo_rules_path)"
@@ -818,7 +1011,15 @@ ensure_git_key_internal() {
 	mkdir -p "$(dirname "$key")"
 	[ -f "$key" ] || ssh-keygen -t ed25519 -f "$key" -N '' -C "routerRules@$(device_id)" >/dev/null 2>&1
 	chmod 600 "$key"
-	chmod 644 "${key}.pub"
+	pub="${key}.pub"
+	if [ ! -s "$pub" ]; then
+		if ! ssh-keygen -y -f "$key" > "${pub}.tmp" 2>/dev/null; then
+			rm -f "${pub}.tmp"
+			return 1
+		fi
+		mv "${pub}.tmp" "$pub"
+	fi
+	chmod 644 "$pub"
 }
 
 set_xray_mode_internal() {
@@ -835,11 +1036,19 @@ set_xray_mode_internal() {
 	esac
 }
 
+set_mode_cutover_internal() {
+	local mode="$1"
+
+	set_xray_mode_internal "$mode" || return 1
+	hard_cutover_xray_internal
+}
+
 status_json() {
 	local repo rel rules_file resolved map domains literals file_text profile_status repo_head repo_dirty mode
 	local source_count resolved_count domain_count literal_count xray_ipset_count last_sync_at last_sync_status last_sync_message last_apply_xray
 	local setname current_signature last_cutover_at last_cutover_status last_cutover_message last_cutover_signature cutover_required
 	local sync_phase sync_phase_at sync_phase_message sync_trace last_verified_at last_sync_actor rules_checksum last_apply_signature interval
+	local fetch_url push_url_raw push_url_effective auth_mode http_username http_password_set ssh_key_present ssh_pub git_configured sync_enabled
 
 	repo="$(repo_path)"
 	rel="$(rules_relpath)"
@@ -852,12 +1061,29 @@ status_json() {
 	file_text=''
 	[ -f "$rules_file" ] && file_text="$(cat "$rules_file")"
 	interval="$(sync_interval)"
+	fetch_url="$(repo_fetch_url)"
+	push_url_raw="$(repo_push_url_raw)"
+	push_url_effective="$(repo_push_url)"
+	is_placeholder_value "$fetch_url" && fetch_url=''
+	is_placeholder_value "$push_url_raw" && push_url_raw=''
+	is_placeholder_value "$push_url_effective" && push_url_effective=''
+	sync_enabled="$(git_sync_enabled)"
+	auth_mode="$(git_auth_mode)"
+	http_username="$(git_http_username)"
+	[ -n "$(git_http_password)" ] && http_password_set=1 || http_password_set=0
+	[ -s "$(ssh_key_path)" ] && ssh_key_present=1 || ssh_key_present=0
+	ssh_pub=''
+	[ -f "$(ssh_key_path).pub" ] && ssh_pub="$(cat "$(ssh_key_path).pub" 2>/dev/null || true)"
+	if [ -z "$ssh_pub" ] && [ "$ssh_key_present" = '1' ]; then
+		ssh_pub="$(ssh-keygen -y -f "$(ssh_key_path)" 2>/dev/null || true)"
+	fi
+	repo_fetch_configured && git_configured=1 || git_configured=0
 
 	repo_head=''
 	repo_dirty='0'
 	if [ -d "$repo/.git" ]; then
-		repo_head="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || true)"
-		if ! git -C "$repo" diff --quiet -- "$rel" 2>/dev/null; then
+		repo_head="$(git_cmd -C "$repo" rev-parse --short HEAD 2>/dev/null || true)"
+		if ! git_cmd -C "$repo" diff --quiet -- "$rel" 2>/dev/null; then
 			repo_dirty='1'
 		fi
 	fi
@@ -893,13 +1119,24 @@ status_json() {
 
 	printf '{'
 	printf '"ok":true,'
+	printf '"git_sync_enabled":'; json_bool "$sync_enabled"; printf ','
+	printf '"git_configured":'; json_bool "$git_configured"; printf ','
 	printf '"repo_ready":'
 	if [ -d "$repo/.git" ]; then json_bool 1; else json_bool 0; fi
 	printf ','
 	printf '"repo_path":"%s",' "$(json_escape "$repo")"
+	printf '"repo_fetch_url":"%s",' "$(json_escape "$fetch_url")"
+	printf '"repo_push_url":"%s",' "$(json_escape "$push_url_raw")"
+	printf '"repo_push_url_effective":"%s",' "$(json_escape "$push_url_effective")"
+	printf '"repo_branch":"%s",' "$(json_escape "$(repo_branch)")"
 	printf '"rules_relpath":"%s",' "$(json_escape "$rel")"
 	printf '"repo_head":"%s",' "$(json_escape "$repo_head")"
 	printf '"repo_dirty":'; json_bool "$repo_dirty"; printf ','
+	printf '"git_auth_mode":"%s",' "$(json_escape "$auth_mode")"
+	printf '"git_http_username":"%s",' "$(json_escape "$http_username")"
+	printf '"git_http_password_set":'; json_bool "$http_password_set"; printf ','
+	printf '"git_ssh_key_present":'; json_bool "$ssh_key_present"; printf ','
+	printf '"git_ssh_public_key":"%s",' "$(json_escape "$ssh_pub")"
 	printf '"xray_mode":"%s",' "$(json_escape "$mode")"
 	printf '"sync_interval":"%s",' "$(json_escape "$interval")"
 	printf '"enable_push":'; json_bool "$(enable_push)"; printf ','
@@ -934,7 +1171,15 @@ with_lock() {
 	local holder=''
 	local tries=0
 	local rc=0
+	local max_wait
 	shift
+
+	max_wait="${ROUTER_RULES_LOCK_WAIT:-60}"
+	case "$max_wait" in
+		''|*[!0-9]*)
+			max_wait=60
+			;;
+	esac
 
 	while ! mkdir "$LOCK_DIR" 2>/dev/null; do
 		holder=''
@@ -944,7 +1189,7 @@ with_lock() {
 			continue
 		fi
 		tries=$((tries + 1))
-		if [ "$tries" -ge 60 ]; then
+		if [ "$tries" -ge "$max_wait" ]; then
 			echo 'router-rules lock timeout' >&2
 			return 1
 		fi
@@ -964,6 +1209,7 @@ usage() {
 	cat <<'EOF'
 router-rules commands:
   status-json
+  check-remote-rules
   ensure-git-key
   sync
   resolve
@@ -973,6 +1219,7 @@ router-rules commands:
   sync-apply-xray
   save-file <path>
   set-xray-mode <full|selective>
+  set-mode-cutover <full|selective>
 EOF
 }
 
@@ -980,6 +1227,9 @@ cmd="${1:-}"
 case "$cmd" in
 	status-json)
 		status_json
+		;;
+	check-remote-rules)
+		with_lock check_remote_rules_internal
 		;;
 	ensure-git-key)
 		with_lock ensure_git_key_internal
@@ -1016,6 +1266,11 @@ case "$cmd" in
 		shift
 		[ -n "${1:-}" ] || { usage >&2; exit 1; }
 		with_lock set_xray_mode_internal "$1"
+		;;
+	set-mode-cutover)
+		shift
+		[ -n "${1:-}" ] || { usage >&2; exit 1; }
+		with_lock set_mode_cutover_internal "$1"
 		;;
 	*)
 		usage >&2

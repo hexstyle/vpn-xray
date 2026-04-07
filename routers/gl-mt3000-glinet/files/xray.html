@@ -733,7 +733,7 @@
           <div id="rulesSummaryChips" class="chip-row"></div>
         </div>
         <div class="button-wrap" style="margin-top:0;">
-          <button class="warn-btn" id="rulesSyncBtn">Save List + Sync GitHub</button>
+          <button class="warn-btn" id="rulesSyncBtn">Save List + Sync Git</button>
         </div>
       </div>
       <div class="field field-full" style="margin-top:12px;">
@@ -748,18 +748,95 @@
           <span class="toggle-state" id="rulesModeStateText">Applying current mode...</span>
         </div>
         <div class="hint" id="rulesModeHint">
-          This switch applies locally on this router only and performs an immediate reset/cutover so the new mode is active right away. It does not sync with GitHub. <code>full</code> keeps the current behavior. <code>selective</code> redirects literal IP/CIDR entries directly and tracks domain entries through <code>dnsmasq -&gt; ipset</code>.
+          This switch applies locally on this router only and performs an immediate reset/cutover so the new mode is active right away. Shared addresses affect traffic only when the GL.iNet VPN switch is ON and this mode is set to <code>selective</code>. <code>full</code> keeps the current behavior. <code>selective</code> redirects literal IP/CIDR entries directly and tracks domain entries through <code>dnsmasq -&gt; ipset</code>.
         </div>
       </div>
+      <details class="readonly-pane" style="margin-top:12px;" open>
+        <summary class="label" style="cursor:pointer;">Git Sync Settings</summary>
+        <div class="field field-full" style="margin-top:12px;">
+          <label for="rulesGitSyncEnabled">Shared Rules Git Sync</label>
+          <div class="toggle-row">
+            <span class="toggle-label">Local-only</span>
+            <label class="toggle-switch" for="rulesGitSyncEnabled">
+              <input type="checkbox" id="rulesGitSyncEnabled" aria-label="Enable Git sync for shared rules">
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">Git sync</span>
+            <span class="toggle-state" id="rulesGitSyncStateText">Git sync disabled.</span>
+          </div>
+          <div class="hint" id="rulesGitSyncHint">
+            When enabled, the router checks for <code>lists/shared-targets.txt</code> in the configured repository before accepting the settings. If the file is missing, the save/check fails and the router stays in local-only mode.
+          </div>
+        </div>
+        <div id="rulesGitConfigFields">
+        <div class="field field-full" style="margin-top:12px;">
+          <label for="rulesRepoFetchUrl">Repository URL</label>
+          <input type="text" id="rulesRepoFetchUrl" placeholder="git@github.com:hexstyle/routerRules.git">
+          <div class="hint">The router pulls <code>lists/shared-targets.txt</code> from this repository when Git sync is enabled.</div>
+        </div>
+        <div class="field field-full" style="margin-top:12px;">
+          <label for="rulesRepoPushUrl">Push URL</label>
+          <input type="text" id="rulesRepoPushUrl" placeholder="Optional. Leave empty to reuse Repository URL for push.">
+        </div>
+        <div class="button-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:12px;">
+          <div class="field">
+            <label for="rulesRepoBranch">Branch</label>
+            <input type="text" id="rulesRepoBranch" value="main">
+          </div>
+          <div class="field">
+            <label for="rulesSyncInterval">Background Sync Interval (s)</label>
+            <input type="number" id="rulesSyncInterval" min="30" step="1" value="30">
+          </div>
+          <div class="field">
+            <label for="rulesGitAuthMode">Git Auth</label>
+            <select id="rulesGitAuthMode">
+              <option value="auto">Auto detect from URL / stored credentials</option>
+              <option value="none">Local only / anonymous</option>
+              <option value="https">HTTPS login / token</option>
+              <option value="ssh">SSH key</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="rulesEnablePush">Push Back Local Edits</label>
+            <select id="rulesEnablePush">
+              <option value="0">No</option>
+              <option value="1">Yes</option>
+            </select>
+          </div>
+        </div>
+        <div id="rulesGitHttpsFields" class="button-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:12px;">
+          <div class="field">
+            <label for="rulesGitHttpUsername">HTTPS Username</label>
+            <input type="text" id="rulesGitHttpUsername" placeholder="Git login or token username">
+          </div>
+          <div class="field">
+            <label for="rulesGitHttpPassword">HTTPS Password / Token</label>
+            <input type="password" id="rulesGitHttpPassword" placeholder="Leave blank to keep the stored secret">
+          </div>
+        </div>
+        <div class="field field-full" id="rulesGitSshKeyWrap" style="margin-top:12px;">
+          <label for="rulesGitSshPrivateKey">SSH Private Key</label>
+          <textarea id="rulesGitSshPrivateKey" class="mono" spellcheck="false" style="min-height:160px;" placeholder="Optional. Paste a private key to replace the router's stored git SSH key. Leave blank to keep the existing key."></textarea>
+          <div class="hint" id="rulesGitSshHint">The router can keep its existing git SSH key, or you can replace it here.</div>
+        </div>
+        <details class="readonly-pane" style="margin-top:12px;">
+          <summary class="label" style="cursor:pointer;">Current Router SSH Public Key</summary>
+          <pre id="rulesGitSshPublicKey" style="margin-top:12px;">No router SSH key yet.</pre>
+        </details>
+        <div class="button-wrap" style="margin-top:12px;">
+          <button id="rulesSaveConfigBtn">Save Git Settings</button>
+        </div>
+        </div>
+      </details>
       <div class="field field-full" style="margin-top:12px;">
         <label for="rulesText">Shared Rules List</label>
         <div class="hint" id="rulesEditorHint">
-          Edit the shared operator-facing list here. GitHub remains canonical during conflicts; unique local lines are appended on top during sync.
+          Edit the shared operator-facing list here. These addresses take effect only while the GL.iNet VPN switch is ON and Routing Mode is set to <code>selective</code>.
         </div>
         <textarea id="rulesText" class="mono" spellcheck="false" style="min-height:240px;"></textarea>
       </div>
       <div class="readonly-pane" style="margin-top:12px;">
-        <div class="label">GitHub Sync / Runtime Status</div>
+        <div class="label">Git Sync / Runtime Status</div>
         <div id="rulesStatusGrid" style="display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin-top:12px;"></div>
       </div>
       <details class="readonly-pane" style="margin-top:12px;">
@@ -796,6 +873,7 @@
       rules: null,
       formDirty: false,
       rulesDirty: false,
+      rulesConfigDirty: false,
       rulesEditorBaseHead: "",
       refreshBusy: false,
       rulesBusy: false,
@@ -858,7 +936,18 @@
         "smokeBtn",
         "logsBtn",
         "rulesModeToggle",
+        "rulesSaveConfigBtn",
         "rulesSyncBtn",
+        "rulesGitSyncEnabled",
+        "rulesRepoFetchUrl",
+        "rulesRepoPushUrl",
+        "rulesRepoBranch",
+        "rulesSyncInterval",
+        "rulesGitAuthMode",
+        "rulesEnablePush",
+        "rulesGitHttpUsername",
+        "rulesGitHttpPassword",
+        "rulesGitSshPrivateKey",
         "rulesText"
       ].forEach((id) => {
         const el = document.getElementById(id);
@@ -877,7 +966,18 @@
         "applyProfileBtn",
         "smokeBtn",
         "rulesModeToggle",
+        "rulesSaveConfigBtn",
         "rulesSyncBtn",
+        "rulesGitSyncEnabled",
+        "rulesRepoFetchUrl",
+        "rulesRepoPushUrl",
+        "rulesRepoBranch",
+        "rulesSyncInterval",
+        "rulesGitAuthMode",
+        "rulesEnablePush",
+        "rulesGitHttpUsername",
+        "rulesGitHttpPassword",
+        "rulesGitSshPrivateKey",
         "rulesText"
       ].forEach((id) => {
         const el = document.getElementById(id);
@@ -997,6 +1097,38 @@
     function clearRulesDirty() {
       state.rulesDirty = false;
       updateRulesActionState();
+    }
+
+    function markRulesConfigDirty() {
+      state.rulesConfigDirty = true;
+      updateRulesConfigUi();
+    }
+
+    function clearRulesConfigDirty() {
+      state.rulesConfigDirty = false;
+      updateRulesConfigUi();
+    }
+
+    function rulesConfigPayload() {
+      const payload = {
+        git_sync_enabled: document.getElementById("rulesGitSyncEnabled").checked ? "1" : "0",
+        repo_fetch_url: document.getElementById("rulesRepoFetchUrl").value.trim(),
+        repo_push_url: document.getElementById("rulesRepoPushUrl").value.trim(),
+        repo_branch: document.getElementById("rulesRepoBranch").value.trim(),
+        sync_interval: document.getElementById("rulesSyncInterval").value.trim() || "30",
+        git_auth_mode: document.getElementById("rulesGitAuthMode").value,
+        git_http_username: document.getElementById("rulesGitHttpUsername").value.trim(),
+        enable_push: document.getElementById("rulesEnablePush").value
+      };
+      const httpPassword = document.getElementById("rulesGitHttpPassword").value;
+      const sshPrivateKey = document.getElementById("rulesGitSshPrivateKey").value.trim();
+      if (httpPassword) {
+        payload.git_http_password = httpPassword;
+      }
+      if (sshPrivateKey) {
+        payload.git_ssh_private_key = sshPrivateKey;
+      }
+      return payload;
     }
 
     function maybeField(id) {
@@ -1292,6 +1424,8 @@
     }
 
     function renderRules(data) {
+      const gitSyncEnabled = !!data.git_sync_enabled;
+      const gitConfigured = !!data.git_configured;
       const repoReady = !!data.repo_ready;
       const intervalSeconds = Number(data.sync_interval || 0) || 30;
       const lastSyncStatus = data.last_sync_status || "never";
@@ -1307,7 +1441,7 @@
       const trace = (data.sync_trace || "").split(" || ").filter(Boolean);
       const counts = `${data.source_count || 0} source / ${data.domain_count || 0} domains / ${data.literal_count || 0} literal / ${data.resolved_count || 0} resolved-snapshot / ${data.xray_ipset_count || 0} live-set`;
       const phaseLabels = {
-        checking_remote: "Checking GitHub and local state",
+        checking_remote: "Checking Git and local state",
         drift_detected: "Changes found, reset is about to start",
         cutover_in_progress: "Reset is in progress",
         verified: "Everything is current",
@@ -1318,16 +1452,17 @@
         ? "Changes are applied in config, but old connections may still be alive until reset finishes."
         : "Current rules are active on the router.";
       const statusRows = [
-        ["Background checks", `Every ${intervalSeconds}s · ${syncFresh ? "running normally" : "status is stale"}`],
+        ["Sync backend", gitConfigured ? "Git repository" : (gitSyncEnabled ? "Git requested, configuration check failed or is incomplete" : "Local-only fallback")],
+        ["Background checks", gitConfigured ? `Every ${intervalSeconds}s · ${syncFresh ? "running normally" : "status is stale"}` : "Idle in local-only mode"],
         ["Current phase", `${currentPhase}${phaseAt}`],
         ["Phase detail", data.sync_phase_message || "(no detail)"],
-        ["GitHub sync", `${lastSyncStatus}${lastSyncAt} · actor=${syncActor}`],
+        ["Sync status", `${lastSyncStatus}${lastSyncAt} · actor=${syncActor}`],
         ["Runtime state", runtimeState],
         ["Last reset", `${lastCutoverStatus}${lastCutoverAt}`],
         ["Last verified", formatUnixTime(data.last_verified_at)]
       ];
       const diagnosticsLines = [
-        `GitHub head: ${data.repo_head || "(none)"}`,
+        `Git head: ${data.repo_head || "(none)"}`,
         `Rules checksum: ${shortSig(data.rules_checksum)}`,
         `Applied signature: ${shortSig(data.last_apply_signature)}`,
         `Cutover signature: ${shortSig(data.last_cutover_signature)}`,
@@ -1340,26 +1475,54 @@
         ...trace.map((item) => `- ${item}`)
       ].filter((line, index, array) => line || (index > 0 && array[index - 1] !== ""));
       const repoLines = [
+        `Git sync enabled: ${gitSyncEnabled ? "yes" : "no"}`,
+        `Git configured: ${gitConfigured ? "yes" : "no"}`,
         `Repo path: ${data.repo_path || "(unknown)"}`,
+        `Fetch URL: ${data.repo_fetch_url || "(local-only)"}`,
+        `Push URL: ${data.repo_push_url || "(reuse fetch URL)"}`,
         `Rules file: ${data.rules_relpath || "(unknown)"}`,
         `Repo head: ${data.repo_head || "(none)"}`,
         `Sync interval: ${intervalSeconds}s`,
         `Repo dirty: ${data.repo_dirty ? "yes" : "no"}`,
+        `Auth mode: ${data.git_auth_mode || "none"}`,
+        `HTTPS username: ${data.git_http_username || "(not set)"}`,
+        `HTTPS secret stored: ${data.git_http_password_set ? "yes" : "no"}`,
+        `SSH key present: ${data.git_ssh_key_present ? "yes" : "no"}`,
         `Push enabled: ${data.enable_push ? "yes" : "no"}`,
         `Repo ready: ${repoReady ? "yes" : "no"}`
       ].filter(Boolean);
       const chips = [
-        `<span class="chip ${repoReady ? "ok" : "bad"}">Repo: ${escapeHtml(repoReady ? "ready" : "missing")}</span>`,
+        `<span class="chip ${gitConfigured ? (repoReady ? "ok" : "warn") : (gitSyncEnabled ? "warn" : "ok")}">Sync: ${escapeHtml(gitConfigured ? (repoReady ? "git-ready" : "git-pending") : (gitSyncEnabled ? "git-check-failed" : "local-only"))}</span>`,
         `<span class="chip ${data.xray_mode === "selective" ? "ok" : ""}">Mode: ${escapeHtml(data.xray_mode || "full")}</span>`,
         `<span class="chip">Rules: ${escapeHtml(counts)}</span>`,
-        `<span class="chip ${syncFresh ? "ok" : "warn"}">Loop: ${escapeHtml(syncFresh ? "fresh" : "stale")}</span>`,
-        `<span class="chip ${lastSyncStatus === "ok" ? "ok" : "bad"}">GitHub: ${escapeHtml(lastSyncStatus)}</span>`,
+        `<span class="chip ${gitConfigured ? (syncFresh ? "ok" : "warn") : "ok"}">Loop: ${escapeHtml(gitConfigured ? (syncFresh ? "fresh" : "stale") : "idle")}</span>`,
+        `<span class="chip ${lastSyncStatus === "ok" || lastSyncStatus === "local-only" ? "ok" : "bad"}">Sync status: ${escapeHtml(lastSyncStatus)}</span>`,
         `<span class="chip ${cutoverRequired ? "warn" : "ok"}">Runtime: ${escapeHtml(cutoverRequired ? "reset pending" : "current")}</span>`,
         `<span class="chip ${phase === "error" ? "bad" : phase === "verified" ? "ok" : "warn"}">Phase: ${escapeHtml(phase)}</span>`,
         `<span class="chip ${state.rulesDirty ? "bad" : "ok"}">${state.rulesDirty ? "Local edits pending" : "Editor clean"}</span>`
       ];
 
       document.getElementById("rulesSummaryChips").innerHTML = chips.join("");
+      if (!state.rulesConfigDirty) {
+        document.getElementById("rulesGitSyncEnabled").checked = gitSyncEnabled;
+        document.getElementById("rulesRepoFetchUrl").value = data.repo_fetch_url || "";
+        document.getElementById("rulesRepoPushUrl").value = data.repo_push_url || "";
+        document.getElementById("rulesRepoBranch").value = data.repo_branch || "main";
+        document.getElementById("rulesSyncInterval").value = data.sync_interval || "30";
+        document.getElementById("rulesGitAuthMode").value = data.git_auth_mode || (gitSyncEnabled ? "auto" : "none");
+        document.getElementById("rulesGitHttpUsername").value = data.git_http_username || "";
+        document.getElementById("rulesEnablePush").value = data.enable_push ? "1" : "0";
+        document.getElementById("rulesGitHttpPassword").value = "";
+        document.getElementById("rulesGitSshPrivateKey").value = "";
+      }
+      document.getElementById("rulesGitSshPublicKey").textContent = data.git_ssh_public_key || "No router SSH key yet.";
+      const gitSyncStateText = document.getElementById("rulesGitSyncStateText");
+      if (gitSyncStateText) {
+        gitSyncStateText.textContent = gitSyncEnabled
+          ? (gitConfigured ? "Git sync is enabled." : "Git sync is enabled, but the remote check has not passed.")
+          : "Git sync is disabled.";
+        gitSyncStateText.className = `toggle-state ${gitConfigured ? "ok" : gitSyncEnabled ? "warn" : ""}`;
+      }
       const modeToggle = document.getElementById("rulesModeToggle");
       if (modeToggle) {
         modeToggle.checked = (data.xray_mode || "full") === "selective";
@@ -1380,19 +1543,90 @@
       )).join("");
       document.getElementById("rulesTraceOutput").textContent = diagnosticsLines.join("\n");
       document.getElementById("rulesRepoDetails").textContent = repoLines.join("\n");
+      updateRulesConfigUi();
       updateRulesActionState();
     }
 
     function updateRulesActionState() {
       const button = document.getElementById("rulesSyncBtn");
       const hint = document.getElementById("rulesEditorHint");
+      const runtimeSwitchOn = state.runtime?.switch_state === "on";
+      const selectiveMode = state.rules?.xray_mode === "selective";
+      const gitConfigured = !!state.rules?.git_configured;
       if (button) {
-        button.textContent = state.rulesDirty ? "Save List + Sync GitHub" : "Sync GitHub Rules";
+        button.textContent = gitConfigured
+          ? (state.rulesDirty ? "Save List + Sync Git" : "Sync Git Rules")
+          : (state.rulesDirty ? "Save List + Apply Local" : "Apply Local Rules");
       }
       if (hint) {
-        hint.textContent = state.rulesDirty
-          ? "You have unsaved local edits. If GitHub did not move since this editor state was loaded, the edited list is saved exactly as-is. If GitHub moved, conflict handling keeps GitHub as the base and appends only truly unique local lines."
-          : "No local edits pending. Sync checks GitHub, applies real ruleset changes, and if drift is found it performs the reset/cutover automatically. If nothing changed, it only refreshes sync status.";
+        const applyScope = runtimeSwitchOn && selectiveMode
+          ? "These addresses are active right now because the GL.iNet VPN switch is ON and Routing Mode is selective."
+          : "These addresses will only affect traffic after the GL.iNet VPN switch is ON and Routing Mode is selective.";
+        if (!gitConfigured) {
+          hint.textContent = state.rulesDirty
+            ? `You have unsaved local edits. Saving applies the local text list directly on this router without any Git sync. ${applyScope}`
+            : `Git sync is disabled. The text area below is the authoritative local rules list for this router. ${applyScope}`;
+        } else {
+          hint.textContent = state.rulesDirty
+            ? `You have unsaved local edits. If Git did not move since this editor state was loaded, the edited list is saved exactly as-is. If the remote moved, conflict handling keeps Git as the base and appends only truly unique local lines. ${applyScope}`
+            : `No local edits pending. Sync checks Git, applies real ruleset changes, and if drift is found it performs the reset/cutover automatically. If nothing changed, it only refreshes sync status. ${applyScope}`;
+        }
+      }
+    }
+
+    function updateRulesConfigUi() {
+      const syncEnabled = !!document.getElementById("rulesGitSyncEnabled")?.checked;
+      const authMode = document.getElementById("rulesGitAuthMode")?.value || "none";
+      const repoUrl = document.getElementById("rulesRepoFetchUrl")?.value.trim() || "";
+      const syncFieldsWrap = document.getElementById("rulesGitConfigFields");
+      const httpsWrap = document.getElementById("rulesGitHttpsFields");
+      const sshWrap = document.getElementById("rulesGitSshKeyWrap");
+      const pushSelect = document.getElementById("rulesEnablePush");
+      const saveButton = document.getElementById("rulesSaveConfigBtn");
+      const sshHint = document.getElementById("rulesGitSshHint");
+      const syncHint = document.getElementById("rulesGitSyncHint");
+      const syncStateText = document.getElementById("rulesGitSyncStateText");
+      const passwordInput = document.getElementById("rulesGitHttpPassword");
+
+      if (syncFieldsWrap) {
+        syncFieldsWrap.style.display = syncEnabled ? "" : "none";
+      }
+      if (httpsWrap) {
+        httpsWrap.style.display = syncEnabled && authMode === "https" ? "" : "none";
+      }
+      if (sshWrap) {
+        sshWrap.style.display = syncEnabled && authMode === "ssh" ? "" : "none";
+      }
+      if (pushSelect) {
+        if (!repoUrl) {
+          pushSelect.value = "0";
+        }
+        pushSelect.disabled = !syncEnabled || !repoUrl || state.foregroundBusy;
+      }
+      if (saveButton) {
+        saveButton.textContent = syncEnabled ? "Save Git Settings" : "Save Local-Only Mode";
+      }
+      if (sshHint) {
+        sshHint.textContent = !syncEnabled
+          ? "SSH key settings stay unused until Git sync is enabled."
+          : authMode === "ssh"
+          ? "Paste a private key only if you want to replace the router's stored git SSH key. Otherwise the existing/generated key stays in place."
+          : "SSH key replacement is only used when Git Auth is set to SSH.";
+      }
+      if (syncHint) {
+        syncHint.textContent = syncEnabled
+          ? "When enabled, the router checks that lists/shared-targets.txt exists in the selected repository before saving the sync settings."
+          : "With Git sync disabled, the router uses only the local text list below and never pulls from Git.";
+      }
+      if (syncStateText && state.rulesConfigDirty) {
+        syncStateText.textContent = syncEnabled ? "Git sync will be enabled after save." : "Git sync will stay disabled after save.";
+        syncStateText.className = `toggle-state ${syncEnabled ? "warn" : ""}`;
+      }
+      if (passwordInput) {
+        const hasStoredSecret = !!state.rules?.git_http_password_set;
+        passwordInput.placeholder = hasStoredSecret
+          ? "Leave blank to keep the stored secret"
+          : "Optional token or password";
       }
     }
 
@@ -1503,8 +1737,30 @@
       }
     }
 
+    async function saveRulesConfig(button) {
+      beginForegroundTask("Saving Git sync settings on the router...", 20000);
+      setBusy(button, true);
+      try {
+        const data = await callApi(rulesApi, "save_config", rulesConfigPayload(), { timeoutMs: 20000 });
+        if (data.ok === false) {
+          throw new Error(data.error || "backend error");
+        }
+        state.rules = data;
+        clearRulesConfigDirty();
+        renderRules(data);
+        flash(data.git_sync_enabled ? "Git sync settings saved." : "Git sync disabled. Router stays in local-only rules mode.", "good");
+      } catch (err) {
+        flash(`Failed to save Git settings: ${err.message}`, "bad");
+        document.getElementById("rulesTraceOutput").textContent = `Failed to save Git settings: ${err.message}`;
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
     async function syncRules(button) {
-      beginForegroundTask("Syncing shared rules with GitHub and applying them...", 45000);
+      const wantsGitSync = !!document.getElementById("rulesGitSyncEnabled").checked;
+      beginForegroundTask(wantsGitSync ? "Syncing shared rules with Git and applying them..." : "Applying local rules on this router...", 45000);
       setBusy(button, true);
       try {
         const data = await callApi(rulesApi, "sync_rules", {
@@ -1518,7 +1774,7 @@
         clearRulesDirty();
         renderRules(data);
         await refreshAll(false, false, true);
-        flash(data.sync_phase_message || "Rules sync finished.", "good");
+        flash(data.sync_phase_message || (data.git_configured ? "Rules sync finished." : "Local rules applied."), "good");
       } catch (err) {
         flash(`Rules sync failed: ${err.message}`, "bad");
         document.getElementById("rulesTraceOutput").textContent = `Rules sync failed: ${err.message}`;
@@ -1661,6 +1917,7 @@
     document.getElementById("createProfileBtn").addEventListener("click", (event) => createProfile(event.currentTarget));
     document.getElementById("logsBtn").addEventListener("click", loadLogs);
     document.getElementById("smokeBtn").addEventListener("click", runSmoke);
+    document.getElementById("rulesSaveConfigBtn").addEventListener("click", (event) => saveRulesConfig(event.currentTarget));
     document.getElementById("rulesSyncBtn").addEventListener("click", (event) => syncRules(event.currentTarget));
     document.getElementById("rulesModeToggle").addEventListener("change", (event) => {
       setRulesMode(event.currentTarget.checked ? "selective" : "full", event.currentTarget);
@@ -1689,6 +1946,32 @@
       }
     });
     document.getElementById("rulesText").addEventListener("input", markRulesDirty);
+    [
+      "rulesRepoFetchUrl",
+      "rulesRepoPushUrl",
+      "rulesRepoBranch",
+      "rulesSyncInterval",
+      "rulesGitHttpUsername",
+      "rulesGitHttpPassword",
+      "rulesGitSshPrivateKey"
+    ].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener("input", markRulesConfigDirty);
+      }
+    });
+    [
+      "rulesGitSyncEnabled",
+      "rulesGitAuthMode",
+      "rulesEnablePush"
+    ].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener("change", markRulesConfigDirty);
+      }
+    });
+    document.getElementById("rulesGitSyncEnabled").addEventListener("change", updateRulesConfigUi);
+    document.getElementById("rulesGitAuthMode").addEventListener("change", updateRulesConfigUi);
 
     setStartupControlsDisabled(true);
     flashLoading("Loading current router and VPS state...");

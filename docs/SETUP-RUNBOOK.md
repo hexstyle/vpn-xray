@@ -234,11 +234,25 @@ Different workstation-side preflight host, but the router still saves and uses t
 VPS_PASSWORD='YOUR_VPS_ROOT_PASSWORD' VPS_SSH_HOST='10.0.0.5' ./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
 ```
 
+One-command quick start with shared selective rules pulled from Git over SSH:
+
+```sh
+ROUTER_PASSWORD='ROUTER_ADMIN_PASSWORD' \
+VPS_PASSWORD='YOUR_VPS_ROOT_PASSWORD' \
+RULES_GIT_SYNC_ENABLED='1' \
+RULES_REPO_FETCH_URL='git@github.com:hexstyle/routerRules.git' \
+RULES_REPO_BRANCH='main' \
+RULES_GIT_AUTH_MODE='ssh' \
+RULES_GIT_SSH_PRIVATE_KEY_FILE="$HOME/.ssh/id_ed25519" \
+./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
+```
+
 Verification behavior:
 
 - the script waits for the router proxy on the configured HTTP port
 - it checks `https://www.google.com` through that proxy
 - it compares the proxy egress IP with `XRAY_SERVER` when that value is an IPv4 address
+- when `RULES_GIT_SYNC_ENABLED=1`, it also verifies shared-rules sync; if the immediate SSH probe cannot confirm status right after restart, the script warns and the live state remains visible in `xray.html`
 - if the GL.iNet physical switch is `OFF`, the script stops after install and tells you to turn it `ON`
 
 ## Shared Rules
@@ -247,15 +261,33 @@ Shared Git-backed selective rules are optional.
 
 If you want them, use these advanced variables:
 
+- `RULES_GIT_SYNC_ENABLED=1` to explicitly enable background Git sync
 - `RULES_REPO_FETCH_URL`
 - `RULES_REPO_PUSH_URL`
+- `RULES_GIT_AUTH_MODE=ssh|https|auto`
+- `RULES_GIT_HTTP_USERNAME`
+- `RULES_GIT_HTTP_PASSWORD`
+- `RULES_GIT_SSH_PRIVATE_KEY`
 - `RULES_ENABLE_PUSH=1` only when the router is allowed to push upstream
 
 If `RULES_REPO_FETCH_URL` is empty:
 
 - the transport still works
 - `full` and local `selective` still work
-- GitHub-backed rules sync stays disabled
+- Git-backed rules sync stays disabled
+
+Runtime behavior:
+
+- shared addresses are applied only when the GL.iNet physical VPN switch is `ON`
+- shared addresses affect routing only when the router Routing Mode is `selective`
+- `full` mode ignores the shared rules list by design
+
+UI behavior in `xray.html`:
+
+- `Shared Rules Git Sync` is a separate toggle
+- when that toggle is `OFF`, the router uses only the local text list and never contacts Git
+- when that toggle is `ON`, the router expects `lists/shared-targets.txt` to exist in the configured repository
+- if that file is missing or Git auth fails, the Git sync check fails and the router falls back to local-only mode
 
 ## Verification Notes
 

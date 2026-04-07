@@ -78,9 +78,34 @@ fail() {
   exit 1
 }
 
+load_rules_git_ssh_private_key() {
+  local key_file="${RULES_GIT_SSH_PRIVATE_KEY_FILE:-}"
+
+  if [[ -n "${RULES_GIT_SSH_PRIVATE_KEY:-}" || -z "$key_file" ]]; then
+    return 0
+  fi
+  [[ -r "$key_file" ]] || fail "RULES_GIT_SSH_PRIVATE_KEY_FILE is not readable: $key_file"
+  RULES_GIT_SSH_PRIVATE_KEY="$(cat "$key_file")"
+}
+
+base64_encode() {
+  python3 - <<'PY'
+import base64
+import sys
+
+sys.stdout.write(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))
+PY
+}
+
 shell_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
+
+load_rules_git_ssh_private_key
+RULES_GIT_SSH_PRIVATE_KEY_B64=''
+if [[ -n "${RULES_GIT_SSH_PRIVATE_KEY:-}" ]]; then
+  RULES_GIT_SSH_PRIVATE_KEY_B64="$(printf '%s' "$RULES_GIT_SSH_PRIVATE_KEY" | base64_encode)"
+fi
 
 build_profile_id() {
   local raw="$1"
@@ -140,6 +165,29 @@ if not router.get("config_ready"):
   raise SystemExit("Router reported success, but router_current.config_ready is false.")
 
 print(status.get("active_profile_id", ""))
+PY
+}
+
+assert_rules_sync_summary_ok() {
+  python3 - <<'PY'
+import sys
+
+fields = {}
+for line in sys.stdin.read().splitlines():
+  if "=" not in line:
+    continue
+  key, value = line.split("=", 1)
+  fields[key] = value
+
+last_status = fields.get("last_sync_status", "")
+last_message = fields.get("last_sync_message", "")
+if last_status != "ok":
+  raise SystemExit(last_message or f"Shared rules Git sync did not complete successfully (status={last_status!r}).")
+
+repo_head = fields.get("repo_head", "")
+rules_relpath = fields.get("rules_relpath", "")
+source_count = fields.get("source_count", "0")
+print("|".join((repo_head, rules_relpath, source_count)))
 PY
 }
 
@@ -264,6 +312,42 @@ router_cgi_post() {
   # Run CGI POSTs outside the master socket. Multiplexed stdin/stdio handling
   # is unreliable here and can collapse a valid JSON response into an empty body.
   printf '%s' "$payload" | router_ssh_direct "$ROUTER_SSH" "REQUEST_METHOD=POST CONTENT_LENGTH=$payload_len $script_path"
+}
+
+router_rules_sync_summary() {
+  local git_sync_enabled last_sync_status last_sync_message rules_relpath repo_head source_count
+  local attempts=30
+
+  while (( attempts > 0 )); do
+    git_sync_enabled="$(router_ssh_direct "$ROUTER_SSH" "uci -q get router_rules.global.git_sync_enabled 2>/dev/null || true" | tr -d '\r\n')"
+    last_sync_status="$(router_ssh_direct "$ROUTER_SSH" "sed -n 's/^last_sync_status=//p' /tmp/router-rules.status | sed -n '1p'" | tr -d '\r\n')"
+    last_sync_message="$(router_ssh_direct "$ROUTER_SSH" "sed -n 's/^last_sync_message=//p' /tmp/router-rules.status | sed -n '1p'" | tr -d '\r\n')"
+
+    if [[ "$last_sync_status" == 'ok' ]]; then
+      rules_relpath="$(router_ssh_direct "$ROUTER_SSH" "uci -q get router_rules.global.rules_relpath 2>/dev/null || true" | tr -d '\r\n')"
+      [ -n "$rules_relpath" ] || rules_relpath='lists/shared-targets.txt'
+      repo_head="$(router_ssh_direct "$ROUTER_SSH" "git -C /etc/router-rules/repo rev-parse --short HEAD 2>/dev/null || true" | tr -d '\r\n')"
+      source_count="$(router_ssh_direct "$ROUTER_SSH" "awk '/^[[:space:]]*$/ { next } /^[[:space:]]*#/ { next } { count++ } END { print count + 0 }' $(shell_quote "/etc/router-rules/repo/$rules_relpath") 2>/dev/null || echo 0" | tr -d '\r\n')"
+      printf 'git_sync_enabled=%s\n' "$git_sync_enabled"
+      printf 'last_sync_status=%s\n' "$last_sync_status"
+      printf 'last_sync_message=%s\n' "$last_sync_message"
+      printf 'repo_head=%s\n' "$repo_head"
+      printf 'rules_relpath=%s\n' "$rules_relpath"
+      printf 'source_count=%s\n' "$source_count"
+      return 0
+    fi
+
+    attempts=$((attempts - 1))
+    sleep 2
+  done
+
+  printf 'git_sync_enabled=%s\n' "$git_sync_enabled"
+  printf 'last_sync_status=%s\n' "$last_sync_status"
+  printf 'last_sync_message=%s\n' "$last_sync_message"
+  printf 'repo_head=\n'
+  printf 'rules_relpath=lists/shared-targets.txt\n'
+  printf 'source_count=0\n'
+  return 1
 }
 
 vps_ssh() {
@@ -449,7 +533,23 @@ router_ssh_stdin "cat > $remote_source_tar" "$source_bundle"
 router_ssh "tar -xf $remote_source_tar -C $remote_source_root && rm -f $remote_source_tar"
 
 info "Installing vpn-xray platform on the router from the local repository ..."
-router_ssh "sh $(shell_quote "$remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh") --source-dir $(shell_quote "$remote_source_root")"
+router_ssh "\
+RULES_GIT_SYNC_ENABLED=$(shell_quote "${RULES_GIT_SYNC_ENABLED:-}") \
+RULES_REPO_FETCH_URL=$(shell_quote "${RULES_REPO_FETCH_URL:-}") \
+RULES_REPO_PUSH_URL=$(shell_quote "${RULES_REPO_PUSH_URL:-}") \
+RULES_REPO_BRANCH=$(shell_quote "${RULES_REPO_BRANCH:-main}") \
+RULES_GIT_AUTH_MODE=$(shell_quote "${RULES_GIT_AUTH_MODE:-auto}") \
+RULES_GIT_HTTP_USERNAME=$(shell_quote "${RULES_GIT_HTTP_USERNAME:-}") \
+RULES_GIT_HTTP_PASSWORD=$(shell_quote "${RULES_GIT_HTTP_PASSWORD:-}") \
+RULES_GIT_SSH_PRIVATE_KEY_B64=$(shell_quote "${RULES_GIT_SSH_PRIVATE_KEY_B64:-}") \
+RULES_DEVICE_ID=$(shell_quote "${RULES_DEVICE_ID:-gl-router}") \
+RULES_ENABLE_PUSH=$(shell_quote "${RULES_ENABLE_PUSH:-0}") \
+RULES_SYNC_INTERVAL=$(shell_quote "${RULES_SYNC_INTERVAL:-30}") \
+RULES_GIT_USER_NAME=$(shell_quote "${RULES_GIT_USER_NAME:-router-rules}") \
+RULES_GIT_USER_EMAIL=$(shell_quote "${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}") \
+RULES_DNS_RESOLVER=$(shell_quote "${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}") \
+XRAY_RULES_MODE=$(shell_quote "${XRAY_RULES_MODE:-full}") \
+sh $(shell_quote "$remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh") --source-dir $(shell_quote "$remote_source_root")"
 router_ssh "test -x /www/cgi-bin/xray-vps" >/dev/null
 
 if [[ "$bootstrap_mode" == 'password' ]]; then
@@ -518,6 +618,22 @@ if printf '%s' "$XRAY_SERVER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' && [
   fail "Proxy egress IP mismatch: expected $XRAY_SERVER, got $egress_ip."
 fi
 
+rules_sync_summary=''
+if [[ "${RULES_GIT_SYNC_ENABLED:-0}" == '1' ]]; then
+  rules_sync_status=''
+  info "Verifying shared rules Git sync ..."
+  rules_sync_raw="$(router_rules_sync_summary || true)"
+  rules_sync_status="$(printf '%s' "$rules_sync_raw" | sed -n 's/^last_sync_status=//p' | sed -n '1p' | tr -d '\r[:space:]')"
+  if [[ -z "$rules_sync_status" ]]; then
+    info "WARNING: Could not confirm shared rules Git sync status over SSH. The router continues syncing in the background."
+  else
+    if ! rules_sync_summary="$(printf '%s' "$rules_sync_raw" | assert_rules_sync_summary_ok)"; then
+      info "WARNING: Shared rules Git sync probe did not return a confirmed OK status over SSH. Check xray.html for the live router status."
+      rules_sync_summary=''
+    fi
+  fi
+fi
+
 info
 info "One-shot router + VPS install completed."
 info "Router:       $ROUTER_HOST"
@@ -525,3 +641,7 @@ info "Active profile: $active_profile_id"
 info "Proxy:        http://$ROUTER_HOST:$PROXY_PORT"
 info "Web UI:       https://$ROUTER_HOST/xray.html"
 info "Egress IP:    $egress_ip"
+if [[ -n "$rules_sync_summary" ]]; then
+  IFS='|' read -r rules_repo_head rules_relpath rules_source_count <<<"$rules_sync_summary"
+  info "Shared rules: $rules_relpath ($rules_source_count entries) @ $rules_repo_head"
+fi

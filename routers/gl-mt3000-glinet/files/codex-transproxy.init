@@ -24,6 +24,27 @@ xray_dnsmasq_conf() {
 	uci -q get router_rules.global.xray_dnsmasq_conf 2>/dev/null || echo /tmp/dnsmasq.d/router-rules-xray-ipset.conf
 }
 
+rules_generated_dir() {
+	uci -q get router_rules.global.generated_dir 2>/dev/null || echo /etc/router-rules/generated
+}
+
+xray_domains_file() {
+	printf '%s/domains.txt\n' "$(rules_generated_dir)"
+}
+
+xray_dnsmasq_ready() {
+	local conf domains
+
+	conf="$(xray_dnsmasq_conf)"
+	domains="$(xray_domains_file)"
+
+	[ -f "$conf" ] || return 1
+	if [ -s "$domains" ]; then
+		[ -s "$conf" ] || return 1
+	fi
+	return 0
+}
+
 iptables_del() {
 	iptables "$@" 2>/dev/null || true
 }
@@ -78,7 +99,7 @@ add_nat_rules() {
 	setname="$(xray_ipset_name)"
 
 	if [ "$mode" = "selective" ]; then
-		if ! ipset list "$setname" >/dev/null 2>&1 || [ ! -s "$(xray_dnsmasq_conf)" ]; then
+		if ! ipset list "$setname" >/dev/null 2>&1 || ! xray_dnsmasq_ready; then
 			/usr/bin/router-rules build-xray-ipset >/dev/null 2>&1 || true
 		fi
 		iptables_del -t nat -D PREROUTING -i br-lan -p tcp --dport 53 -j REDIRECT --to-ports 53
