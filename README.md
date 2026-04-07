@@ -116,6 +116,10 @@ The router will:
 - generate or reuse the required client/server values
 - sync the VPS and the router together
 
+Example of the Xray control panel on a `GL.iNet GL-MT3000`:
+
+<img src="./docs/assets/xray-control-panel.png" alt="Xray control panel on GL.iNet router at https://192.168.8.1/xray.html" width="900">
+
 ### 5. Use the Router
 
 After the first successful sync:
@@ -215,6 +219,14 @@ Every main folder has its own `README.md`.
   - VPS profiles and server-side payloads
 - [`docs/`](./docs/README.md)
   - user-facing docs, runbooks, UI behavior and architecture
+
+## Ping Result Example
+
+The screenshot below shows a ping test result through the configured path:
+
+<img src="./docs/assets/xray-ping-test.png" alt="Ping test result through vpn-xray" width="900">
+
+In this example, latency is `100ms+`. That is close to the critical edge for reaction-heavy games, but for general browsing, work traffic, calls, and most non-competitive use the connection remains stable.
 
 ## Thanks
 
