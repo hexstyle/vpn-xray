@@ -38,7 +38,7 @@ download_to_file() {
 	fi
 
 	if command -v wget >/dev/null 2>&1; then
-		wget -qO "$target" "$url"
+		wget -O "$target" "$url"
 		return 0
 	fi
 

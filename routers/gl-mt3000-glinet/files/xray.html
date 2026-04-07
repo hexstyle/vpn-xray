@@ -874,6 +874,8 @@
       formDirty: false,
       rulesDirty: false,
       rulesConfigDirty: false,
+      pendingRulesMode: "",
+      pendingRulesPreviousMode: "",
       rulesEditorBaseHead: "",
       refreshBusy: false,
       rulesBusy: false,
@@ -1107,6 +1109,33 @@
     function clearRulesConfigDirty() {
       state.rulesConfigDirty = false;
       updateRulesConfigUi();
+    }
+
+    function effectiveRulesMode(data = state.rules) {
+      return state.pendingRulesMode || data?.xray_mode || "full";
+    }
+
+    function renderRulesModeUi(data = state.rules) {
+      const mode = effectiveRulesMode(data);
+      const pending = !!state.pendingRulesMode;
+      const modeToggle = document.getElementById("rulesModeToggle");
+      if (modeToggle) {
+        modeToggle.checked = mode === "selective";
+      }
+      const modeStateText = document.getElementById("rulesModeStateText");
+      if (modeStateText) {
+        if (pending) {
+          modeStateText.textContent = mode === "selective"
+            ? "Applying selective routing on this router..."
+            : "Applying full routing on this router...";
+          modeStateText.className = "toggle-state warn";
+        } else {
+          modeStateText.textContent = mode === "selective"
+            ? "Selective routing is active on this router."
+            : "Full routing is active on this router.";
+          modeStateText.className = `toggle-state ${mode === "selective" ? "ok" : ""}`;
+        }
+      }
     }
 
     function rulesConfigPayload() {
@@ -1427,6 +1456,8 @@
       const gitSyncEnabled = !!data.git_sync_enabled;
       const gitConfigured = !!data.git_configured;
       const repoReady = !!data.repo_ready;
+      const mode = effectiveRulesMode(data);
+      const modePending = !!state.pendingRulesMode;
       const intervalSeconds = Number(data.sync_interval || 0) || 30;
       const lastSyncStatus = data.last_sync_status || "never";
       const lastSyncAt = data.last_sync_at ? ` · ${formatUnixTime(data.last_sync_at)}` : "";
@@ -1466,7 +1497,7 @@
         `Rules checksum: ${shortSig(data.rules_checksum)}`,
         `Applied signature: ${shortSig(data.last_apply_signature)}`,
         `Cutover signature: ${shortSig(data.last_cutover_signature)}`,
-        `Routing mode: ${data.xray_mode || "full"}`,
+        `Routing mode: ${mode}${modePending ? " (apply in progress)" : ""}`,
         `Counts: ${counts}`,
         data.last_sync_message ? `Sync message: ${data.last_sync_message}` : "",
         data.last_cutover_message ? `Cutover message: ${data.last_cutover_message}` : "",
@@ -1493,7 +1524,7 @@
       ].filter(Boolean);
       const chips = [
         `<span class="chip ${gitConfigured ? (repoReady ? "ok" : "warn") : (gitSyncEnabled ? "warn" : "ok")}">Sync: ${escapeHtml(gitConfigured ? (repoReady ? "git-ready" : "git-pending") : (gitSyncEnabled ? "git-check-failed" : "local-only"))}</span>`,
-        `<span class="chip ${data.xray_mode === "selective" ? "ok" : ""}">Mode: ${escapeHtml(data.xray_mode || "full")}</span>`,
+        `<span class="chip ${modePending ? "warn" : mode === "selective" ? "ok" : ""}">Mode: ${escapeHtml(mode)}${modePending ? " (applying)" : ""}</span>`,
         `<span class="chip">Rules: ${escapeHtml(counts)}</span>`,
         `<span class="chip ${gitConfigured ? (syncFresh ? "ok" : "warn") : "ok"}">Loop: ${escapeHtml(gitConfigured ? (syncFresh ? "fresh" : "stale") : "idle")}</span>`,
         `<span class="chip ${lastSyncStatus === "ok" || lastSyncStatus === "local-only" ? "ok" : "bad"}">Sync status: ${escapeHtml(lastSyncStatus)}</span>`,
@@ -1523,17 +1554,7 @@
           : "Git sync is disabled.";
         gitSyncStateText.className = `toggle-state ${gitConfigured ? "ok" : gitSyncEnabled ? "warn" : ""}`;
       }
-      const modeToggle = document.getElementById("rulesModeToggle");
-      if (modeToggle) {
-        modeToggle.checked = (data.xray_mode || "full") === "selective";
-      }
-      const modeStateText = document.getElementById("rulesModeStateText");
-      if (modeStateText) {
-        modeStateText.textContent = (data.xray_mode || "full") === "selective"
-          ? "Selective routing is active on this router."
-          : "Full routing is active on this router.";
-        modeStateText.className = `toggle-state ${data.xray_mode === "selective" ? "ok" : ""}`;
-      }
+      renderRulesModeUi(data);
       if (!state.rulesDirty) {
         document.getElementById("rulesText").value = data.rules_text || "";
         state.rulesEditorBaseHead = data.repo_head || "";
@@ -1551,7 +1572,7 @@
       const button = document.getElementById("rulesSyncBtn");
       const hint = document.getElementById("rulesEditorHint");
       const runtimeSwitchOn = state.runtime?.switch_state === "on";
-      const selectiveMode = state.rules?.xray_mode === "selective";
+      const selectiveMode = effectiveRulesMode(state.rules) === "selective";
       const gitConfigured = !!state.rules?.git_configured;
       if (button) {
         button.textContent = gitConfigured
@@ -1631,6 +1652,10 @@
     }
 
     async function setRulesMode(mode, input) {
+      state.pendingRulesPreviousMode = state.rules?.xray_mode || (mode === "selective" ? "full" : "selective");
+      state.pendingRulesMode = mode;
+      renderRulesModeUi(state.rules);
+      updateRulesActionState();
       beginForegroundTask(`Applying ${mode} routing mode with hard cutover...`, 30000);
       setBusy(input, true);
       try {
@@ -1638,15 +1663,21 @@
         if (data.ok === false) {
           throw new Error(data.error || "backend error");
         }
+        state.pendingRulesMode = "";
+        state.pendingRulesPreviousMode = "";
         state.rules = data;
         renderRules(data);
         await refreshAll(false, false, true);
         flash(`Routing mode applied locally with hard cutover: ${mode}.`, "good");
       } catch (err) {
+        const rollbackMode = state.pendingRulesPreviousMode || (mode === "selective" ? "full" : "selective");
+        state.pendingRulesMode = "";
+        state.pendingRulesPreviousMode = "";
         if (state.rules) {
           renderRules(state.rules);
         } else if (input) {
-          input.checked = !input.checked;
+          input.checked = rollbackMode === "selective";
+          renderRulesModeUi({ xray_mode: rollbackMode });
         }
         flash(`Routing mode change failed: ${err.message}`, "bad");
         document.getElementById("rulesTraceOutput").textContent = `Routing mode change failed: ${err.message}`;
