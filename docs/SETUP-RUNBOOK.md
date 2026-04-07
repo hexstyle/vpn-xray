@@ -87,6 +87,7 @@ If the file is absent:
 The repository still ships a local advanced path:
 
 - [`../install.sh`](../install.sh)
+- [`../bootstrap-router-vps.sh`](../bootstrap-router-vps.sh)
 
 Use it when:
 
@@ -136,6 +137,109 @@ Real install:
 ```sh
 ./install.sh
 ```
+
+### One-Shot Router-First Local Command
+
+Use this path when:
+
+- you want one local command, but only local SSH to the router
+- you want the router to provision the VPS itself by password and then switch to its managed key
+- you want to install from the current local checkout instead of waiting for GitHub bootstrap content
+- if you change installer scripts, commit and push those changes before testing the script flow on the router
+
+Minimal command:
+
+```sh
+VPS_PASSWORD='YOUR_VPS_ROOT_PASSWORD' ./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
+```
+
+Predictable first-run command:
+
+```sh
+ROUTER_PASSWORD='ROUTER_ADMIN_PASSWORD' VPS_PASSWORD='YOUR_VPS_ROOT_PASSWORD' ./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
+```
+
+Run it from the repository root. This path installs from the current local checkout, not from GitHub bootstrap content.
+
+Local requirements:
+
+- `bash`
+- `ssh`
+- `ssh-keygen`
+- `tar`
+- `python3`
+- `curl`
+
+Parameter matrix:
+
+| Name | Required? | Default | Used by | Relationship |
+| --- | --- | --- | --- | --- |
+| `router-ssh` | optional | `root@192.168.8.1` | workstation | First positional argument. Overrides `ROUTER_SSH`. |
+| `ROUTER_SSH` | optional | `root@192.168.8.1` | workstation | Used only when `router-ssh` positional argument is omitted. |
+| `vps-host` | required unless `VPS_HOST` is set | none | workstation and router | Second positional argument. Overrides `VPS_HOST`. This becomes the router profile's `ssh_host`. |
+| `VPS_HOST` | required unless `vps-host` is passed | none | workstation and router | Central host value. Also becomes the default for `XRAY_SERVER`. |
+| `ROUTER_PASSWORD` | optional | unset | workstation | Only for workstation -> router login via `SSH_ASKPASS`. It is not sent to the VPS. |
+| `VPS_PASSWORD` | recommended for first run; required in password mode | unset | workstation and router | Required when `VPS_AUTH_MODE=password`. In `auto`, keep it set even if workstation key SSH already works, because the router may still need password fallback if it cannot use the temporary key. |
+| `VPS_SSH_USER` | optional | `root` | workstation and router | Same SSH username is used for workstation preflight and saved router profile. |
+| `VPS_SSH_PORT` | optional | `22` | workstation and router | Same SSH port is used for workstation preflight and saved router profile. |
+| `VPS_SSH_HOST` | optional | `VPS_HOST` | workstation | Used only by the workstation during bootstrap key seeding and validation. It does not change the router profile's saved `ssh_host`. |
+| `XRAY_SERVER` | optional | `VPS_HOST` | router runtime and verification | Public Xray address written into the router profile. It does not change SSH destination selection. |
+| `XRAY_SERVER_NAME` | optional | selected VPS profile default | router and VPS config rendering | Reality `serverName`. If unset, the profile default is used. |
+| `XRAY_PORT` | optional | `443` | router and VPS config rendering | Xray transport port. Independent from `VPS_SSH_PORT`. |
+| `VPS_AUTH_MODE` | optional | `auto` | workstation and router payload | `auto` tries workstation key access first, then falls back when needed. `password` requires `VPS_PASSWORD`. `private_key` still benefits from `VPS_PASSWORD` as fallback. |
+| `PROFILE_ID` | optional | derived from `VPS_HOST` | router profile storage | Stable profile key on the router. Useful when reusing the same profile name across reruns. |
+| `PROFILE_LABEL` | optional | `VPS $VPS_HOST` | router UI | Display label for the router UI. |
+| `ROUTER_PROFILE` | optional advanced | `gl-mt3000-glinet` | local installer | Change only when testing another supported router profile. |
+| `VPS_PROFILE` | optional advanced | `debian-13` | router payload and rendering | Change only when testing another supported VPS profile. |
+| `PROXY_PORT` | optional advanced | `1083` | final verification | Local HTTP proxy port that the script waits for and tests at the end. |
+
+Interrelations that matter:
+
+- `VPS_HOST` is the router's future SSH host. If the router should later SSH to `38.180.250.9`, that value must be `VPS_HOST`, even if the workstation temporarily uses another address during bootstrap.
+- `VPS_SSH_HOST` exists only for workstation-side preflight. Use it when the workstation must reach the VPS through a different address than the router will store and use later.
+- `XRAY_SERVER` controls the public transport address. Keep it equal to `VPS_HOST` unless the Xray/Reality endpoint must differ from the saved SSH host.
+- positional arguments override environment variables for `router-ssh` / `ROUTER_SSH` and `vps-host` / `VPS_HOST`.
+- if local workstation SSH to the router is already established, `ROUTER_PASSWORD` can stay unset.
+- if you want the least surprising first run, keep `VPS_PASSWORD` set even when workstation key-based SSH to the VPS already works.
+
+Examples:
+
+Minimal:
+
+```sh
+VPS_PASSWORD='YOUR_VPS_ROOT_PASSWORD' ./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
+```
+
+Non-interactive router login:
+
+```sh
+ROUTER_PASSWORD='ROUTER_ADMIN_PASSWORD' VPS_PASSWORD='YOUR_VPS_ROOT_PASSWORD' ./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
+```
+
+Use environment variables instead of positional arguments:
+
+```sh
+ROUTER_PASSWORD='ROUTER_ADMIN_PASSWORD' VPS_PASSWORD='YOUR_VPS_ROOT_PASSWORD' VPS_HOST='38.180.250.9' ./bootstrap-router-vps.sh
+```
+
+Different public Xray endpoint, but the same VPS SSH host:
+
+```sh
+VPS_PASSWORD='YOUR_VPS_ROOT_PASSWORD' XRAY_SERVER='vpn.example.com' XRAY_SERVER_NAME='www.microsoft.com' ./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
+```
+
+Different workstation-side preflight host, but the router still saves and uses the public VPS address:
+
+```sh
+VPS_PASSWORD='YOUR_VPS_ROOT_PASSWORD' VPS_SSH_HOST='10.0.0.5' ./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
+```
+
+Verification behavior:
+
+- the script waits for the router proxy on the configured HTTP port
+- it checks `https://www.google.com` through that proxy
+- it compares the proxy egress IP with `XRAY_SERVER` when that value is an IPv4 address
+- if the GL.iNet physical switch is `OFF`, the script stops after install and tells you to turn it `ON`
 
 ## Shared Rules
 

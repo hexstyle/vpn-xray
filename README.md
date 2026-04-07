@@ -27,9 +27,72 @@ Current primary supported combination:
 
 This stack is currently `IPv4-only` end to end. Your VPS must have a usable global IPv4 address.
 
-## Fastest Path
+## Quick Start: One Command for Router + VPS
 
-You do not need WSL, Python, Homebrew, or a local installer for the main path.
+If you already have the supported router and one reachable Debian 13 VPS, start with this path first.
+
+Run it from the repository root:
+
+```sh
+ROUTER_PASSWORD='ROUTER_ADMIN_PASSWORD' VPS_PASSWORD='VPS_ROOT_PASSWORD' ./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
+```
+
+If local SSH to the router already works without an extra password prompt, omit `ROUTER_PASSWORD`:
+
+```sh
+VPS_PASSWORD='VPS_ROOT_PASSWORD' ./bootstrap-router-vps.sh root@192.168.8.1 38.180.250.9
+```
+
+What this one command does:
+
+- opens local SSH to the router
+- installs the router platform from the current local checkout
+- uploads the bundled router and VPS profiles
+- has the router inspect the VPS, install Xray when needed, and sync both sides
+- verifies that the router proxy comes up and can reach the internet through the VPS
+
+Before the final verification step, keep the GL.iNet physical switch in `ON`.
+
+Local requirements for this path:
+
+- `bash`
+- `ssh`
+- `ssh-keygen`
+- `tar`
+- `python3`
+- `curl`
+
+### One-Command Parameters
+
+| Name | Required? | Default | Relationship |
+| --- | --- | --- | --- |
+| `router-ssh` or `ROUTER_SSH` | optional | `root@192.168.8.1` | Positional `router-ssh` wins over `ROUTER_SSH`. This is only the workstation -> router SSH target. |
+| `vps-host` or `VPS_HOST` | yes | none | Positional `vps-host` wins over `VPS_HOST`. This value is written into the router profile as the VPS SSH host and is also the default for `XRAY_SERVER`. |
+| `ROUTER_PASSWORD` | optional | unset | Used only by the workstation for router login. It is not the VPS password and is not stored as the router's saved VPS credential. |
+| `VPS_PASSWORD` | recommended for first run; required in password mode | unset | Required when `VPS_AUTH_MODE=password`. In `auto`, keep it set even if your workstation already has key-based VPS access, because the script may still need password fallback if the router cannot use the temporary key. |
+| `VPS_SSH_USER` / `VPS_SSH_PORT` | optional | `root` / `22` | Used both by the workstation preflight checks and by the router profile that gets applied. |
+| `VPS_SSH_HOST` | optional | `VPS_HOST` | Used only by the workstation while seeding temporary SSH access. The router still stores and later uses `VPS_HOST` as its SSH host. |
+| `XRAY_SERVER` | optional | `VPS_HOST` | Public Xray endpoint. Override this only when the Reality/Xray server address must differ from the SSH host saved in the router profile. |
+| `XRAY_SERVER_NAME` | optional | selected VPS profile default | Reality `serverName`. Set it only when you intentionally want a different value than the profile default. |
+| `XRAY_PORT` | optional | `443` | Xray service port. Independent from `VPS_SSH_PORT`. |
+| `VPS_AUTH_MODE` | optional | `auto` | `auto` tries workstation key access first and falls back when needed. `password` requires `VPS_PASSWORD`. `private_key` still benefits from `VPS_PASSWORD` as a fallback. |
+| `PROFILE_ID` / `PROFILE_LABEL` | optional | derived from `VPS_HOST` / `VPS $VPS_HOST` | Changes only how the profile is named and stored on the router. |
+| `ROUTER_PROFILE` / `VPS_PROFILE` | optional advanced | `gl-mt3000-glinet` / `debian-13` | Change these only when testing another supported profile pair. |
+
+Rules that matter:
+
+- `VPS_HOST` is the central value for the router-side profile: it is the SSH host that the router later uses, and it also becomes the default `XRAY_SERVER`.
+- `VPS_SSH_HOST` affects only the workstation's bootstrap step. It does not change what the router stores.
+- `XRAY_SERVER` affects only the Xray endpoint. It does not change how the router SSHes into the VPS.
+- positional `router-ssh` and `vps-host` override the corresponding environment variables when both are set.
+
+For a fuller parameter matrix and more examples, see [`docs/SETUP-RUNBOOK.md`](./docs/SETUP-RUNBOOK.md).
+
+## UI-First Path
+
+Use this path when you do not want the one-command local-checkout flow above.
+
+You do not need WSL, Python, Homebrew, or a local installer for this UI-first path.
 
 You only need:
 
@@ -178,6 +241,7 @@ See:
 This repository still ships a local advanced installer:
 
 - [`install.sh`](./install.sh)
+- [`bootstrap-router-vps.sh`](./bootstrap-router-vps.sh)
 
 That path is useful for developers, CI, or people who want one local command to orchestrate both the router and the VPS from their workstation.
 
@@ -208,6 +272,7 @@ Every main folder has its own `README.md`.
 - [`bootstrap-router-ssh.sh`](./bootstrap-router-ssh.sh)
   - easiest local helper for the primary path; requires only `ssh` on your computer
 - [`install.sh`](./install.sh)
+- [`bootstrap-router-vps.sh`](./bootstrap-router-vps.sh)
   - advanced local installer for developers and CI
 - [`install.env.example`](./install.env.example)
   - optional input file for the advanced local installer
