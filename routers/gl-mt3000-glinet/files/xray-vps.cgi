@@ -390,12 +390,21 @@ ensure_profile_keypair() {
 	key_path="$(profile_get "$profile_id" managed_key_path)"
 	[ -n "$key_path" ] || key_path="${KEY_DIR}/${profile_id}_ed25519"
 	mkdir -p "$KEY_DIR"
-	if [ ! -f "$key_path" ]; then
-		ssh-keygen -q -t ed25519 -N '' -f "$key_path" >/dev/null 2>&1
+	if [ ! -f "$key_path" ] || [ ! -f "${key_path}.pub" ] || ! sed -n '1p' "${key_path}.pub" | grep -q '^ssh-rsa '; then
+		rm -f "$key_path" "${key_path}.pub"
+		if command -v dropbearkey >/dev/null 2>&1; then
+			dropbearkey -t rsa -s 2048 -f "$key_path" >/dev/null 2>&1 || return 1
+			dropbearkey -y -f "$key_path" 2>/dev/null | grep -o 'ssh-rsa .*' | head -n1 > "${key_path}.pub" || true
+		fi
+		if ! sed -n '1p' "${key_path}.pub" | grep -q '^ssh-rsa '; then
+			rm -f "$key_path" "${key_path}.pub"
+			yes '' | ssh-keygen -q -t rsa -m PEM -f "$key_path" >/dev/null 2>&1 || return 1
+		fi
 	fi
 	chmod 600 "$key_path"
 	chmod 644 "${key_path}.pub"
 	pub="$(cat "${key_path}.pub" 2>/dev/null || true)"
+	[ -n "$pub" ] || return 1
 	profile_set "$profile_id" managed_key_path "$key_path"
 	profile_set "$profile_id" managed_pubkey "$pub"
 }
