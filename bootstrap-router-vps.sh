@@ -195,6 +195,11 @@ ROUTER_SSH_COMMON_OPTS=(
   -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
   -o ControlPath="$control_path"
 )
+ROUTER_SSH_DIRECT_OPTS=(
+  -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
+  -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
+)
 
 if [[ -n "$ROUTER_PASSWORD" ]]; then
   cat > "$router_askpass_script" <<EOF
@@ -203,6 +208,11 @@ printf '%s\n' $(shell_quote "$ROUTER_PASSWORD")
 EOF
   chmod 700 "$router_askpass_script"
   ROUTER_SSH_COMMON_OPTS+=(
+    -o PreferredAuthentications=password,keyboard-interactive
+    -o PubkeyAuthentication=no
+    -o NumberOfPasswordPrompts=1
+  )
+  ROUTER_SSH_DIRECT_OPTS+=(
     -o PreferredAuthentications=password,keyboard-interactive
     -o PubkeyAuthentication=no
     -o NumberOfPasswordPrompts=1
@@ -224,6 +234,17 @@ router_ssh_raw() {
   ssh "${ROUTER_SSH_COMMON_OPTS[@]}" "$@"
 }
 
+router_ssh_direct() {
+  if [[ -n "$ROUTER_PASSWORD" ]]; then
+    SSH_ASKPASS="$router_askpass_script" \
+      SSH_ASKPASS_REQUIRE=force \
+      DISPLAY=1 \
+      ssh "${ROUTER_SSH_DIRECT_OPTS[@]}" "$@"
+  else
+    ssh "${ROUTER_SSH_DIRECT_OPTS[@]}" "$@"
+  fi
+}
+
 router_ssh() {
   router_ssh_raw "$ROUTER_SSH" "$@"
 }
@@ -240,7 +261,9 @@ router_cgi_post() {
   local payload_len
 
   payload_len="$(printf '%s' "$payload" | wc -c | tr -d '[:space:]')"
-  printf '%s' "$payload" | router_ssh "REQUEST_METHOD=POST CONTENT_LENGTH=$payload_len $script_path"
+  # Run CGI POSTs outside the master socket. Multiplexed stdin/stdio handling
+  # is unreliable here and can collapse a valid JSON response into an empty body.
+  printf '%s' "$payload" | router_ssh_direct "$ROUTER_SSH" "REQUEST_METHOD=POST CONTENT_LENGTH=$payload_len $script_path"
 }
 
 vps_ssh() {
@@ -323,7 +346,7 @@ install_bootstrap_key_on_vps() {
     chmod 600 "$bootstrap_key_path"
   fi
 
-  [ -f "${bootstrap_key_path}.pub" ] || return 1
+  [ -n "$pubkey" ] || return 1
   printf '%s\n' "$pubkey" > "${bootstrap_key_path}.pub"
   chmod 644 "${bootstrap_key_path}.pub"
 
@@ -466,8 +489,14 @@ else
 fi
 
 info "Applying VPS profile on the router and provisioning $VPS_HOST ..."
-apply_response="$(router_cgi_post /www/cgi-bin/xray-vps "$apply_payload" | extract_http_body)"
-active_profile_id="$(printf '%s' "$apply_response" | assert_apply_response_ok)"
+apply_response="$(router_cgi_post /www/cgi-bin/xray-vps "$apply_payload" | extract_http_body || true)"
+if [[ -n "$apply_response" ]]; then
+  active_profile_id="$(printf '%s' "$apply_response" | assert_apply_response_ok)"
+else
+  info "WARNING: Router returned an empty apply_profile response. Falling back to runtime verification."
+  active_profile_id="$(router_ssh "uci -q get xray_vps.main.active_profile 2>/dev/null || true" | tr -d '\r\n')"
+  [[ -n "$active_profile_id" ]] || active_profile_id="$PROFILE_ID"
+fi
 
 router_ssh "rm -rf $remote_source_root" >/dev/null 2>&1 || true
 

@@ -959,7 +959,7 @@ ensure_profile_store() {
 	for profile_id in $(profile_ids); do
 		profile_del "$profile_id" ssh_password
 		ensure_profile_material "$profile_id"
-		ensure_profile_keypair "$profile_id"
+		ensure_profile_keypair "$profile_id" || true
 	done
 	uci commit "$PROFILE_PACKAGE"
 }
@@ -1266,7 +1266,9 @@ save_profile_from_request() {
 	profile_del "$profile_id" ssh_password
 
 	ensure_profile_material "$profile_id"
-	ensure_profile_keypair "$profile_id"
+	if ! ensure_profile_keypair "$profile_id"; then
+		return 1
+	fi
 	save_bootstrap_key "$profile_id" "$bootstrap_key"
 	set_active_profile "$profile_id"
 	uci commit "$PROFILE_PACKAGE"
@@ -1303,7 +1305,10 @@ create_profile_action() {
 	profile_set "$profile_id" last_inspect_status 'never'
 	profile_set "$profile_id" last_inspect_at ''
 	ensure_profile_material "$profile_id"
-	ensure_profile_keypair "$profile_id"
+	if ! ensure_profile_keypair "$profile_id"; then
+		emit_error create_profile 'Router could not generate profile key pair.'
+		return 0
+	fi
 	set_active_profile "$profile_id"
 	uci commit "$PROFILE_PACKAGE"
 
@@ -1318,7 +1323,10 @@ create_profile_action() {
 }
 
 save_profile_action() {
-	save_profile_from_request >/dev/null
+	if ! save_profile_from_request >/dev/null; then
+		emit_error save_profile 'Router could not initialize profile material.'
+		return 0
+	fi
 	emit_status_response save_profile
 }
 
@@ -1502,7 +1510,10 @@ generate_key_action() {
 	local profile_id
 
 	profile_id="$(active_profile_id)"
-	ensure_profile_keypair "$profile_id"
+	if ! ensure_profile_keypair "$profile_id"; then
+		emit_error generate_key 'Router could not generate SSH key pair.'
+		return 0
+	fi
 	uci commit "$PROFILE_PACKAGE"
 
 	emit_header
@@ -1518,7 +1529,10 @@ install_key_action() {
 	local profile_id
 
 	profile_id="$(active_profile_id)"
-	ensure_profile_keypair "$profile_id"
+	if ! ensure_profile_keypair "$profile_id"; then
+		emit_error install_key 'Router could not prepare SSH key pair.'
+		return 0
+	fi
 	uci commit "$PROFILE_PACKAGE"
 
 	if ! ensure_ssh_ready "$profile_id"; then
@@ -1545,7 +1559,11 @@ check_profile_action() {
 	local profile_id backup
 
 	backup="$(backup_profile_store)"
-	profile_id="$(save_profile_from_request)"
+	if ! profile_id="$(save_profile_from_request)"; then
+		restore_profile_store "$backup"
+		emit_error check_profile 'Could not save profile settings before inspection.'
+		return 0
+	fi
 	if ! inspect_profile_with_retry "$profile_id" 3 1; then
 		restore_profile_store "$backup"
 		emit_error check_profile 'Router could not establish SSH to the selected VPS with the current auth settings.'
@@ -1678,16 +1696,32 @@ setup_vps_action() {
 }
 
 apply_everything_action() {
-	local profile_id
+	local profile_id cache remote_xray_present remote_managed_meta requested_material
 
-	profile_id="$(save_profile_from_request)"
+	if ! profile_id="$(save_profile_from_request)"; then
+		emit_error apply_profile 'Router could not initialize profile settings.'
+		return 0
+	fi
 	if ! inspect_profile_with_retry "$profile_id" 3 1; then
 		emit_error apply_profile 'Router could not establish SSH to the selected VPS with the current auth settings.'
 		return 0
 	fi
 
-	if [ "$(cache_get "$(profile_cache_path "$profile_id")" REMOTE_XRAY_PRESENT)" = '1' ] && [ -z "$(profile_get "$profile_id" private_key)" ]; then
+	cache="$(profile_cache_path "$profile_id")"
+	remote_xray_present="$(cache_get "$cache" REMOTE_XRAY_PRESENT)"
+	remote_managed_meta="$(cache_get "$cache" REMOTE_MANAGED_META)"
+	requested_material="$(request_value uuid)$(request_value public_key)$(request_value private_key)$(request_value short_id)"
+
+	if [ "$remote_xray_present" = '1' ] && [ -z "$(profile_get "$profile_id" private_key)" ]; then
 		adopt_remote_into_profile "$profile_id"
+	elif [ "$remote_xray_present" = '1' ] && [ "$remote_managed_meta" != '1' ] && [ -z "$requested_material" ]; then
+		adopt_remote_into_profile "$profile_id"
+		apply_profile_to_router_internal "$profile_id" >/dev/null || {
+			emit_error apply_profile 'VPS was detected and adopted, but applying the router profile failed.'
+			return 0
+		}
+		emit_status_response apply_profile
+		return 0
 	fi
 
 	setup_vps_internal "$profile_id" || {
