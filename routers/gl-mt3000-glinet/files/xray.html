@@ -791,7 +791,8 @@
             <label for="rulesGitAuthMode">Git Auth</label>
             <select id="rulesGitAuthMode">
               <option value="auto">Auto detect from URL / stored credentials</option>
-              <option value="none">Local only / anonymous</option>
+              <option value="readonly">Read-only anonymous pull</option>
+              <option value="none">Legacy anonymous / local-only</option>
               <option value="https">HTTPS login / token</option>
               <option value="ssh">SSH key</option>
             </select>
@@ -1113,6 +1114,10 @@
 
     function effectiveRulesMode(data = state.rules) {
       return state.pendingRulesMode || data?.xray_mode || "full";
+    }
+
+    function rulesGitReadonlyLive() {
+      return !!state.rules?.git_readonly;
     }
 
     function renderRulesModeUi(data = state.rules) {
@@ -1455,6 +1460,7 @@
     function renderRules(data) {
       const gitSyncEnabled = !!data.git_sync_enabled;
       const gitConfigured = !!data.git_configured;
+      const gitReadonly = !!data.git_readonly;
       const repoReady = !!data.repo_ready;
       const mode = effectiveRulesMode(data);
       const modePending = !!state.pendingRulesMode;
@@ -1516,6 +1522,7 @@
         `Sync interval: ${intervalSeconds}s`,
         `Repo dirty: ${data.repo_dirty ? "yes" : "no"}`,
         `Auth mode: ${data.git_auth_mode || "none"}`,
+        `Read-only sync: ${gitReadonly ? "yes" : "no"}`,
         `HTTPS username: ${data.git_http_username || "(not set)"}`,
         `HTTPS secret stored: ${data.git_http_password_set ? "yes" : "no"}`,
         `SSH key present: ${data.git_ssh_key_present ? "yes" : "no"}`,
@@ -1525,6 +1532,7 @@
       const chips = [
         `<span class="chip ${gitConfigured ? (repoReady ? "ok" : "warn") : (gitSyncEnabled ? "warn" : "ok")}">Sync: ${escapeHtml(gitConfigured ? (repoReady ? "git-ready" : "git-pending") : (gitSyncEnabled ? "git-check-failed" : "local-only"))}</span>`,
         `<span class="chip ${modePending ? "warn" : mode === "selective" ? "ok" : ""}">Mode: ${escapeHtml(mode)}${modePending ? " (applying)" : ""}</span>`,
+        `<span class="chip ${gitReadonly ? "warn" : "ok"}">Repo access: ${escapeHtml(gitReadonly ? "read-only" : "read-write")}</span>`,
         `<span class="chip">Rules: ${escapeHtml(counts)}</span>`,
         `<span class="chip ${gitConfigured ? (syncFresh ? "ok" : "warn") : "ok"}">Loop: ${escapeHtml(gitConfigured ? (syncFresh ? "fresh" : "stale") : "idle")}</span>`,
         `<span class="chip ${lastSyncStatus === "ok" || lastSyncStatus === "local-only" ? "ok" : "bad"}">Sync status: ${escapeHtml(lastSyncStatus)}</span>`,
@@ -1554,6 +1562,9 @@
           : "Git sync is disabled.";
         gitSyncStateText.className = `toggle-state ${gitConfigured ? "ok" : gitSyncEnabled ? "warn" : ""}`;
       }
+      if (data.git_readonly && state.rulesDirty) {
+        clearRulesDirty();
+      }
       renderRulesModeUi(data);
       if (!state.rulesDirty) {
         document.getElementById("rulesText").value = data.rules_text || "";
@@ -1574,16 +1585,28 @@
       const runtimeSwitchOn = state.runtime?.switch_state === "on";
       const selectiveMode = effectiveRulesMode(state.rules) === "selective";
       const gitConfigured = !!state.rules?.git_configured;
+      const gitReadonly = rulesGitReadonlyLive();
+      const editor = document.getElementById("rulesText");
       if (button) {
-        button.textContent = gitConfigured
+        button.textContent = gitReadonly
+          ? "Pull Read-only Git Rules"
+          : gitConfigured
           ? (state.rulesDirty ? "Save List + Sync Git" : "Sync Git Rules")
           : (state.rulesDirty ? "Save List + Apply Local" : "Apply Local Rules");
+      }
+      if (editor) {
+        editor.readOnly = gitReadonly;
+        editor.title = gitReadonly
+          ? "This repository is synced in read-only mode. Edit the upstream repository instead of editing rules on the router."
+          : "";
       }
       if (hint) {
         const applyScope = runtimeSwitchOn && selectiveMode
           ? "These addresses are active right now because the GL.iNet VPN switch is ON and Routing Mode is selective."
           : "These addresses will only affect traffic after the GL.iNet VPN switch is ON and Routing Mode is selective.";
-        if (!gitConfigured) {
+        if (gitReadonly) {
+          hint.textContent = `Git sync is active in read-only mode. The upstream repository is the source of truth, so editing on the router is locked. Use sync to pull the latest list from Git. ${applyScope}`;
+        } else if (!gitConfigured) {
           hint.textContent = state.rulesDirty
             ? `You have unsaved local edits. Saving applies the local text list directly on this router without any Git sync. ${applyScope}`
             : `Git sync is disabled. The text area below is the authoritative local rules list for this router. ${applyScope}`;
@@ -1607,7 +1630,11 @@
       const sshHint = document.getElementById("rulesGitSshHint");
       const syncHint = document.getElementById("rulesGitSyncHint");
       const syncStateText = document.getElementById("rulesGitSyncStateText");
+      const usernameInput = document.getElementById("rulesGitHttpUsername");
       const passwordInput = document.getElementById("rulesGitHttpPassword");
+      const sshKeyInput = document.getElementById("rulesGitSshPrivateKey");
+      const readonlyAuth = authMode === "readonly" || authMode === "none";
+      const liveReadonly = rulesGitReadonlyLive();
 
       if (syncFieldsWrap) {
         syncFieldsWrap.style.display = syncEnabled ? "" : "none";
@@ -1619,35 +1646,50 @@
         sshWrap.style.display = syncEnabled && authMode === "ssh" ? "" : "none";
       }
       if (pushSelect) {
-        if (!repoUrl) {
+        if (!repoUrl || readonlyAuth || liveReadonly) {
           pushSelect.value = "0";
         }
-        pushSelect.disabled = !syncEnabled || !repoUrl || state.foregroundBusy;
+        pushSelect.disabled = !syncEnabled || !repoUrl || readonlyAuth || liveReadonly || state.foregroundBusy;
       }
       if (saveButton) {
-        saveButton.textContent = syncEnabled ? "Save Git Settings" : "Save Local-Only Mode";
+        saveButton.textContent = !syncEnabled
+          ? "Save Local-Only Mode"
+          : (readonlyAuth ? "Save Read-only Git Settings" : "Save Git Settings");
       }
       if (sshHint) {
         sshHint.textContent = !syncEnabled
           ? "SSH key settings stay unused until Git sync is enabled."
+          : readonlyAuth
+          ? "Read-only Git mode does not use an SSH key on the router."
           : authMode === "ssh"
           ? "Paste a private key only if you want to replace the router's stored git SSH key. Otherwise the existing/generated key stays in place."
           : "SSH key replacement is only used when Git Auth is set to SSH.";
       }
       if (syncHint) {
         syncHint.textContent = syncEnabled
-          ? "When enabled, the router checks that lists/shared-targets.txt exists in the selected repository before saving the sync settings."
+          ? (readonlyAuth
+            ? "When enabled in read-only mode, the router tries to pull lists/shared-targets.txt anonymously from the configured repository. Local editing and push-back stay locked."
+            : "When enabled, the router checks that lists/shared-targets.txt exists in the selected repository before saving the sync settings.")
           : "With Git sync disabled, the router uses only the local text list below and never pulls from Git.";
       }
       if (syncStateText && state.rulesConfigDirty) {
-        syncStateText.textContent = syncEnabled ? "Git sync will be enabled after save." : "Git sync will stay disabled after save.";
+        syncStateText.textContent = !syncEnabled
+          ? "Git sync will stay disabled after save."
+          : (readonlyAuth ? "Read-only Git sync will be enabled after save." : "Git sync will be enabled after save.");
         syncStateText.className = `toggle-state ${syncEnabled ? "warn" : ""}`;
+      }
+      if (usernameInput) {
+        usernameInput.disabled = !syncEnabled || authMode !== "https" || state.foregroundBusy;
       }
       if (passwordInput) {
         const hasStoredSecret = !!state.rules?.git_http_password_set;
+        passwordInput.disabled = !syncEnabled || authMode !== "https" || state.foregroundBusy;
         passwordInput.placeholder = hasStoredSecret
           ? "Leave blank to keep the stored secret"
           : "Optional token or password";
+      }
+      if (sshKeyInput) {
+        sshKeyInput.disabled = !syncEnabled || authMode !== "ssh" || state.foregroundBusy;
       }
     }
 
@@ -1791,13 +1833,24 @@
 
     async function syncRules(button) {
       const wantsGitSync = !!document.getElementById("rulesGitSyncEnabled").checked;
-      beginForegroundTask(wantsGitSync ? "Syncing shared rules with Git and applying them..." : "Applying local rules on this router...", 45000);
+      const readOnlyGit = rulesGitReadonlyLive();
+      beginForegroundTask(
+        readOnlyGit
+          ? "Pulling read-only Git rules and applying them..."
+          : wantsGitSync
+          ? "Syncing shared rules with Git and applying them..."
+          : "Applying local rules on this router...",
+        45000
+      );
       setBusy(button, true);
       try {
-        const data = await callApi(rulesApi, "sync_rules", {
-          rules_text: document.getElementById("rulesText").value,
+        const payload = {
           base_repo_head: state.rulesEditorBaseHead || state.rules?.repo_head || ""
-        }, { timeoutMs: 45000 });
+        };
+        if (!readOnlyGit) {
+          payload.rules_text = document.getElementById("rulesText").value;
+        }
+        const data = await callApi(rulesApi, "sync_rules", payload, { timeoutMs: 45000 });
         if (data.ok === false) {
           throw new Error(data.error || "backend error");
         }

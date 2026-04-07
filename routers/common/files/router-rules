@@ -103,7 +103,11 @@ git_auth_mode() {
 
 	raw="$(git_auth_mode_raw)"
 	case "$raw" in
-		none|https|ssh)
+		none|readonly)
+			printf 'readonly\n'
+			return 0
+			;;
+		https|ssh)
 			printf '%s\n' "$raw"
 			return 0
 			;;
@@ -118,13 +122,17 @@ git_auth_mode() {
 			if [ -n "$(git_http_username)" ] || [ -n "$(git_http_password)" ]; then
 				printf 'https\n'
 			else
-				printf 'none\n'
+				printf 'readonly\n'
 			fi
 			;;
 		*)
-			printf 'none\n'
+			printf 'readonly\n'
 			;;
 	esac
+}
+
+git_readonly_mode() {
+	[ "$(git_auth_mode)" = 'readonly' ]
 }
 
 repo_fetch_url_available() {
@@ -993,6 +1001,11 @@ save_rules_file_internal() {
 	local src="$1"
 	local dst
 
+	if repo_configured && git_readonly_mode; then
+		echo 'Git sync is configured in read-only mode; local rule editing on the router is locked.' >&2
+		return 1
+	fi
+
 	ensure_dirs
 	if repo_configured; then
 		repo_bootstrap || return 1
@@ -1048,7 +1061,7 @@ status_json() {
 	local source_count resolved_count domain_count literal_count xray_ipset_count last_sync_at last_sync_status last_sync_message last_apply_xray
 	local setname current_signature last_cutover_at last_cutover_status last_cutover_message last_cutover_signature cutover_required
 	local sync_phase sync_phase_at sync_phase_message sync_trace last_verified_at last_sync_actor rules_checksum last_apply_signature interval
-	local fetch_url push_url_raw push_url_effective auth_mode http_username http_password_set ssh_key_present ssh_pub git_configured sync_enabled
+	local fetch_url push_url_raw push_url_effective auth_mode http_username http_password_set ssh_key_present ssh_pub git_configured sync_enabled git_readonly
 
 	repo="$(repo_path)"
 	rel="$(rules_relpath)"
@@ -1069,6 +1082,8 @@ status_json() {
 	is_placeholder_value "$push_url_effective" && push_url_effective=''
 	sync_enabled="$(git_sync_enabled)"
 	auth_mode="$(git_auth_mode)"
+	git_readonly=0
+	git_readonly_mode && git_readonly=1
 	http_username="$(git_http_username)"
 	[ -n "$(git_http_password)" ] && http_password_set=1 || http_password_set=0
 	[ -s "$(ssh_key_path)" ] && ssh_key_present=1 || ssh_key_present=0
@@ -1133,6 +1148,7 @@ status_json() {
 	printf '"repo_head":"%s",' "$(json_escape "$repo_head")"
 	printf '"repo_dirty":'; json_bool "$repo_dirty"; printf ','
 	printf '"git_auth_mode":"%s",' "$(json_escape "$auth_mode")"
+	printf '"git_readonly":'; json_bool "$git_readonly"; printf ','
 	printf '"git_http_username":"%s",' "$(json_escape "$http_username")"
 	printf '"git_http_password_set":'; json_bool "$http_password_set"; printf ','
 	printf '"git_ssh_key_present":'; json_bool "$ssh_key_present"; printf ','

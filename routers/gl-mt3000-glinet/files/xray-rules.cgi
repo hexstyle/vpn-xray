@@ -205,7 +205,7 @@ save_config_action() {
 	if request_has_key git_auth_mode; then
 		auth_mode="$(request_value git_auth_mode)"
 		case "$auth_mode" in
-			auto|none|https|ssh)
+			auto|none|readonly|https|ssh)
 				cfg_set_or_delete git_auth_mode "$auth_mode"
 				;;
 			*)
