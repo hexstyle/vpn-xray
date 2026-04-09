@@ -13,7 +13,7 @@ fi
 ENV_ROUTER_SSH="${ROUTER_SSH:-}"
 ENV_ROUTER_HOST="${ROUTER_HOST:-}"
 ENV_ROUTER_LAN_IP="${ROUTER_LAN_IP:-}"
-NETWORK_RELOAD="${NETWORK_RELOAD:-0}"
+NETWORK_RELOAD="${NETWORK_RELOAD:-1}"
 
 load_env_file "$ENV_FILE" "$(default_install_env_example "$ROOT_DIR")"
 ROUTER_PROFILE="${ROUTER_PROFILE:-gl-mt3000-glinet}"
@@ -110,6 +110,17 @@ shell_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
+current_router_rules_mode() {
+  local mode
+
+  mode="$(router_ssh "uci -q get router_rules.global.xray_mode 2>/dev/null || true" | tr -d '\r' | sed -n '1p')"
+  case "$mode" in
+    full|selective)
+      printf '%s\n' "$mode"
+      ;;
+  esac
+}
+
 require_vars \
   ROUTER_SSH \
   ROUTER_HOST \
@@ -133,7 +144,7 @@ reject_placeholder_vars \
   XRAY_SHORT_ID
 
 router_facts="$(
-  router_ssh ROUTER_REQUIRED_COMMANDS="$ROUTER_REQUIRED_COMMANDS" 'sh -s' <<'EOF'
+  router_ssh "ROUTER_REQUIRED_COMMANDS=$(shell_quote "$ROUTER_REQUIRED_COMMANDS") sh -s" <<'EOF'
 model="$(cat /proc/gl-hw-info/model 2>/dev/null | sed -n '1p')"
 missing=''
 for c in $ROUTER_REQUIRED_COMMANDS; do
@@ -173,6 +184,16 @@ if [[ "$PREFLIGHT_ONLY" == "1" ]]; then
   exit 0
 fi
 
+if [[ "${PRESERVE_XRAY_RULES_MODE:-1}" == "1" ]]; then
+  current_mode="$(current_router_rules_mode || true)"
+  case "$current_mode" in
+    full|selective)
+      XRAY_RULES_MODE="$current_mode"
+      echo "Preserving router xray mode: $XRAY_RULES_MODE"
+      ;;
+  esac
+fi
+
 if [[ "${ISOLATE_WIFI_LAN_ONLY:-0}" == "1" && "$ROUTER_HOST" == "$ROUTER_LAN_IP" ]]; then
   echo "Warning: ROUTER_HOST matches ROUTER_LAN_IP while ISOLATE_WIFI_LAN_ONLY=1." >&2
   echo "Deploy may remove the wired LAN port from br-lan and drop the current management path." >&2
@@ -183,6 +204,31 @@ cleanup() {
   rm -rf "$tmpdir"
 }
 trap cleanup EXIT
+
+export \
+  PROXY_PORT \
+  LOCAL_SOCKS_PORT \
+  REDSOCKS_PORT \
+  XRAY_SERVER \
+  XRAY_PORT \
+  XRAY_UUID \
+  XRAY_SERVER_NAME \
+  XRAY_PUBLIC_KEY \
+  XRAY_SHORT_ID \
+  RULES_GIT_SYNC_ENABLED \
+  RULES_REPO_FETCH_URL \
+  RULES_REPO_PUSH_URL \
+  RULES_REPO_BRANCH \
+  RULES_GIT_AUTH_MODE \
+  RULES_GIT_HTTP_USERNAME \
+  RULES_GIT_HTTP_PASSWORD \
+  RULES_GIT_USER_NAME \
+  RULES_GIT_USER_EMAIL \
+  RULES_DNS_RESOLVER \
+  RULES_DEVICE_ID \
+  RULES_ENABLE_PUSH \
+  RULES_SYNC_INTERVAL \
+  XRAY_RULES_MODE
 
 render_template() {
   local input="$1"
@@ -275,7 +321,8 @@ router_ssh "
 "
 
 if [[ "$NETWORK_RELOAD" == "1" ]]; then
-  router_ssh '/etc/init.d/network reload >/dev/null 2>&1 || true'
+  router_ssh "nohup sh -c 'sleep 1; /etc/init.d/network reload >/tmp/vpn-xray-network-reload.log 2>&1 || true' >/dev/null 2>&1 &" >/dev/null 2>&1 || true
+  echo "Queued async network reload on $ROUTER_HOST"
 fi
 
 echo "Deployed to $ROUTER_HOST"

@@ -20,6 +20,7 @@ XRAY_FLOW="${XRAY_FLOW:-}"
 
 VPS_SSH="${VPS_SSH:-root@${VPS_HOST:-}}"
 VPS_HOST="${VPS_HOST:-$(host_from_ssh_target "$VPS_SSH")}"
+VPS_PASSWORD="${VPS_PASSWORD:-}"
 SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
 ensure_installer_ssh_state "$ROOT_DIR"
 INSTALLER_KNOWN_HOSTS="$(installer_known_hosts_file "$ROOT_DIR")"
@@ -28,6 +29,41 @@ VPS_SSH_OPTS=(
   -o StrictHostKeyChecking=accept-new
   -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
 )
+
+vps_ssh_with_password() {
+  local err="$1"
+  shift
+  local askpass_script rc
+
+  [[ -n "$VPS_PASSWORD" ]] || return 1
+
+  if command -v sshpass >/dev/null 2>&1; then
+    SSHPASS="$VPS_PASSWORD" sshpass -e ssh \
+      -o BatchMode=no \
+      -o PreferredAuthentications=password,keyboard-interactive \
+      -o PubkeyAuthentication=no \
+      -o NumberOfPasswordPrompts=1 \
+      "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "$@" 2>"$err"
+    return $?
+  fi
+
+  askpass_script="$(mktemp "$tmpdir/vps-askpass.XXXXXX")"
+  cat > "$askpass_script" <<EOF
+#!/bin/sh
+printf '%s\n' $(shell_quote "$VPS_PASSWORD")
+EOF
+  chmod 700 "$askpass_script"
+  DISPLAY=1 SSH_ASKPASS="$askpass_script" SSH_ASKPASS_REQUIRE=force \
+    ssh \
+      -o BatchMode=no \
+      -o PreferredAuthentications=password,keyboard-interactive \
+      -o PubkeyAuthentication=no \
+      -o NumberOfPasswordPrompts=1 \
+      "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "$@" 2>"$err"
+  rc=$?
+  rm -f "$askpass_script"
+  return "$rc"
+}
 
 vps_ssh() {
   local err rc
@@ -52,11 +88,25 @@ vps_ssh() {
     cat "$err" >&2
   fi
 
+  if [[ -n "$VPS_PASSWORD" ]]; then
+    echo "Key-based SSH failed for $VPS_SSH. Falling back to password auth." >&2
+    if vps_ssh_with_password "$err" "$@"; then
+      rm -f "$err"
+      return 0
+    fi
+    rc=$?
+    cat "$err" >&2
+  fi
+
   echo "VPS SSH failed for $VPS_SSH." >&2
   echo "Checks: the VPS must be reachable, root SSH must already work from this computer, and the installer uses its own host-key cache at $INSTALLER_KNOWN_HOSTS." >&2
   echo "If the VPS was recreated, rerun the install. The stale key in ~/.ssh/known_hosts is no longer relevant to this installer." >&2
   rm -f "$err"
   return "$rc"
+}
+
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
 require_vars \
@@ -72,6 +122,19 @@ cleanup() {
   rm -rf "$tmpdir"
 }
 trap cleanup EXIT
+
+export \
+  XRAY_PORT \
+  XRAY_UUID \
+  XRAY_SERVER_NAME \
+  XRAY_SHORT_ID \
+  XRAY_PRIVATE_KEY \
+  VPS_REMOTE_META_PATH \
+  VPS_XRAY_BINARY \
+  VPS_XRAY_CONFIG_DIR \
+  VPS_XRAY_CONFIG_PATH \
+  VPS_XRAY_LOG_DIR \
+  VPS_XRAY_SERVICE
 
 render_template() {
   local input="$1"
@@ -105,7 +168,7 @@ EOF
 render_template "$VPS_PROFILE_DIR/$VPS_INSTALL_SCRIPT" "$rendered_install"
 
 remote_facts="$(
-  vps_ssh XRAY_PORT="$XRAY_PORT" VPS_XRAY_BINARY="$VPS_XRAY_BINARY" 'sh -s' <<'EOF'
+  vps_ssh "XRAY_PORT=$(shell_quote "$XRAY_PORT") VPS_XRAY_BINARY=$(shell_quote "$VPS_XRAY_BINARY") sh -s" <<'EOF'
 os_id="$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | sed -n '1p')"
 os_version="$(sed -n 's/^VERSION_ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | sed -n '1p')"
 arch="$(uname -m 2>/dev/null || true)"
@@ -207,5 +270,81 @@ vps_ssh 'cat > /tmp/codex-router-vps-config.json && chmod 600 /tmp/codex-router-
 vps_ssh 'cat > /tmp/codex-router-meta.env && chmod 600 /tmp/codex-router-meta.env' < "$rendered_meta"
 vps_ssh 'cat > /tmp/install-vps.remote.sh && chmod 755 /tmp/install-vps.remote.sh' < "$rendered_install"
 vps_ssh 'sh /tmp/install-vps.remote.sh'
+
+vps_ssh "\
+EXPECTED_UUID=$(shell_quote "$XRAY_UUID") \
+EXPECTED_PRIVATE_KEY=$(shell_quote "$XRAY_PRIVATE_KEY") \
+EXPECTED_SHORT_ID=$(shell_quote "$XRAY_SHORT_ID") \
+EXPECTED_SERVER_NAME=$(shell_quote "$XRAY_SERVER_NAME") \
+EXPECTED_PORT=$(shell_quote "$XRAY_PORT") \
+EXPECTED_SERVICE=$(shell_quote "$VPS_XRAY_SERVICE") \
+REMOTE_META_PATH=$(shell_quote "$VPS_REMOTE_META_PATH") \
+REMOTE_CONFIG_PATH=$(shell_quote "$VPS_XRAY_CONFIG_PATH") \
+sh -s" <<'EOF'
+service_state="$(systemctl is-active "$EXPECTED_SERVICE" 2>/dev/null || true)"
+[ "$service_state" = 'active' ] || {
+  echo "VPS Xray service is not active: ${service_state:-unknown}" >&2
+  exit 1
+}
+
+ss -ltnp 2>/dev/null | grep -q ":${EXPECTED_PORT} " || {
+  echo "VPS Xray is not listening on port ${EXPECTED_PORT}." >&2
+  exit 1
+}
+
+[ -f "$REMOTE_META_PATH" ] || {
+  echo "Managed meta file is missing on VPS: $REMOTE_META_PATH" >&2
+  exit 1
+}
+
+meta_uuid="$(sed -n 's/^XRAY_UUID=//p' "$REMOTE_META_PATH" | sed -n '1p')"
+meta_private_key="$(sed -n 's/^XRAY_PRIVATE_KEY=//p' "$REMOTE_META_PATH" | sed -n '1p')"
+meta_short_id="$(sed -n 's/^XRAY_SHORT_ID=//p' "$REMOTE_META_PATH" | sed -n '1p')"
+meta_server_name="$(sed -n 's/^XRAY_SERVER_NAME=//p' "$REMOTE_META_PATH" | sed -n '1p')"
+[ "$meta_uuid" = "$EXPECTED_UUID" ] || {
+  echo "Managed meta UUID mismatch on VPS." >&2
+  exit 1
+}
+[ "$meta_private_key" = "$EXPECTED_PRIVATE_KEY" ] || {
+  echo "Managed meta private key mismatch on VPS." >&2
+  exit 1
+}
+[ "$meta_short_id" = "$EXPECTED_SHORT_ID" ] || {
+  echo "Managed meta short ID mismatch on VPS." >&2
+  exit 1
+}
+[ "$meta_server_name" = "$EXPECTED_SERVER_NAME" ] || {
+  echo "Managed meta server name mismatch on VPS." >&2
+  exit 1
+}
+
+python3 - <<'PY'
+import json
+import os
+import sys
+
+cfg = json.load(open(os.environ["REMOTE_CONFIG_PATH"], "r", encoding="utf-8"))
+inbound = (cfg.get("inbounds") or [{}])[0]
+client = ((inbound.get("settings") or {}).get("clients") or [{}])[0]
+reality = (inbound.get("streamSettings") or {}).get("realitySettings") or {}
+short_ids = reality.get("shortIds") or []
+server_names = reality.get("serverNames") or []
+
+def fail(msg: str) -> None:
+    print(msg, file=sys.stderr)
+    raise SystemExit(1)
+
+if str(inbound.get("port", "")) != os.environ["EXPECTED_PORT"]:
+    fail("VPS config port mismatch.")
+if str(client.get("id", "")) != os.environ["EXPECTED_UUID"]:
+    fail("VPS config UUID mismatch.")
+if str(reality.get("privateKey", "")) != os.environ["EXPECTED_PRIVATE_KEY"]:
+    fail("VPS config private key mismatch.")
+if (short_ids[0] if short_ids else "") != os.environ["EXPECTED_SHORT_ID"]:
+    fail("VPS config short ID mismatch.")
+if (server_names[0] if server_names else "") != os.environ["EXPECTED_SERVER_NAME"]:
+    fail("VPS config server name mismatch.")
+PY
+EOF
 
 echo "Deployed Xray server config to $VPS_HOST using VPS profile $VPS_PROFILE"

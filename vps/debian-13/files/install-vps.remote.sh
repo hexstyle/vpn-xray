@@ -10,6 +10,50 @@ XRAY_SERVICE='${VPS_XRAY_SERVICE}'
 REMOTE_META_PATH='${VPS_REMOTE_META_PATH}'
 XRAY_PORT='${XRAY_PORT}'
 
+service_user() {
+  local user
+
+  user="$(systemctl show -p User --value "$XRAY_SERVICE" 2>/dev/null || true)"
+  [ -n "$user" ] || user='root'
+  printf '%s\n' "$user"
+}
+
+service_group() {
+  local user="$1"
+  local group
+
+  group="$(systemctl show -p Group --value "$XRAY_SERVICE" 2>/dev/null || true)"
+  if [ -z "$group" ]; then
+    group="$(id -gn "$user" 2>/dev/null || true)"
+  fi
+  [ -n "$group" ] || group="$user"
+  printf '%s\n' "$group"
+}
+
+fix_runtime_permissions() {
+  local user="$1"
+  local group="$2"
+
+  install -d -m 750 "$XRAY_CONFIG_DIR" "$XRAY_LOG_DIR"
+  chown "$user:$group" "$XRAY_CONFIG_DIR" "$XRAY_LOG_DIR"
+  chmod 750 "$XRAY_CONFIG_DIR" "$XRAY_LOG_DIR"
+
+  touch "$XRAY_LOG_DIR/access.log" "$XRAY_LOG_DIR/error.log"
+  find "$XRAY_LOG_DIR" -maxdepth 1 -type f -name '*.log*' -exec chown "$user:$group" '{}' ';' 2>/dev/null || true
+  find "$XRAY_LOG_DIR" -maxdepth 1 -type f -name '*.log*' -exec chmod 640 '{}' ';' 2>/dev/null || true
+}
+
+restart_xray() {
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable "$XRAY_SERVICE" >/dev/null 2>&1
+  systemctl restart "$XRAY_SERVICE"
+}
+
+dump_xray_failure() {
+  systemctl status "$XRAY_SERVICE" --no-pager 2>/dev/null || true
+  journalctl -u "$XRAY_SERVICE" -n 40 --no-pager 2>/dev/null || true
+}
+
 if [ ! -x "$XRAY_BIN" ]; then
   tmp='/tmp/install-xray.sh'
   curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh -o "$tmp" || \
@@ -18,7 +62,9 @@ if [ ! -x "$XRAY_BIN" ]; then
   rm -f "$tmp"
 fi
 
-install -d -m 750 "$XRAY_CONFIG_DIR" "$XRAY_LOG_DIR"
+runtime_user="$(service_user)"
+runtime_group="$(service_group "$runtime_user")"
+fix_runtime_permissions "$runtime_user" "$runtime_group"
 "$XRAY_BIN" run -test -config /tmp/codex-router-vps-config.json >/dev/null 2>&1
 
 if [ -f "$XRAY_CONFIG_PATH" ]; then
@@ -26,19 +72,35 @@ if [ -f "$XRAY_CONFIG_PATH" ]; then
 fi
 
 cat /tmp/codex-router-vps-config.json > "$XRAY_CONFIG_PATH"
-chmod 600 "$XRAY_CONFIG_PATH"
+chown "$runtime_user:$runtime_group" "$XRAY_CONFIG_PATH"
+chmod 640 "$XRAY_CONFIG_PATH"
 cat /tmp/codex-router-meta.env > "$REMOTE_META_PATH"
 chmod 600 "$REMOTE_META_PATH"
+fix_runtime_permissions "$runtime_user" "$runtime_group"
 
-systemctl enable "$XRAY_SERVICE" >/dev/null 2>&1
-systemctl restart "$XRAY_SERVICE"
-systemctl is-active "$XRAY_SERVICE" >/dev/null
+restart_xray || {
+  dump_xray_failure
+  exit 1
+}
+systemctl is-active "$XRAY_SERVICE" >/dev/null || {
+  dump_xray_failure
+  exit 1
+}
 i=0
 while [ "$i" -lt 15 ]; do
   ss -ltnp 2>/dev/null | grep -q ":${XRAY_PORT} " && break
-  systemctl is-active "$XRAY_SERVICE" >/dev/null
+  systemctl is-active "$XRAY_SERVICE" >/dev/null || {
+    dump_xray_failure
+    exit 1
+  }
   i=$((i + 1))
   sleep 1
 done
-systemctl is-active "$XRAY_SERVICE" >/dev/null
-ss -ltnp 2>/dev/null | grep -q ":${XRAY_PORT} "
+systemctl is-active "$XRAY_SERVICE" >/dev/null || {
+  dump_xray_failure
+  exit 1
+}
+ss -ltnp 2>/dev/null | grep -q ":${XRAY_PORT} " || {
+  dump_xray_failure
+  exit 1
+}

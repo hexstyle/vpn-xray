@@ -1120,6 +1120,37 @@
       return !!state.rules?.git_readonly;
     }
 
+    function rulesGitReadonlyProjected() {
+      const syncEnabled = !!document.getElementById("rulesGitSyncEnabled")?.checked;
+      const authMode = document.getElementById("rulesGitAuthMode")?.value || "none";
+      const repoUrl = document.getElementById("rulesRepoFetchUrl")?.value.trim() || "";
+      const httpUsername = document.getElementById("rulesGitHttpUsername")?.value.trim() || "";
+      const httpPassword = document.getElementById("rulesGitHttpPassword")?.value || "";
+
+      if (!syncEnabled) {
+        return false;
+      }
+
+      switch (authMode) {
+        case "none":
+        case "readonly":
+          return true;
+        case "https":
+        case "ssh":
+          return false;
+        default:
+          break;
+      }
+
+      if (repoUrl.startsWith("git@") || repoUrl.startsWith("ssh://")) {
+        return false;
+      }
+      if (repoUrl.startsWith("http://") || repoUrl.startsWith("https://")) {
+        return !(httpUsername || httpPassword);
+      }
+      return rulesGitReadonlyLive();
+    }
+
     function renderRulesModeUi(data = state.rules) {
       const mode = effectiveRulesMode(data);
       const pending = !!state.pendingRulesMode;
@@ -1634,7 +1665,7 @@
       const passwordInput = document.getElementById("rulesGitHttpPassword");
       const sshKeyInput = document.getElementById("rulesGitSshPrivateKey");
       const readonlyAuth = authMode === "readonly" || authMode === "none";
-      const liveReadonly = rulesGitReadonlyLive();
+      const projectedReadonly = rulesGitReadonlyProjected();
 
       if (syncFieldsWrap) {
         syncFieldsWrap.style.display = syncEnabled ? "" : "none";
@@ -1646,15 +1677,15 @@
         sshWrap.style.display = syncEnabled && authMode === "ssh" ? "" : "none";
       }
       if (pushSelect) {
-        if (!repoUrl || readonlyAuth || liveReadonly) {
+        if (!repoUrl || projectedReadonly) {
           pushSelect.value = "0";
         }
-        pushSelect.disabled = !syncEnabled || !repoUrl || readonlyAuth || liveReadonly || state.foregroundBusy;
+        pushSelect.disabled = !syncEnabled || !repoUrl || projectedReadonly || state.foregroundBusy;
       }
       if (saveButton) {
         saveButton.textContent = !syncEnabled
           ? "Save Local-Only Mode"
-          : (readonlyAuth ? "Save Read-only Git Settings" : "Save Git Settings");
+          : (projectedReadonly ? "Save Read-only Git Settings" : "Save Git Settings");
       }
       if (sshHint) {
         sshHint.textContent = !syncEnabled
@@ -1667,7 +1698,7 @@
       }
       if (syncHint) {
         syncHint.textContent = syncEnabled
-          ? (readonlyAuth
+          ? (projectedReadonly
             ? "When enabled in read-only mode, the router tries to pull lists/shared-targets.txt anonymously from the configured repository. Local editing and push-back stay locked."
             : "When enabled, the router checks that lists/shared-targets.txt exists in the selected repository before saving the sync settings.")
           : "With Git sync disabled, the router uses only the local text list below and never pulls from Git.";
@@ -1675,7 +1706,7 @@
       if (syncStateText && state.rulesConfigDirty) {
         syncStateText.textContent = !syncEnabled
           ? "Git sync will stay disabled after save."
-          : (readonlyAuth ? "Read-only Git sync will be enabled after save." : "Git sync will be enabled after save.");
+          : (projectedReadonly ? "Read-only Git sync will be enabled after save." : "Git sync will be enabled after save.");
         syncStateText.className = `toggle-state ${syncEnabled ? "warn" : ""}`;
       }
       if (usernameInput) {
@@ -2056,6 +2087,16 @@
     });
     document.getElementById("rulesGitSyncEnabled").addEventListener("change", updateRulesConfigUi);
     document.getElementById("rulesGitAuthMode").addEventListener("change", updateRulesConfigUi);
+    [
+      "rulesRepoFetchUrl",
+      "rulesGitHttpUsername",
+      "rulesGitHttpPassword"
+    ].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener("input", updateRulesConfigUi);
+      }
+    });
 
     setStartupControlsDisabled(true);
     flashLoading("Loading current router and VPS state...");

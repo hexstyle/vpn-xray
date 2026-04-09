@@ -390,16 +390,9 @@ ensure_profile_keypair() {
 	key_path="$(profile_get "$profile_id" managed_key_path)"
 	[ -n "$key_path" ] || key_path="${KEY_DIR}/${profile_id}_ed25519"
 	mkdir -p "$KEY_DIR"
-	if [ ! -f "$key_path" ] || [ ! -f "${key_path}.pub" ] || ! sed -n '1p' "${key_path}.pub" | grep -q '^ssh-rsa '; then
+	if [ ! -f "$key_path" ] || [ ! -f "${key_path}.pub" ] || ! sed -n '1p' "${key_path}.pub" | grep -q '^ssh-rsa ' || ! ssh-keygen -y -f "$key_path" >/dev/null 2>&1; then
 		rm -f "$key_path" "${key_path}.pub"
-		if command -v dropbearkey >/dev/null 2>&1; then
-			dropbearkey -t rsa -s 2048 -f "$key_path" >/dev/null 2>&1 || return 1
-			dropbearkey -y -f "$key_path" 2>/dev/null | grep -o 'ssh-rsa .*' | head -n1 > "${key_path}.pub" || true
-		fi
-		if ! sed -n '1p' "${key_path}.pub" | grep -q '^ssh-rsa '; then
-			rm -f "$key_path" "${key_path}.pub"
-			yes '' | ssh-keygen -q -t rsa -m PEM -f "$key_path" >/dev/null 2>&1 || return 1
-		fi
+		ssh-keygen -q -t rsa -b 2048 -m PEM -N '' -f "$key_path" >/dev/null 2>&1 || return 1
 	fi
 	chmod 600 "$key_path"
 	chmod 644 "${key_path}.pub"
@@ -1136,10 +1129,6 @@ refresh_remote_cache() {
 	local profile_id="$1"
 	local output public_output private_key cache install_profile install_label install_supported install_notes tmp_cache
 
-	if ! ssh_works "$profile_id"; then
-		return 1
-	fi
-
 	output="$(remote_inspect_output "$profile_id" 2>/dev/null || true)"
 	if [ -z "$output" ] || ! printf '%s' "$output" | grep -q '^REMOTE_STATUS=ok'; then
 		return 1
@@ -1402,6 +1391,9 @@ ensure_ssh_ready() {
 	local mode
 
 	if ssh_works "$profile_id"; then
+		profile_set "$profile_id" auth_mode 'managed_key'
+		profile_del "$profile_id" ssh_password
+		uci commit "$PROFILE_PACKAGE"
 		return 0
 	fi
 
@@ -1631,18 +1623,13 @@ apply_profile_to_router_action() {
 
 setup_vps_internal() {
 	local profile_id="$1"
-	local rendered meta rendered_install install_supported vps_profile install_script_rel install_script_path remote_meta_path
+	local rendered meta rendered_install vps_profile install_script_rel install_script_path remote_meta_path
 
 	if [ -z "$(profile_get "$profile_id" private_key)" ]; then
 		return 1
 	fi
 
-	if ! inspect_profile_with_retry "$profile_id" 3 1; then
-		return 1
-	fi
-
-	install_supported="$(cache_get "$(profile_cache_path "$profile_id")" REMOTE_INSTALL_SUPPORTED)"
-	if [ "$install_supported" != '1' ]; then
+	if ! ensure_ssh_ready "$profile_id"; then
 		return 1
 	fi
 
@@ -1702,26 +1689,29 @@ apply_everything_action() {
 		emit_error apply_profile 'Router could not initialize profile settings.'
 		return 0
 	fi
-	if ! inspect_profile_with_retry "$profile_id" 3 1; then
-		emit_error apply_profile 'Router could not establish SSH to the selected VPS with the current auth settings.'
-		return 0
-	fi
-
-	cache="$(profile_cache_path "$profile_id")"
-	remote_xray_present="$(cache_get "$cache" REMOTE_XRAY_PRESENT)"
-	remote_managed_meta="$(cache_get "$cache" REMOTE_MANAGED_META)"
 	requested_material="$(request_value uuid)$(request_value public_key)$(request_value private_key)$(request_value short_id)"
 
-	if [ "$remote_xray_present" = '1' ] && [ -z "$(profile_get "$profile_id" private_key)" ]; then
-		adopt_remote_into_profile "$profile_id"
-	elif [ "$remote_xray_present" = '1' ] && [ "$remote_managed_meta" != '1' ] && [ -z "$requested_material" ]; then
-		adopt_remote_into_profile "$profile_id"
-		apply_profile_to_router_internal "$profile_id" >/dev/null || {
-			emit_error apply_profile 'VPS was detected and adopted, but applying the router profile failed.'
+	if [ -z "$requested_material" ]; then
+		if ! inspect_profile_with_retry "$profile_id" 3 1; then
+			emit_error apply_profile 'Router could not establish SSH to the selected VPS with the current auth settings.'
 			return 0
-		}
-		emit_status_response apply_profile
-		return 0
+		fi
+
+		cache="$(profile_cache_path "$profile_id")"
+		remote_xray_present="$(cache_get "$cache" REMOTE_XRAY_PRESENT)"
+		remote_managed_meta="$(cache_get "$cache" REMOTE_MANAGED_META)"
+
+		if [ "$remote_xray_present" = '1' ] && [ -z "$(profile_get "$profile_id" private_key)" ]; then
+			adopt_remote_into_profile "$profile_id"
+		elif [ "$remote_xray_present" = '1' ] && [ "$remote_managed_meta" != '1' ]; then
+			adopt_remote_into_profile "$profile_id"
+			apply_profile_to_router_internal "$profile_id" >/dev/null || {
+				emit_error apply_profile 'VPS was detected and adopted, but applying the router profile failed.'
+				return 0
+			}
+			emit_status_response apply_profile
+			return 0
+		fi
 	fi
 
 	setup_vps_internal "$profile_id" || {

@@ -188,6 +188,24 @@ git_sync_requested() {
 	[ "${RULES_GIT_SYNC_ENABLED:-0}" = '1' ]
 }
 
+effective_xray_rules_mode() {
+	local existing
+
+	existing="$(uci -q get router_rules.global.xray_mode 2>/dev/null || true)"
+	case "$existing" in
+		full|selective)
+			printf '%s\n' "$existing"
+			;;
+		*)
+			printf '%s\n' "${XRAY_RULES_MODE:-full}"
+			;;
+	esac
+}
+
+defer_xray_activation() {
+	[ "${DEFER_XRAY_ACTIVATION:-0}" = '1' ]
+}
+
 ensure_git_sync_dependencies() {
 	git_sync_requested || return 0
 
@@ -200,6 +218,17 @@ ensure_git_sync_dependencies() {
 	ssh -V 2>&1 | grep -q 'OpenSSH_' || fail "ssh is still not provided by OpenSSH after installing openssh-client."
 	command -v ssh-keygen >/dev/null 2>&1 || fail "ssh-keygen is still unavailable after installing openssh-keygen."
 	command -v git >/dev/null 2>&1 || fail "git is still unavailable after installing git."
+}
+
+ensure_vps_ssh_dependencies() {
+	info "Ensuring router-managed VPS SSH dependencies..."
+	ensure_pkg_installed_or_fallback openssh-client "router-managed VPS provisioning"
+	ensure_pkg_installed_or_fallback openssh-keygen "router-managed VPS provisioning"
+	ensure_pkg_installed_or_fallback sshpass "router-managed VPS password bootstrap"
+
+	ssh -V 2>&1 | grep -q 'OpenSSH_' || fail "ssh is still not provided by OpenSSH after installing openssh-client."
+	command -v ssh-keygen >/dev/null 2>&1 || fail "ssh-keygen is still unavailable after installing openssh-keygen."
+	command -v sshpass >/dev/null 2>&1 || fail "sshpass is still unavailable after installing sshpass."
 }
 
 download_to_file() {
@@ -303,7 +332,7 @@ render_router_rules_conf() {
 	dns_resolver="$(escape_sed_replacement "${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}")"
 	device_id="$(escape_sed_replacement "${RULES_DEVICE_ID:-gl-router}")"
 	enable_push="$(escape_sed_replacement "${RULES_ENABLE_PUSH:-0}")"
-	mode="$(escape_sed_replacement "${XRAY_RULES_MODE:-full}")"
+	mode="$(escape_sed_replacement "$(effective_xray_rules_mode)")"
 	sync_interval="$(escape_sed_replacement "${RULES_SYNC_INTERVAL:-30}")"
 
 	sed \
@@ -401,6 +430,7 @@ install_platform() {
 	ensure_pkg_installed ca-certificates
 	ensure_cmd_via_package curl curl
 	ensure_cmd_via_package unzip unzip
+	ensure_vps_ssh_dependencies
 	try_pkg_install git "Git-backed shared rules sync" || true
 	try_pkg_install git-http "Git-backed shared rules sync" || true
 	ensure_git_sync_dependencies
@@ -456,7 +486,7 @@ set router_rules.global.git_user_email='${RULES_GIT_USER_EMAIL:-router-rules@exa
 set router_rules.global.dns_resolver='${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}'
 set router_rules.global.local_device_id='${RULES_DEVICE_ID:-gl-router}'
 set router_rules.global.enable_push='${RULES_ENABLE_PUSH:-0}'
-set router_rules.global.xray_mode='${XRAY_RULES_MODE:-full}'
+set router_rules.global.xray_mode='$(effective_xray_rules_mode)'
 set router_rules.global.sync_interval='${RULES_SYNC_INTERVAL:-30}'
 EOF
 	uci commit router_rules
@@ -562,8 +592,12 @@ EOF
 	/etc/init.d/gl_switch_button_check disable >/dev/null 2>&1 || true
 	/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
 	/etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
-	/usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
-	/etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
+	if defer_xray_activation; then
+		info "Deferred Xray runtime activation; router path will stay off until a profile is explicitly applied."
+	else
+		/usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
+		/etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
+	fi
 
 	switch_state="$(current_switch_state)"
 	info "Router platform is installed."

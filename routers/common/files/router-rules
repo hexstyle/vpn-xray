@@ -7,7 +7,7 @@ PATH='/usr/sbin:/usr/bin:/sbin:/bin'
 CONFIG_PKG='router_rules'
 CONFIG_SECTION='global'
 DEFAULT_REPO_FETCH_URL='REPLACE_WITH_RULES_REPO_FETCH_URL'
-DEFAULT_REPO_PUSH_URL='REPLACE_WITH_RULES_REPO_PUSH_URL'
+DEFAULT_REPO_PUSH_URL=''
 DEFAULT_REPO_BRANCH='main'
 DEFAULT_REPO_PATH='/etc/router-rules/repo'
 DEFAULT_RULES_RELPATH='lists/shared-targets.txt'
@@ -91,6 +91,9 @@ repo_push_url() {
 	local value
 
 	value="$(repo_push_url_raw)"
+	if is_placeholder_value "$value"; then
+		value=''
+	fi
 	if [ -n "$value" ]; then
 		printf '%s\n' "$value"
 	else
@@ -298,6 +301,10 @@ xray_state_signature() {
 	mode="$(xray_mode)"
 	rules_sig="$(file_signature "$(repo_rules_path)")"
 	printf '%s|%s\n' "$mode" "$rules_sig"
+}
+
+resolved_state_signature() {
+	file_signature "$(resolved_file)"
 }
 
 lan_ipv4_cidr() {
@@ -714,24 +721,27 @@ resolve_rules_internal() {
 }
 
 build_xray_ipset_internal() {
-	local setname literals domains conf tmp_conf count
+	local setname domains conf tmp_conf resolved count
 
-	split_rules_internal
+	# Preload literal targets and current A-record snapshots for domains.
+	# On some OpenWrt/dnsmasq builds the ipset hook does not populate
+	# runtime sets reliably, so selective routing must not depend on it.
+	resolve_rules_internal
 	setname="$(xray_ipset)"
-	literals="$(literal_file)"
 	domains="$(domain_file)"
+	resolved="$(resolved_file)"
 	conf="$(xray_dnsmasq_conf)"
 	tmp_conf="$(mktemp)"
 	count=0
 
 	ipset create "$setname" hash:net family inet maxelem 65536 -exist
 	ipset flush "$setname"
-	if [ -f "$literals" ]; then
+	if [ -f "$resolved" ]; then
 		while IFS= read -r value || [ -n "$value" ]; do
 			[ -n "$value" ] || continue
 			ipset add "$setname" "$value" -exist
 			count=$((count + 1))
-		done < "$literals"
+		done < "$resolved"
 	fi
 
 	: > "$tmp_conf"
@@ -779,7 +789,7 @@ clear_xray_dnsmasq_internal() {
 }
 
 apply_xray_internal() {
-	local mode count setname signature need_restart last_mode final_rule conf
+	local mode count setname signature resolved_sig need_restart last_mode final_rule conf
 
 	mode="$(xray_mode)"
 	setname="$(xray_ipset)"
@@ -815,8 +825,14 @@ apply_xray_internal() {
 	count="$(status_get xray_ipset_count)"
 	set_apply_status xray "mode=${mode} applied ${count} targets"
 	signature="$(xray_state_signature)"
+	if [ "$mode" = 'selective' ]; then
+		resolved_sig="$(resolved_state_signature)"
+	else
+		resolved_sig=''
+	fi
 	status_set last_apply_xray_signature "$signature"
 	status_set last_apply_xray_mode "$mode"
+	status_set last_apply_resolved_signature "$resolved_sig"
 }
 
 hard_cutover_xray_internal() {
@@ -851,8 +867,16 @@ sync_apply_xray_internal() {
 		status_set last_sync_status 'local-only'
 		status_set last_sync_message 'Git sync is not configured; background checks stay idle and the local router rules file remains authoritative.'
 		status_set last_sync_at "$(date +%s)"
-		status_set last_verified_at "$(date +%s)"
-		set_sync_phase verified 'Git sync is disabled; local router rules are authoritative.'
+		if resolved_snapshot_needs_apply_internal; then
+			set_sync_phase drift_detected 'Resolved domain targets changed for selective routing; starting cutover'
+			hard_cutover_xray_internal
+		elif xray_needs_apply_internal; then
+			set_sync_phase drift_detected 'Found runtime drift against the current ruleset; starting cutover'
+			hard_cutover_xray_internal
+		else
+			status_set last_verified_at "$(date +%s)"
+			set_sync_phase verified 'Git sync is disabled; local router rules are authoritative.'
+		fi
 		return 0
 	fi
 
@@ -860,6 +884,9 @@ sync_apply_xray_internal() {
 	sync_repo_internal || return 1
 	if [ "$(status_get last_sync_changed)" = '1' ]; then
 		set_sync_phase drift_detected 'Found changes between Git remote and the current router ruleset; starting cutover'
+		hard_cutover_xray_internal
+	elif resolved_snapshot_needs_apply_internal; then
+		set_sync_phase drift_detected 'Resolved domain targets changed for selective routing; starting cutover'
 		hard_cutover_xray_internal
 	elif xray_needs_apply_internal; then
 		set_sync_phase drift_detected 'Found runtime drift against the current ruleset; starting cutover'
@@ -901,6 +928,19 @@ xray_needs_apply_internal() {
 	fi
 
 	return 1
+}
+
+resolved_snapshot_needs_apply_internal() {
+	local mode current_sig last_sig
+
+	mode="$(xray_mode)"
+	[ "$mode" = 'selective' ] || return 1
+	resolve_rules_internal
+	current_sig="$(resolved_state_signature)"
+	last_sig="$(status_get last_apply_resolved_signature)"
+	[ -n "$current_sig" ] || return 1
+	[ "$current_sig" = "$last_sig" ] && return 1
+	return 0
 }
 
 sync_repo_internal() {
