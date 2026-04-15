@@ -7,6 +7,8 @@ REQUEST_DATA=''
 CONFIG_PKG='router_rules'
 CONFIG_SECTION='global'
 DEFAULT_SSH_KEY_PATH='/etc/router-rules/ssh/routerRules_ed25519'
+RULES_MODE_LOCK_WAIT='120'
+RULES_MODE_TIMEOUT='150'
 
 emit_header() {
 	printf 'Content-Type: application/json\r\n'
@@ -68,6 +70,10 @@ cfg_get() {
 	uci -q get "${CONFIG_PKG}.${CONFIG_SECTION}.$1" 2>/dev/null || true
 }
 
+status_file_value() {
+	sed -n "s/^$1=//p" /tmp/router-rules.status 2>/dev/null | sed -n '1p'
+}
+
 cfg_set_or_delete() {
 	local key="$1"
 	local value="$2"
@@ -126,6 +132,65 @@ check_remote_rules() {
 	[ -n "$message" ] || message='Git sync check failed.'
 	printf '%s\n' "$message"
 	return 1
+}
+
+sync_error_message() {
+	local log_file="$1"
+	local rc="$2"
+	local prev_last_sync_at="$3"
+	local prev_sync_phase_at="$4"
+	local message current_last_sync_at current_sync_phase_at
+
+	message=''
+	if [ -f "$log_file" ]; then
+		message="$(sed '/^[[:space:]]*$/d' "$log_file" | sed -n '1p')"
+	fi
+
+	current_last_sync_at="$(status_file_value last_sync_at)"
+	current_sync_phase_at="$(status_file_value sync_phase_at)"
+	if [ -z "$message" ] && [ "$current_last_sync_at" != "$prev_last_sync_at" ]; then
+		message="$(status_file_value last_sync_message)"
+	fi
+	if [ -z "$message" ] && [ "$current_sync_phase_at" != "$prev_sync_phase_at" ]; then
+		message="$(status_file_value sync_phase_message)"
+	fi
+	if [ -z "$message" ] && [ "$rc" -eq 124 ]; then
+		message='Rules sync/apply timed out.'
+	fi
+	[ -n "$message" ] || message='Rules sync/apply failed.'
+	printf '%s\n' "$message"
+}
+
+mode_error_message() {
+	local log_file="$1"
+	local rc="$2"
+	local prev_last_cutover_at="$3"
+	local prev_sync_phase_at="$4"
+	local message current_last_cutover_at current_sync_phase_at
+
+	message=''
+	if [ -f "$log_file" ]; then
+		message="$(sed '/^[[:space:]]*$/d' "$log_file" | sed -n '1p')"
+	fi
+
+	current_last_cutover_at="$(status_file_value last_cutover_at)"
+	current_sync_phase_at="$(status_file_value sync_phase_at)"
+	if [ -z "$message" ] && [ "$current_last_cutover_at" != "$prev_last_cutover_at" ]; then
+		message="$(status_file_value last_cutover_message)"
+	fi
+	if [ -z "$message" ] && [ "$current_sync_phase_at" != "$prev_sync_phase_at" ]; then
+		message="$(status_file_value sync_phase_message)"
+	fi
+	case "$message" in
+		'router-rules lock timeout')
+			message='Another router-rules operation is still running; mode change timed out waiting for the lock.'
+			;;
+	esac
+	if [ -z "$message" ] && [ "$rc" -eq 124 ]; then
+		message='Routing mode change timed out on this router.'
+	fi
+	[ -n "$message" ] || message='Failed to change routing mode on this router.'
+	printf '%s\n' "$message"
 }
 
 save_config_action() {
@@ -275,9 +340,13 @@ save_config_action() {
 }
 
 sync_action() {
-	local tmp rules_text base_repo_head
+	local tmp run_log rules_text base_repo_head rc error_message prev_last_sync_at prev_sync_phase_at
 	tmp="$(mktemp)"
+	run_log="$(mktemp)"
 	base_repo_head=''
+	rc=0
+	prev_last_sync_at="$(status_file_value last_sync_at)"
+	prev_sync_phase_at="$(status_file_value sync_phase_at)"
 
 	if request_has_key rules_text; then
 		rules_text="$(request_value rules_text)"
@@ -290,40 +359,31 @@ sync_action() {
 	/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
 	if command -v timeout >/dev/null 2>&1; then
 		if request_has_key rules_text; then
-			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules save-sync-apply-xray "$tmp" >/dev/null 2>&1 || {
-				rm -f "$tmp"
-				emit_error sync_rules 'Rules sync/apply failed.'
-				return 0
-			}
+			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules save-sync-apply-xray "$tmp" >"$run_log" 2>&1 || rc=$?
 		else
-			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || {
-				rm -f "$tmp"
-				emit_error sync_rules 'Rules sync/apply failed.'
-				return 0
-			}
+			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules sync-apply-xray >"$run_log" 2>&1 || rc=$?
 		fi
 	else
 		if request_has_key rules_text; then
-			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules save-sync-apply-xray "$tmp" >/dev/null 2>&1 || {
-				rm -f "$tmp"
-				emit_error sync_rules 'Rules sync/apply failed.'
-				return 0
-			}
+			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules save-sync-apply-xray "$tmp" >"$run_log" 2>&1 || rc=$?
 		else
-			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || {
-				rm -f "$tmp"
-				emit_error sync_rules 'Rules sync/apply failed.'
-				return 0
-			}
+			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules sync-apply-xray >"$run_log" 2>&1 || rc=$?
 		fi
 	fi
 
-	rm -f "$tmp"
+	if [ "$rc" -ne 0 ]; then
+		error_message="$(sync_error_message "$run_log" "$rc" "$prev_last_sync_at" "$prev_sync_phase_at")"
+		rm -f "$tmp" "$run_log"
+		emit_error sync_rules "$error_message"
+		return 0
+	fi
+
+	rm -f "$tmp" "$run_log"
 	status_action
 }
 
 set_mode_action() {
-	local mode
+	local mode run_log rc error_message prev_last_cutover_at prev_sync_phase_at
 
 	mode="$(request_value mode)"
 	case "$mode" in
@@ -335,18 +395,25 @@ set_mode_action() {
 			;;
 	esac
 
+	run_log="$(mktemp)"
+	rc=0
+	prev_last_cutover_at="$(status_file_value last_cutover_at)"
+	prev_sync_phase_at="$(status_file_value sync_phase_at)"
+
 	if command -v timeout >/dev/null 2>&1; then
-		ROUTER_RULES_LOCK_WAIT=120 ROUTER_RULES_SYNC_ACTOR='ui-mode-toggle' timeout 120 /usr/bin/router-rules set-mode-cutover "$mode" >/dev/null 2>&1 || {
-			emit_error set_mode 'Failed to change routing mode on this router.'
-			return 0
-		}
+		ROUTER_RULES_LOCK_WAIT="$RULES_MODE_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-mode-toggle' timeout "$RULES_MODE_TIMEOUT" /usr/bin/router-rules set-mode-cutover "$mode" >"$run_log" 2>&1 || rc=$?
 	else
-		ROUTER_RULES_LOCK_WAIT=120 ROUTER_RULES_SYNC_ACTOR='ui-mode-toggle' /usr/bin/router-rules set-mode-cutover "$mode" >/dev/null 2>&1 || {
-			emit_error set_mode 'Failed to change routing mode on this router.'
-			return 0
-		}
+		ROUTER_RULES_LOCK_WAIT="$RULES_MODE_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-mode-toggle' /usr/bin/router-rules set-mode-cutover "$mode" >"$run_log" 2>&1 || rc=$?
 	fi
 
+	if [ "$rc" -ne 0 ]; then
+		error_message="$(mode_error_message "$run_log" "$rc" "$prev_last_cutover_at" "$prev_sync_phase_at")"
+		rm -f "$run_log"
+		emit_error set_mode "$error_message"
+		return 0
+	fi
+
+	rm -f "$run_log"
 	status_action
 }
 

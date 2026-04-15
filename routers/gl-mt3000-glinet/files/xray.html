@@ -990,6 +990,10 @@
       });
     }
 
+    const RULES_MODE_TIMEOUT_MS = 160000;
+    const RULES_SAVE_CONFIG_TIMEOUT_MS = 70000;
+    const RULES_SYNC_TIMEOUT_MS = 190000;
+
     function beginForegroundTask(message, pauseMs = 15000) {
       setControlsBusy(true);
       flashLoading(message);
@@ -1729,10 +1733,10 @@
       state.pendingRulesMode = mode;
       renderRulesModeUi(state.rules);
       updateRulesActionState();
-      beginForegroundTask(`Applying ${mode} routing mode with hard cutover...`, 30000);
+      beginForegroundTask(`Applying ${mode} routing mode with hard cutover...`, RULES_MODE_TIMEOUT_MS);
       setBusy(input, true);
       try {
-        const data = await callApi(rulesApi, "set_mode", { mode }, { timeoutMs: 30000 });
+        const data = await callApi(rulesApi, "set_mode", { mode }, { timeoutMs: RULES_MODE_TIMEOUT_MS });
         if (data.ok === false) {
           throw new Error(data.error || "backend error");
         }
@@ -1842,10 +1846,10 @@
     }
 
     async function saveRulesConfig(button) {
-      beginForegroundTask("Saving Git sync settings on the router...", 20000);
+      beginForegroundTask("Saving Git sync settings on the router...", RULES_SAVE_CONFIG_TIMEOUT_MS);
       setBusy(button, true);
       try {
-        const data = await callApi(rulesApi, "save_config", rulesConfigPayload(), { timeoutMs: 20000 });
+        const data = await callApi(rulesApi, "save_config", rulesConfigPayload(), { timeoutMs: RULES_SAVE_CONFIG_TIMEOUT_MS });
         if (data.ok === false) {
           throw new Error(data.error || "backend error");
         }
@@ -1871,7 +1875,7 @@
           : wantsGitSync
           ? "Syncing shared rules with Git and applying them..."
           : "Applying local rules on this router...",
-        45000
+        RULES_SYNC_TIMEOUT_MS
       );
       setBusy(button, true);
       try {
@@ -1881,7 +1885,7 @@
         if (!readOnlyGit) {
           payload.rules_text = document.getElementById("rulesText").value;
         }
-        const data = await callApi(rulesApi, "sync_rules", payload, { timeoutMs: 45000 });
+        const data = await callApi(rulesApi, "sync_rules", payload, { timeoutMs: RULES_SYNC_TIMEOUT_MS });
         if (data.ok === false) {
           throw new Error(data.error || "backend error");
         }
