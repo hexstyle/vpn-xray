@@ -26,6 +26,7 @@ DEFAULT_SYNC_INTERVAL='30'
 DEFAULT_EXTERNAL_SOURCE_ENABLED='0'
 DEFAULT_EXTERNAL_SOURCE_URL=''
 DEFAULT_EXTERNAL_SOURCE_INTERVAL='3600'
+EXTERNAL_SOURCE_REPO_LAYOUT_VERSION='2'
 DEFAULT_GIT_AUTH_MODE='auto'
 DEFAULT_GIT_HTTP_USERNAME=''
 DEFAULT_GIT_HTTP_PASSWORD=''
@@ -34,6 +35,10 @@ EXTERNAL_SOURCE_SCRIPT='/usr/share/vpn-xray/router-rules-external.py'
 DEFAULT_EXTERNAL_SOURCE_TIMEOUT='90'
 STATUS_FILE='/tmp/router-rules.status'
 LOCK_DIR='/tmp/router-rules.lock.d'
+
+status_include_rules_text() {
+	[ "${ROUTER_RULES_STATUS_INCLUDE_RULES_TEXT:-1}" = '1' ]
+}
 
 json_escape() {
 	printf '%s' "${1:-}" | sed ':a;N;$!ba;s/\\/\\\\/g;s/"/\\"/g;s/\r/\\r/g;s/\t/\\t/g;s/\n/\\n/g'
@@ -67,6 +72,10 @@ cfg_get() {
 	else
 		printf '%s\n' "$default"
 	fi
+}
+
+cfg_has_option() {
+	uci -q get "${CONFIG_PKG}.${CONFIG_SECTION}.$1" >/dev/null 2>&1
 }
 
 repo_path() { cfg_get repo_path "$DEFAULT_REPO_PATH"; }
@@ -109,14 +118,117 @@ xray_mode() { cfg_get xray_mode "$DEFAULT_XRAY_MODE"; }
 xray_ipset() { cfg_get xray_ipset "$DEFAULT_XRAY_IPSET"; }
 xray_dnsmasq_conf() { cfg_get xray_dnsmasq_conf "$DEFAULT_XRAY_DNSMASQ_CONF"; }
 sync_interval() { cfg_get sync_interval "$DEFAULT_SYNC_INTERVAL"; }
-external_source_enabled() { cfg_get external_source_enabled "$DEFAULT_EXTERNAL_SOURCE_ENABLED"; }
-external_source_url() { cfg_get external_source_url "$DEFAULT_EXTERNAL_SOURCE_URL"; }
 external_source_interval() { cfg_get external_source_interval "$DEFAULT_EXTERNAL_SOURCE_INTERVAL"; }
 git_sync_enabled_raw() { cfg_get git_sync_enabled ''; }
 git_auth_mode_raw() { cfg_get git_auth_mode "$DEFAULT_GIT_AUTH_MODE"; }
 git_http_username() { cfg_get git_http_username "$DEFAULT_GIT_HTTP_USERNAME"; }
 git_http_password() { cfg_get git_http_password "$DEFAULT_GIT_HTTP_PASSWORD"; }
 git_askpass_path() { cfg_get git_askpass_path "$DEFAULT_GIT_ASKPASS"; }
+
+external_source_catalog() {
+	cat <<'EOF'
+microsoft_service_tags|Microsoft Service Tags|https://www.microsoft.com/en-us/download/details.aspx?id=56519
+cloudflare_ipv4|Cloudflare IPv4|https://www.cloudflare.com/ips-v4
+google_ipv4|Google IPv4 Ranges|https://www.gstatic.com/ipranges/goog.json
+aws_ipv4|AWS IPv4 Ranges|https://ip-ranges.amazonaws.com/ip-ranges.json
+EOF
+}
+
+external_source_record() {
+	local wanted="$1"
+	local id label url
+
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		if [ "$id" = "$wanted" ]; then
+			printf '%s|%s|%s\n' "$id" "$label" "$url"
+			return 0
+		fi
+	done <<EOF
+$(external_source_catalog)
+EOF
+
+	return 1
+}
+
+external_source_label() {
+	external_source_record "$1" | cut -d '|' -f 2
+}
+
+external_source_url_by_id() {
+	external_source_record "$1" | cut -d '|' -f 3
+}
+
+legacy_external_source_enabled() { cfg_get external_source_enabled "$DEFAULT_EXTERNAL_SOURCE_ENABLED"; }
+legacy_external_source_url() { cfg_get external_source_url "$DEFAULT_EXTERNAL_SOURCE_URL"; }
+
+legacy_external_source_selected() {
+	local wanted="$1"
+	local url list item oldifs
+
+	url="$(external_source_url_by_id "$wanted" 2>/dev/null || true)"
+	[ -n "$url" ] || return 1
+	list="$(legacy_external_source_url | sed 's/\\n/\
+/g')"
+	[ -n "$list" ] || return 1
+
+	oldifs="$IFS"
+	IFS='
+,	 '
+	for item in $list; do
+		if [ "$item" = "$url" ]; then
+			IFS="$oldifs"
+			return 0
+		fi
+	done
+	IFS="$oldifs"
+	return 1
+}
+
+external_source_enabled_by_id() {
+	local id="$1"
+	local key raw
+
+	external_source_record "$id" >/dev/null 2>&1 || {
+		printf '0\n'
+		return 1
+	}
+
+	key="external_source_${id}_enabled"
+	if cfg_has_option "$key"; then
+		raw="$(cfg_get "$key" '0')"
+	else
+		raw='0'
+		if [ "$(legacy_external_source_enabled)" = '1' ] && legacy_external_source_selected "$id"; then
+			raw='1'
+		fi
+	fi
+
+	case "$raw" in
+		1|true|yes|on)
+			printf '1\n'
+			;;
+		*)
+			printf '0\n'
+			;;
+	esac
+}
+
+external_source_enabled() {
+	local id label url
+
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		if [ "$(external_source_enabled_by_id "$id")" = '1' ]; then
+			printf '1\n'
+			return 0
+		fi
+	done <<EOF
+$(external_source_catalog)
+EOF
+
+	printf '0\n'
+}
 
 external_source_interval_seconds() {
 	local raw
@@ -239,6 +351,30 @@ repo_rules_path() {
 	printf '%s/%s\n' "$(repo_path)" "$(rules_relpath)"
 }
 
+rules_tree_relpath() {
+	printf '%s\n' "$(dirname "$(rules_relpath)")"
+}
+
+repo_rules_tree_path() {
+	printf '%s/%s\n' "$(repo_path)" "$(rules_tree_relpath)"
+}
+
+external_source_relpath() {
+	printf '%s/external/%s.txt\n' "$(rules_tree_relpath)" "$1"
+}
+
+external_source_path() {
+	printf '%s/%s\n' "$(repo_path)" "$(external_source_relpath "$1")"
+}
+
+effective_rules_file() {
+	printf '%s/effective_shared_targets.txt\n' "$(generated_dir)"
+}
+
+external_source_repo_layout_version() {
+	cfg_get external_source_repo_layout_version '0'
+}
+
 resolved_file() {
 	printf '%s/resolved_ipv4.txt\n' "$(generated_dir)"
 }
@@ -349,9 +485,15 @@ file_signature() {
 }
 
 xray_state_signature() {
-	local mode rules_sig
+	local mode rules_sig id label url
 	mode="$(xray_mode)"
-	rules_sig="$(file_signature "$(repo_rules_path)")"
+	rules_sig="main:$(file_signature "$(repo_rules_path)")"
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		rules_sig="${rules_sig}|${id}:$(external_source_enabled_by_id "$id"):$(file_signature "$(external_source_path "$id")")"
+	done <<EOF
+$(external_source_catalog)
+EOF
 	printf '%s|%s\n' "$mode" "$rules_sig"
 }
 
@@ -364,7 +506,7 @@ lan_ipv4_cidr() {
 }
 
 ensure_dirs() {
-	mkdir -p "$(repo_path)" "$(generated_dir)" "$(dirname "$(ssh_key_path)")"
+	mkdir -p "$(repo_path)" "$(repo_rules_tree_path)" "$(repo_rules_tree_path)/external" "$(generated_dir)" "$(dirname "$(ssh_key_path)")"
 	touch "$(known_hosts_path)"
 	chmod 600 "$(known_hosts_path)"
 }
@@ -458,7 +600,7 @@ repo_bootstrap() {
 	else
 		git_cmd -C "$repo" config --unset-all remote.origin.pushurl >/dev/null 2>&1 || true
 	fi
-	mkdir -p "$(dirname "$rules_abs")"
+	mkdir -p "$(dirname "$rules_abs")" "$(repo_rules_tree_path)/external"
 	[ -f "$rules_abs" ] || : > "$rules_abs"
 }
 
@@ -627,7 +769,7 @@ merge_remote_preferred() {
 			sub(/[[:space:]]+$/, "", s)
 			return s
 		}
-		NR == FNR {
+		FILENAME == ARGV[1] {
 			line = trim($0)
 			if (line == "" || line ~ /^#/) {
 				next
@@ -657,27 +799,193 @@ merge_remote_preferred() {
 	rm -f "$appended_lines"
 }
 
-rule_count() {
-	rule_data_stream "$1" | wc -l | awk '{print $1}'
+tracked_rules_relpaths() {
+	local id label url
+
+	printf '%s\n' "$(rules_relpath)"
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		printf '%s\n' "$(external_source_relpath "$id")"
+	done <<EOF
+$(external_source_catalog)
+EOF
 }
 
-external_source_due_now() {
+rules_tree_matches_internal() {
+	local left_root="$1"
+	local right_root="$2"
+	local rel left_file right_file
+
+	while IFS= read -r rel || [ -n "$rel" ]; do
+		[ -n "$rel" ] || continue
+		left_file="${left_root}/${rel}"
+		right_file="${right_root}/${rel}"
+		if [ -f "$left_file" ] && [ -f "$right_file" ]; then
+			cmp -s "$left_file" "$right_file" 2>/dev/null || return 1
+		elif [ -f "$left_file" ] || [ -f "$right_file" ]; then
+			return 1
+		fi
+	done <<EOF
+$(tracked_rules_relpaths)
+EOF
+
+	return 0
+}
+
+snapshot_rules_tree_from_worktree_internal() {
+	local repo_root="$1"
+	local snapshot_root="$2"
+	local rel src dst
+
+	while IFS= read -r rel || [ -n "$rel" ]; do
+		[ -n "$rel" ] || continue
+		src="${repo_root}/${rel}"
+		[ -f "$src" ] || continue
+		dst="${snapshot_root}/${rel}"
+		mkdir -p "$(dirname "$dst")"
+		cp "$src" "$dst"
+	done <<EOF
+$(tracked_rules_relpaths)
+EOF
+}
+
+snapshot_rules_tree_from_ref_internal() {
+	local repo_root="$1"
+	local ref="$2"
+	local snapshot_root="$3"
+	local rel dst found_main
+
+	found_main=0
+	while IFS= read -r rel || [ -n "$rel" ]; do
+		[ -n "$rel" ] || continue
+		dst="${snapshot_root}/${rel}"
+		mkdir -p "$(dirname "$dst")"
+		if git_cmd -C "$repo_root" show "${ref}:${rel}" > "$dst" 2>/dev/null; then
+			[ "$rel" = "$(rules_relpath)" ] && found_main=1
+		else
+			rm -f "$dst"
+		fi
+	done <<EOF
+$(tracked_rules_relpaths)
+EOF
+
+	[ "$found_main" = '1' ]
+}
+
+restore_rules_tree_exact_local_internal() {
+	local snapshot_root="$1"
+	local repo_root="$2"
+	local rel src dst
+
+	while IFS= read -r rel || [ -n "$rel" ]; do
+		[ -n "$rel" ] || continue
+		src="${snapshot_root}/${rel}"
+		dst="${repo_root}/${rel}"
+		if [ -f "$src" ]; then
+			mkdir -p "$(dirname "$dst")"
+			cp "$src" "$dst"
+		else
+			rm -f "$dst"
+		fi
+	done <<EOF
+$(tracked_rules_relpaths)
+EOF
+}
+
+merge_rules_tree_remote_preferred_internal() {
+	local remote_root="$1"
+	local local_root="$2"
+	local repo_root="$3"
+	local rel remote_file local_file out_file
+
+	while IFS= read -r rel || [ -n "$rel" ]; do
+		[ -n "$rel" ] || continue
+		remote_file="${remote_root}/${rel}"
+		local_file="${local_root}/${rel}"
+		out_file="${repo_root}/${rel}"
+		if [ -f "$remote_file" ] && [ -f "$local_file" ]; then
+			mkdir -p "$(dirname "$out_file")"
+			merge_remote_preferred "$remote_file" "$local_file" "$out_file"
+		elif [ -f "$remote_file" ]; then
+			mkdir -p "$(dirname "$out_file")"
+			cp "$remote_file" "$out_file"
+		elif [ -f "$local_file" ]; then
+			mkdir -p "$(dirname "$out_file")"
+			cp "$local_file" "$out_file"
+		else
+			rm -f "$out_file"
+		fi
+	done <<EOF
+$(tracked_rules_relpaths)
+EOF
+}
+
+rule_count() {
+	local file="$1"
+
+	[ -f "$file" ] || {
+		printf '0\n'
+		return 0
+	}
+
+	awk '
+		{
+			line = $0
+			sub(/\r$/, "", line)
+			sub(/^[[:space:]]+/, "", line)
+			sub(/[[:space:]]+$/, "", line)
+			if (line == "" || line ~ /^#/) {
+				next
+			}
+			count++
+		}
+		END { print count + 0 }
+	' "$file"
+}
+
+external_source_status_key() {
+	printf 'external_%s_%s\n' "$1" "$2"
+}
+
+external_source_status_get() {
+	status_get "$(external_source_status_key "$1" "$2")"
+}
+
+external_source_status_set() {
+	status_set "$(external_source_status_key "$1" "$2")" "$3"
+}
+
+external_source_due_by_id() {
+	local id="$1"
 	local last now interval
 
-	[ "$(external_source_enabled)" = '1' ] || return 1
-	[ -n "$(external_source_url)" ] || return 1
+	[ "$(external_source_enabled_by_id "$id")" = '1' ] || return 1
 	interval="$(external_source_interval_seconds)"
-	last="$(status_get last_external_run_at)"
+	last="$(external_source_status_get "$id" last_run_at)"
 	[ -n "$last" ] || return 0
 	now="$(date +%s)"
 	[ $((now - last)) -ge "$interval" ]
 }
 
+external_source_due_now() {
+	local id label url
+
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		if external_source_due_by_id "$id"; then
+			return 0
+		fi
+	done <<EOF
+$(external_source_catalog)
+EOF
+
+	return 1
+}
+
 should_refresh_external_source_internal() {
 	if [ "${ROUTER_RULES_EXTERNAL_FORCE:-0}" = '1' ]; then
-		[ "$(external_source_enabled)" = '1' ] || return 1
-		[ -n "$(external_source_url)" ] || return 1
-		return 0
+		[ "$(external_source_enabled)" = '1' ]
+		return $?
 	fi
 	[ "$(sync_actor)" = 'background' ] || return 1
 	external_source_due_now
@@ -698,12 +1006,186 @@ set_external_status() {
 	status_trace_add sync_trace "external ${status}: ${message}"
 }
 
-generate_external_source_internal() {
-	local url="$1"
-	local script timeout_seconds
+set_external_source_status() {
+	local id="$1"
+	local status="$2"
+	local message="$3"
+	local generated_count="${4:-0}"
+	local added_count="${5:-0}"
 
+	external_source_status_set "$id" last_run_at "$(date +%s)"
+	external_source_status_set "$id" last_status "$status"
+	external_source_status_set "$id" last_message "$message"
+	external_source_status_set "$id" last_generated_count "$generated_count"
+	external_source_status_set "$id" last_added_count "$added_count"
+	external_source_status_set "$id" last_actor "$(sync_actor)"
+	status_trace_add sync_trace "external ${id} ${status}: ${message}"
+}
+
+tracked_rules_signature() {
+	local signature id label url path
+
+	signature="main:$(file_signature "$(repo_rules_path)")"
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		path="$(external_source_path "$id")"
+		signature="${signature}|${id}:$(file_signature "$path")"
+	done <<EOF
+$(external_source_catalog)
+EOF
+	printf '%s\n' "$signature"
+}
+
+managed_external_sources_present_internal() {
+	local id label url
+
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		if [ -f "$(external_source_path "$id")" ]; then
+			return 0
+		fi
+	done <<EOF
+$(external_source_catalog)
+EOF
+
+	return 1
+}
+
+collect_managed_external_sources_internal() {
+	local out_file="$1"
+	local id label url path
+
+	: > "$out_file"
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		path="$(external_source_path "$id")"
+		[ -s "$path" ] || continue
+		if [ -s "$out_file" ]; then
+			printf '\n' >> "$out_file"
+		fi
+		cat "$path" >> "$out_file"
+	done <<EOF
+$(external_source_catalog)
+EOF
+}
+
+compose_effective_rules_internal() {
+	local manual_file combined_file out_file id label url path
+
+	manual_file="$(repo_rules_path)"
+	combined_file="$(mktemp)"
+	out_file="$(mktemp)"
+
+	: > "$combined_file"
+	if [ -s "$manual_file" ]; then
+		cat "$manual_file" >> "$combined_file"
+	fi
+
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		[ "$(external_source_enabled_by_id "$id")" = '1' ] || continue
+		path="$(external_source_path "$id")"
+		[ -s "$path" ] || continue
+		if [ -s "$combined_file" ]; then
+			printf '\n' >> "$combined_file"
+		fi
+		cat "$path" >> "$combined_file"
+	done <<EOF
+$(external_source_catalog)
+EOF
+
+	awk '
+		function trim(s) {
+			sub(/\r$/, "", s)
+			sub(/^[[:space:]]+/, "", s)
+			sub(/[[:space:]]+$/, "", s)
+			return s
+		}
+		{
+			line = trim($0)
+			if (line == "" || line ~ /^#/) {
+				next
+			}
+			norm = tolower(line)
+			if (!(norm in seen)) {
+				print line
+				seen[norm] = 1
+			}
+		}
+	' "$combined_file" > "$out_file"
+
+	mv "$out_file" "$(effective_rules_file)"
+	rm -f "$combined_file"
+	printf '%s\n' "$(effective_rules_file)"
+}
+
+maybe_migrate_external_repo_layout_internal() {
+	local union_file filtered_file main_file removed_count before_count after_count current_version
+
+	current_version="$(external_source_repo_layout_version)"
+	managed_external_sources_present_internal || {
+		printf '0\n'
+		return 0
+	}
+
+	main_file="$(repo_rules_path)"
+	union_file="$(mktemp)"
+	filtered_file="$(mktemp)"
+	collect_managed_external_sources_internal "$union_file"
+	[ -f "$main_file" ] || : > "$main_file"
+	before_count="$(rule_count "$main_file")"
+
+	awk '
+		function trim(s) {
+			sub(/\r$/, "", s)
+			sub(/^[[:space:]]+/, "", s)
+			sub(/[[:space:]]+$/, "", s)
+			return s
+		}
+		FILENAME == ARGV[1] {
+			line = trim($0)
+			if (line == "" || line ~ /^#/) {
+				next
+			}
+			managed[tolower(line)] = 1
+			next
+		}
+		{
+			line = trim($0)
+			if (line == "" || line ~ /^#/) {
+				next
+			}
+			if (!(tolower(line) in managed)) {
+				print line
+			}
+		}
+	' "$union_file" "$main_file" > "$filtered_file"
+
+	after_count="$(rule_count "$filtered_file")"
+	removed_count=$((before_count - after_count))
+	if ! cmp -s "$main_file" "$filtered_file" 2>/dev/null; then
+		mv "$filtered_file" "$main_file"
+	else
+		rm -f "$filtered_file"
+	fi
+	rm -f "$union_file"
+	if [ "$current_version" != "$EXTERNAL_SOURCE_REPO_LAYOUT_VERSION" ]; then
+		uci -q set "${CONFIG_PKG}.${CONFIG_SECTION}.external_source_repo_layout_version=${EXTERNAL_SOURCE_REPO_LAYOUT_VERSION}"
+		uci commit "$CONFIG_PKG"
+	fi
+	if [ "$removed_count" -gt 0 ] 2>/dev/null; then
+		status_trace_add sync_trace "external migrated: moved ${removed_count} managed targets out of $(rules_relpath)"
+	fi
+	printf '%s\n' "$removed_count"
+}
+
+generate_external_source_internal() {
+	local id="$1"
+	local url script timeout_seconds
+
+	url="$(external_source_url_by_id "$id" 2>/dev/null || true)"
 	[ -n "$url" ] || {
-		echo 'External source URL is not configured.' >&2
+		echo "Unknown external source: $id" >&2
 		return 1
 	}
 	command -v python3 >/dev/null 2>&1 || {
@@ -720,10 +1202,25 @@ generate_external_source_internal() {
 }
 
 preview_external_source_internal() {
-	local url="${1:-}"
+	local id="${1:-}"
 
-	[ -n "$url" ] || url="$(external_source_url)"
-	generate_external_source_internal "$url"
+	external_source_record "$id" >/dev/null 2>&1 || {
+		echo 'Unknown external source.' >&2
+		return 1
+	}
+	generate_external_source_internal "$id"
+}
+
+read_external_source_internal() {
+	local id="$1"
+	local path
+
+	external_source_record "$id" >/dev/null 2>&1 || {
+		echo 'Unknown external source.' >&2
+		return 1
+	}
+	path="$(external_source_path "$id")"
+	[ -f "$path" ] && cat "$path"
 }
 
 prepare_rules_file_for_local_edit_internal() {
@@ -736,7 +1233,7 @@ prepare_rules_file_for_local_edit_internal() {
 	if repo_configured; then
 		repo_bootstrap || return 1
 	else
-		mkdir -p "$(repo_path)" "$(dirname "$(repo_rules_path)")"
+		mkdir -p "$(repo_path)" "$(dirname "$(repo_rules_path)")" "$(repo_rules_tree_path)/external"
 		[ -f "$(repo_rules_path)" ] || : > "$(repo_rules_path)"
 	fi
 }
@@ -764,7 +1261,7 @@ compute_unique_rule_additions_internal() {
 			sub(/[[:space:]]+$/, "", s)
 			return s
 		}
-		NR == FNR {
+		FILENAME == ARGV[1] {
 			line = trim($0)
 			if (line == "" || line ~ /^#/) {
 				next
@@ -787,63 +1284,133 @@ compute_unique_rule_additions_internal() {
 }
 
 refresh_external_source_internal() {
-	local generated_file additions_file error_file rules_file url generated_count added_count message
+	local id="$1"
+	local generated_file="$2"
+	local generated_count="$3"
+	local additions_file source_file added_count message
 
-	url="$(external_source_url)"
-	generated_file="$(mktemp)"
 	additions_file="$(mktemp)"
-	error_file="$(mktemp)"
+	source_file="$(external_source_path "$id")"
+	mkdir -p "$(dirname "$source_file")"
+	[ -f "$source_file" ] || : > "$source_file"
 
-	if ! generate_external_source_internal "$url" > "$generated_file" 2> "$error_file"; then
-		message="$(sed '/^[[:space:]]*$/d' "$error_file" | sed -n '1p')"
-		[ -n "$message" ] || message='External source fetch failed.'
-		set_external_status error "$message" '0' '0'
-		set_status_error "$message"
-		rm -f "$generated_file" "$additions_file" "$error_file"
-		return 1
+	if [ "$generated_count" = '0' ]; then
+		set_external_source_status "$id" no_change 'Source returned no targets.' "$generated_count" '0'
+		rm -f "$additions_file"
+		printf '0\n'
+		return 0
 	fi
 
-	generated_count="$(rule_count "$generated_file")"
-	[ -n "$generated_count" ] || generated_count='0'
-	if [ "$generated_count" = '0' ]; then
-		set_external_status no_change 'External source returned no targets.' "$generated_count" '0'
-		rm -f "$generated_file" "$additions_file" "$error_file"
+	compute_unique_rule_additions_internal "$source_file" "$generated_file" "$additions_file"
+	added_count="$(rule_count "$additions_file")"
+	[ -n "$added_count" ] || added_count='0'
+	if [ "$added_count" = '0' ]; then
+		set_external_source_status "$id" no_change 'Source returned no new targets.' "$generated_count" "$added_count"
+		rm -f "$additions_file"
+		printf '0\n'
+		return 0
+	fi
+
+	append_rule_lines_internal "$source_file" "$additions_file"
+	message="Added ${added_count} new targets to $(external_source_relpath "$id")."
+	set_external_source_status "$id" updated "$message" "$generated_count" "$added_count"
+	rm -f "$additions_file"
+	printf '%s\n' "$added_count"
+}
+
+refresh_external_sources_internal() {
+	local source_meta error_file enabled_count total_generated total_added changed_any summary
+	local id label url generated_file generated_count message removed_count added_count
+
+	source_meta="$(mktemp)"
+	error_file="$(mktemp)"
+	enabled_count=0
+	total_generated=0
+	total_added=0
+	changed_any=0
+	summary=''
+
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		[ "$(external_source_enabled_by_id "$id")" = '1' ] || continue
+		enabled_count=$((enabled_count + 1))
+		generated_file="$(mktemp)"
+		if ! generate_external_source_internal "$id" > "$generated_file" 2> "$error_file"; then
+			message="$(sed '/^[[:space:]]*$/d' "$error_file" | sed -n '1p')"
+			[ -n "$message" ] || message="External source fetch failed for $id."
+			set_external_source_status "$id" error "$message" '0' '0'
+			set_external_status error "$message" '0' '0'
+			set_status_error "$message"
+			while IFS='|' read -r _ _ stale_file || [ -n "$stale_file" ]; do
+				[ -n "$stale_file" ] || continue
+				rm -f "$stale_file"
+			done < "$source_meta"
+			rm -f "$generated_file" "$source_meta" "$error_file"
+			return 1
+		fi
+		generated_count="$(rule_count "$generated_file")"
+		[ -n "$generated_count" ] || generated_count='0'
+		printf '%s|%s|%s\n' "$id" "$generated_count" "$generated_file" >> "$source_meta"
+	done <<EOF
+$(external_source_catalog)
+EOF
+
+	if [ "$enabled_count" -eq 0 ]; then
+		set_external_status no_change 'No managed external source files are enabled.' '0' '0'
+		rm -f "$source_meta" "$error_file"
 		return 0
 	fi
 
 	if ! prepare_rules_file_for_local_edit_internal 2> "$error_file"; then
 		message="$(sed '/^[[:space:]]*$/d' "$error_file" | sed -n '1p')"
-		[ -n "$message" ] || message='Could not prepare the shared rules file for external updates.'
-		set_external_status error "$message" "$generated_count" '0'
+		[ -n "$message" ] || message='Could not prepare the managed external source files for updates.'
+		set_external_status error "$message" '0' '0'
 		set_status_error "$message"
-		rm -f "$generated_file" "$additions_file" "$error_file"
+		while IFS='|' read -r _ _ stale_file || [ -n "$stale_file" ]; do
+			[ -n "$stale_file" ] || continue
+			rm -f "$stale_file"
+		done < "$source_meta"
+		rm -f "$source_meta" "$error_file"
 		return 1
 	fi
 
-	rules_file="$(repo_rules_path)"
-	compute_unique_rule_additions_internal "$rules_file" "$generated_file" "$additions_file"
-	added_count="$(rule_count "$additions_file")"
-	[ -n "$added_count" ] || added_count='0'
+	while IFS='|' read -r id generated_count generated_file || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		total_generated=$((total_generated + generated_count))
+		added_count="$(refresh_external_source_internal "$id" "$generated_file" "$generated_count")"
+		[ -n "$added_count" ] || added_count='0'
+		total_added=$((total_added + added_count))
+		if [ "$added_count" -gt 0 ] 2>/dev/null; then
+			changed_any=1
+		fi
+		summary="${summary}${summary:+; }$(external_source_label "$id"): +${added_count}/${generated_count}"
+		rm -f "$generated_file"
+	done < "$source_meta"
 
-	if [ "$added_count" = '0' ]; then
-		set_external_status no_change 'External source returned no new targets.' "$generated_count" "$added_count"
-		rm -f "$generated_file" "$additions_file" "$error_file"
-		return 0
+	removed_count="$(maybe_migrate_external_repo_layout_internal)"
+	[ -n "$removed_count" ] || removed_count='0'
+	if [ "$removed_count" -gt 0 ] 2>/dev/null; then
+		changed_any=1
+		summary="${summary}${summary:+; }manual migrated -${removed_count}"
 	fi
 
-	append_rule_lines_internal "$rules_file" "$additions_file"
-	set_external_status updated "External source added ${added_count} new targets." "$generated_count" "$added_count"
-	rm -f "$generated_file" "$additions_file" "$error_file"
-	return 0
+	if [ "$changed_any" = '1' ]; then
+		set_external_status updated "$summary" "$total_generated" "$total_added"
+	else
+		set_external_status no_change "$summary" "$total_generated" "$total_added"
+	fi
+
+	rm -f "$source_meta" "$error_file"
+	printf '%s\n' "$changed_any"
 }
 
 sync_external_source_internal() {
-	local before_sig after_sig
+	local before_sig after_sig changed_any
 
-	before_sig="$(file_signature "$(repo_rules_path)")"
-	refresh_external_source_internal || return 1
-	after_sig="$(file_signature "$(repo_rules_path)")"
-	[ "$before_sig" = "$after_sig" ] && return 0
+	before_sig="$(tracked_rules_signature)"
+	changed_any="$(refresh_external_sources_internal)" || return 1
+	after_sig="$(tracked_rules_signature)"
+	[ "$before_sig" = "$after_sig" ] && [ "$changed_any" = '0' ] && return 0
 	sync_apply_xray_internal
 }
 
@@ -899,26 +1466,33 @@ EOF
 }
 
 split_rules_internal() {
-	local source_file out_domains out_literals tmp_domains tmp_literals line
+	local source_file out_domains out_literals tmp_domains tmp_literals
 
-	source_file="$(repo_rules_path)"
+	source_file="$(compose_effective_rules_internal)"
 	out_domains="$(domain_file)"
 	out_literals="$(literal_file)"
 	tmp_domains="$(mktemp)"
 	tmp_literals="$(mktemp)"
 
-	: > "$tmp_domains"
-	: > "$tmp_literals"
-
-	while IFS= read -r line || [ -n "$line" ]; do
-		line="$(trim_line "$line")"
-		is_comment_or_empty "$line" && continue
-		if printf '%s' "$line" | grep -Eq '^[0-9]+(\.[0-9]+){3}(/[0-9]+)?$'; then
-			printf '%s\n' "$line" >> "$tmp_literals"
-		else
-			printf '%s\n' "$(normalized_line "$line")" >> "$tmp_domains"
-		fi
-	done < "$source_file"
+	awk -v domains_out="$tmp_domains" -v literals_out="$tmp_literals" '
+		function trim(s) {
+			sub(/\r$/, "", s)
+			sub(/^[[:space:]]+/, "", s)
+			sub(/[[:space:]]+$/, "", s)
+			return s
+		}
+		{
+			line = trim($0)
+			if (line == "" || line ~ /^#/) {
+				next
+			}
+			if (line ~ /^[0-9]+(\.[0-9]+){3}(\/[0-9]+)?$/) {
+				print line >> literals_out
+			} else {
+				print tolower(line) >> domains_out
+			}
+		}
+	' "$source_file"
 
 	sort -u "$tmp_domains" > "$out_domains"
 	sort -u "$tmp_literals" > "$out_literals"
@@ -928,7 +1502,7 @@ split_rules_internal() {
 resolve_rules_internal() {
 	local source_file dns out_map out_resolved out_domains out_literals tmp_resolved line resolved
 
-	source_file="$(repo_rules_path)"
+	source_file="$(compose_effective_rules_internal)"
 	dns="$(dns_resolver)"
 	out_map="$(mapping_file)"
 	out_resolved="$(resolved_file)"
@@ -963,11 +1537,12 @@ resolve_rules_internal() {
 	rm -f "$tmp_resolved"
 	status_set last_resolve_at "$(date +%s)"
 	status_set resolved_count "$(wc -l < "$out_resolved" | awk '{print $1}')"
-	status_set source_count "$(rule_count "$source_file")"
+	status_set source_count "$(rule_count "$(repo_rules_path)")"
+	status_set effective_source_count "$(rule_count "$source_file")"
 }
 
 build_xray_ipset_internal() {
-	local setname domains conf tmp_conf resolved count
+	local setname domains conf tmp_conf resolved count restore_file value
 
 	# Preload literal targets and current A-record snapshots for domains.
 	# On some OpenWrt/dnsmasq builds the ipset hook does not populate
@@ -980,14 +1555,22 @@ build_xray_ipset_internal() {
 	tmp_conf="$(mktemp)"
 	count=0
 
-	ipset create "$setname" hash:net family inet maxelem 65536 -exist
-	ipset flush "$setname"
+	restore_file="$(mktemp)"
+	{
+		printf 'create %s hash:net family inet maxelem 65536 -exist\n' "$setname"
+		printf 'flush %s\n' "$setname"
+		if [ -f "$resolved" ]; then
+			while IFS= read -r value || [ -n "$value" ]; do
+				[ -n "$value" ] || continue
+				printf 'add %s %s -exist\n' "$setname" "$value"
+			done < "$resolved"
+		fi
+	} > "$restore_file"
+	ipset restore < "$restore_file"
+	rm -f "$restore_file"
 	if [ -f "$resolved" ]; then
-		while IFS= read -r value || [ -n "$value" ]; do
-			[ -n "$value" ] || continue
-			ipset add "$setname" "$value" -exist
-			count=$((count + 1))
-		done < "$resolved"
+		count="$(wc -l < "$resolved" | awk '{print $1}')"
+		[ -n "$count" ] || count=0
 	fi
 
 	: > "$tmp_conf"
@@ -1041,7 +1624,6 @@ apply_xray_internal() {
 	setname="$(xray_ipset)"
 	conf="$(xray_dnsmasq_conf)"
 	last_mode="$(status_get last_apply_xray_mode)"
-	split_rules_internal
 	if [ "$mode" = 'selective' ]; then
 		build_xray_ipset_internal
 	else
@@ -1190,12 +1772,12 @@ resolved_snapshot_needs_apply_internal() {
 }
 
 sync_repo_internal() {
-	local repo rel branch work_file local_snapshot remote_snapshot changed pushed
+	local repo rel tree_rel branch local_snapshot remote_snapshot changed pushed
 	local local_head_before remote_head requested_base_head strategy repo_clean last_remote_head
 
 	if ! repo_configured; then
 		ensure_dirs
-		mkdir -p "$(dirname "$(repo_rules_path)")"
+		mkdir -p "$(dirname "$(repo_rules_path)")" "$(repo_rules_tree_path)/external"
 		[ -f "$(repo_rules_path)" ] || : > "$(repo_rules_path)"
 		status_set last_sync_changed '0'
 		status_set last_sync_strategy 'local-only'
@@ -1209,70 +1791,74 @@ sync_repo_internal() {
 
 	repo_bootstrap || {
 		set_status_error 'git repository bootstrap failed'
-		rm -f "$local_snapshot" "$remote_snapshot"
+		rm -rf "$local_snapshot" "$remote_snapshot"
 		return 1
 	}
 	repo="$(repo_path)"
 	rel="$(rules_relpath)"
+	tree_rel="$(rules_tree_relpath)"
 	branch="$(repo_branch)"
-	work_file="$(repo_rules_path)"
-	local_snapshot="$(mktemp)"
-	remote_snapshot="$(mktemp)"
+	local_snapshot="$(mktemp -d)"
+	remote_snapshot="$(mktemp -d)"
 	requested_base_head="${ROUTER_RULES_BASE_HEAD:-}"
 	if [ -n "$requested_base_head" ]; then
 		requested_base_head="$(git_cmd -C "$repo" rev-parse --verify "${requested_base_head}^{commit}" 2>/dev/null || printf '%s' "$requested_base_head")"
 	fi
 
-	cp "$work_file" "$local_snapshot" 2>/dev/null || : > "$local_snapshot"
+	snapshot_rules_tree_from_worktree_internal "$repo" "$local_snapshot"
 	local_head_before="$(git_cmd -C "$repo" rev-parse --verify HEAD 2>/dev/null || true)"
 	git_cmd -C "$repo" fetch origin "$branch" >/dev/null 2>&1 || {
 		set_status_error 'git fetch failed'
-		rm -f "$local_snapshot" "$remote_snapshot"
+		rm -rf "$local_snapshot" "$remote_snapshot"
 		return 1
 	}
 
 	remote_head="$(git_cmd -C "$repo" rev-parse --verify "origin/$branch" 2>/dev/null || true)"
 	repo_clean=1
-	git_cmd -C "$repo" diff --quiet -- "$rel" 2>/dev/null || repo_clean=0
+	git_cmd -C "$repo" diff --quiet -- "$tree_rel" 2>/dev/null || repo_clean=0
 	last_remote_head="$(status_get last_sync_remote_head)"
 	if [ "$(enable_push)" != '1' ] \
 		&& [ "$repo_clean" = '1' ] \
 		&& [ -n "$local_head_before" ] \
 		&& [ "$local_head_before" != "$remote_head" ] \
 		&& [ -n "$last_remote_head" ] \
-		&& [ "$last_remote_head" = "$remote_head" ]; then
+			&& [ "$last_remote_head" = "$remote_head" ]; then
 		set_status_ok 'synced changed=0 pushed=0 strategy=local-ahead'
 		status_set last_sync_changed '0'
 		status_set last_sync_strategy 'local-ahead'
 		status_set last_sync_remote_head "$remote_head"
-		rm -f "$local_snapshot" "$remote_snapshot"
+		rm -rf "$local_snapshot" "$remote_snapshot"
 		return 0
 	fi
-	if ! git_cmd -C "$repo" show "origin/$branch:$rel" > "$remote_snapshot" 2>/dev/null; then
+	if ! snapshot_rules_tree_from_ref_internal "$repo" "origin/$branch" "$remote_snapshot"; then
 		set_status_error "Remote rules file not found in origin/$branch: $rel"
-		rm -f "$local_snapshot" "$remote_snapshot"
+		rm -rf "$local_snapshot" "$remote_snapshot"
 		return 1
 	fi
 	git_cmd -C "$repo" reset --hard "origin/$branch" >/dev/null 2>&1
 
 	strategy='remote'
-	if cmp -s "$local_snapshot" "$remote_snapshot"; then
+	if rules_tree_matches_internal "$local_snapshot" "$remote_snapshot"; then
 		:
 	elif [ -n "$requested_base_head" ] && [ "$requested_base_head" = "$remote_head" ]; then
-		cp "$local_snapshot" "$work_file"
+		restore_rules_tree_exact_local_internal "$local_snapshot" "$repo"
 		strategy='exact-local'
 	elif [ -z "$requested_base_head" ] && [ -n "$local_head_before" ] && [ "$local_head_before" = "$remote_head" ]; then
-		cp "$local_snapshot" "$work_file"
+		restore_rules_tree_exact_local_internal "$local_snapshot" "$repo"
 		strategy='exact-local'
 	else
-		merge_remote_preferred "$remote_snapshot" "$local_snapshot" "$work_file"
+		merge_rules_tree_remote_preferred_internal "$remote_snapshot" "$local_snapshot" "$repo"
 		strategy='merge-remote-preferred'
 	fi
 
+	# Keep the editable rules file free of entries already materialized into
+	# managed external source files, even after remote-preferred merges.
+	maybe_migrate_external_repo_layout_internal >/dev/null
+
 	changed=0
-	if ! git_cmd -C "$repo" diff --quiet -- "$rel"; then
+	if ! git_cmd -C "$repo" diff --quiet -- "$tree_rel"; then
 		changed=1
-		git_cmd -C "$repo" add "$rel"
+		git_cmd -C "$repo" add "$tree_rel"
 		git_cmd -C "$repo" commit -m "Sync shared targets from $(device_id)" >/dev/null 2>&1 || true
 	fi
 
@@ -1280,14 +1866,14 @@ sync_repo_internal() {
 	if [ "$changed" = '1' ] && [ "$(enable_push)" = '1' ]; then
 		if ! repo_push_configured; then
 			set_status_error 'git push requested but RULES_REPO_PUSH_URL is not configured'
-			rm -f "$local_snapshot" "$remote_snapshot"
+			rm -rf "$local_snapshot" "$remote_snapshot"
 			return 1
 		fi
 		if git_cmd -C "$repo" push origin "$branch" >/dev/null 2>&1; then
 			pushed=1
 		else
 			set_status_error 'git push failed'
-			rm -f "$local_snapshot" "$remote_snapshot"
+			rm -rf "$local_snapshot" "$remote_snapshot"
 			return 1
 		fi
 	fi
@@ -1296,7 +1882,7 @@ sync_repo_internal() {
 	status_set last_sync_changed "$changed"
 	status_set last_sync_strategy "$strategy"
 	status_set last_sync_remote_head "$remote_head"
-	rm -f "$local_snapshot" "$remote_snapshot"
+	rm -rf "$local_snapshot" "$remote_snapshot"
 }
 
 save_rules_file_internal() {
@@ -1347,16 +1933,62 @@ set_mode_cutover_internal() {
 	hard_cutover_xray_internal
 }
 
+external_sources_json() {
+	local first id label url enabled due path count last_run_at last_status last_message generated_count added_count actor
+
+	first=1
+	printf '['
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		enabled="$(external_source_enabled_by_id "$id")"
+		due='0'
+		external_source_due_by_id "$id" && due='1'
+		path="$(external_source_path "$id")"
+		count="$(rule_count "$path")"
+		last_run_at="$(external_source_status_get "$id" last_run_at)"
+		last_status="$(external_source_status_get "$id" last_status)"
+		last_message="$(external_source_status_get "$id" last_message)"
+		generated_count="$(external_source_status_get "$id" last_generated_count)"
+		added_count="$(external_source_status_get "$id" last_added_count)"
+		actor="$(external_source_status_get "$id" last_actor)"
+		[ -n "$generated_count" ] || generated_count='0'
+		[ -n "$added_count" ] || added_count='0'
+		[ "$first" = '1' ] || printf ','
+		first=0
+		printf '{'
+		printf '"id":"%s",' "$(json_escape "$id")"
+		printf '"label":"%s",' "$(json_escape "$label")"
+		printf '"url":"%s",' "$(json_escape "$url")"
+		printf '"enabled":'; json_bool "$enabled"; printf ','
+		printf '"due":'; json_bool "$due"; printf ','
+		printf '"file_relpath":"%s",' "$(json_escape "$(external_source_relpath "$id")")"
+		printf '"file_present":'; if [ -f "$path" ]; then json_bool 1; else json_bool 0; fi; printf ','
+		printf '"file_count":"%s",' "$(json_escape "$count")"
+		printf '"last_run_at":"%s",' "$(json_escape "$last_run_at")"
+		printf '"last_status":"%s",' "$(json_escape "$last_status")"
+		printf '"last_message":"%s",' "$(json_escape "$last_message")"
+		printf '"last_generated_count":"%s",' "$(json_escape "$generated_count")"
+		printf '"last_added_count":"%s",' "$(json_escape "$added_count")"
+		printf '"last_actor":"%s"' "$(json_escape "$actor")"
+		printf '}'
+	done <<EOF
+$(external_source_catalog)
+EOF
+	printf ']'
+}
+
 status_json() {
-	local repo rel rules_file resolved map domains literals file_text profile_status repo_head repo_dirty mode
-	local source_count resolved_count domain_count literal_count xray_ipset_count last_sync_at last_sync_status last_sync_message last_apply_xray
+	local repo rel tree_rel rules_file resolved map domains literals file_text profile_status repo_head repo_dirty mode
+	local source_count effective_source_count managed_source_count resolved_count domain_count literal_count xray_ipset_count last_sync_at last_sync_status last_sync_message last_apply_xray
 	local setname current_signature last_cutover_at last_cutover_status last_cutover_message last_cutover_signature cutover_required
 	local sync_phase sync_phase_at sync_phase_message sync_trace last_verified_at last_sync_actor rules_checksum last_apply_signature interval
 	local fetch_url push_url_raw push_url_effective auth_mode http_username http_password_set ssh_key_present ssh_pub git_configured sync_enabled git_readonly
-	local external_enabled external_url external_interval external_due last_external_run_at last_external_status last_external_message last_external_generated_count last_external_added_count last_external_actor
+	local external_enabled external_interval external_due last_external_run_at last_external_status last_external_message last_external_generated_count last_external_added_count last_external_actor
+	local rules_text_included id label url path count external_sources_payload
 
 	repo="$(repo_path)"
 	rel="$(rules_relpath)"
+	tree_rel="$(rules_tree_relpath)"
 	rules_file="$(repo_rules_path)"
 	resolved="$(resolved_file)"
 	map="$(mapping_file)"
@@ -1364,10 +1996,13 @@ status_json() {
 	literals="$(literal_file)"
 	mode="$(xray_mode)"
 	file_text=''
-	[ -f "$rules_file" ] && file_text="$(cat "$rules_file")"
+	rules_text_included='0'
+	if status_include_rules_text; then
+		rules_text_included='1'
+		[ -f "$rules_file" ] && file_text="$(cat "$rules_file")"
+	fi
 	interval="$(sync_interval)"
 	external_enabled="$(external_source_enabled)"
-	external_url="$(external_source_url)"
 	external_interval="$(external_source_interval_seconds)"
 	fetch_url="$(repo_fetch_url)"
 	push_url_raw="$(repo_push_url_raw)"
@@ -1393,12 +2028,24 @@ status_json() {
 	repo_dirty='0'
 	if [ -d "$repo/.git" ]; then
 		repo_head="$(git_cmd -C "$repo" rev-parse --short HEAD 2>/dev/null || true)"
-		if ! git_cmd -C "$repo" diff --quiet -- "$rel" 2>/dev/null; then
+		if ! git_cmd -C "$repo" diff --quiet -- "$tree_rel" 2>/dev/null; then
 			repo_dirty='1'
 		fi
 	fi
 
 	source_count="$(rule_count "$rules_file")"
+	managed_source_count='0'
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		[ "$(external_source_enabled_by_id "$id")" = '1' ] || continue
+		path="$(external_source_path "$id")"
+		count="$(rule_count "$path")"
+		managed_source_count=$((managed_source_count + count))
+	done <<EOF
+$(external_source_catalog)
+EOF
+	effective_source_count="$(status_get effective_source_count)"
+	[ -n "$effective_source_count" ] || effective_source_count="$source_count"
 	resolved_count="$( [ -f "$resolved" ] && wc -l < "$resolved" | awk '{print $1}' || echo 0 )"
 	domain_count="$( [ -f "$domains" ] && wc -l < "$domains" | awk '{print $1}' || echo 0 )"
 	literal_count="$( [ -f "$literals" ] && wc -l < "$literals" | awk '{print $1}' || echo 0 )"
@@ -1432,6 +2079,7 @@ status_json() {
 	last_external_actor="$(status_get last_external_actor)"
 	external_due='0'
 	external_source_due_now && external_due='1'
+	external_sources_payload="$(external_sources_json)"
 	cutover_required='0'
 	[ "$current_signature" = "$last_cutover_signature" ] || cutover_required='1'
 
@@ -1459,11 +2107,12 @@ status_json() {
 	printf '"xray_mode":"%s",' "$(json_escape "$mode")"
 	printf '"sync_interval":"%s",' "$(json_escape "$interval")"
 	printf '"external_source_enabled":'; json_bool "$external_enabled"; printf ','
-	printf '"external_source_url":"%s",' "$(json_escape "$external_url")"
 	printf '"external_source_interval":"%s",' "$(json_escape "$external_interval")"
 	printf '"external_source_due":'; json_bool "$external_due"; printf ','
 	printf '"enable_push":'; json_bool "$(enable_push)"; printf ','
 	printf '"source_count":"%s",' "$(json_escape "$source_count")"
+	printf '"effective_source_count":"%s",' "$(json_escape "$effective_source_count")"
+	printf '"managed_source_count":"%s",' "$(json_escape "$managed_source_count")"
 	printf '"domain_count":"%s",' "$(json_escape "$domain_count")"
 	printf '"literal_count":"%s",' "$(json_escape "$literal_count")"
 	printf '"resolved_count":"%s",' "$(json_escape "$resolved_count")"
@@ -1483,6 +2132,8 @@ status_json() {
 	printf '"last_external_message":"%s",' "$(json_escape "$last_external_message")"
 	printf '"last_external_generated_count":"%s",' "$(json_escape "$last_external_generated_count")"
 	printf '"last_external_added_count":"%s",' "$(json_escape "$last_external_added_count")"
+	printf '"external_sources":%s,' "$external_sources_payload"
+	printf '"rules_text_included":'; json_bool "$rules_text_included"; printf ','
 	printf '"rules_checksum":"%s",' "$(json_escape "$rules_checksum")"
 	printf '"last_apply_signature":"%s",' "$(json_escape "$last_apply_signature")"
 	printf '"last_apply_xray":"%s",' "$(json_escape "$last_apply_xray")"
@@ -1547,13 +2198,18 @@ router-rules commands:
   cutover-xray
   sync-apply-xray
   background-tick
-  preview-external-source [url]
+  preview-external-source <source-id>
+  read-external-source <source-id>
   sync-external-source
   save-file <path>
   set-xray-mode <full|selective>
   set-mode-cutover <full|selective>
 EOF
 }
+
+if [ "${ROUTER_RULES_LIB_ONLY:-0}" = '1' ]; then
+	return 0 2>/dev/null || exit 0
+fi
 
 cmd="${1:-}"
 case "$cmd" in
@@ -1589,7 +2245,13 @@ case "$cmd" in
 		;;
 	preview-external-source)
 		shift
-		with_lock preview_external_source_internal "${1:-}"
+		[ -n "${1:-}" ] || { usage >&2; exit 1; }
+		with_lock preview_external_source_internal "$1"
+		;;
+	read-external-source)
+		shift
+		[ -n "${1:-}" ] || { usage >&2; exit 1; }
+		with_lock read_external_source_internal "$1"
 		;;
 	sync-external-source)
 		with_lock sync_external_source_internal

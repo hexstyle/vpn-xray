@@ -124,6 +124,10 @@ current_router_rules_mode() {
   esac
 }
 
+current_router_external_source_config() {
+  router_ssh "printf 'ENABLED=%s\n' \"\$(uci -q get router_rules.global.external_source_enabled 2>/dev/null || true)\"; printf 'URL=%s\n' \"\$(uci -q get router_rules.global.external_source_url 2>/dev/null || true)\"; printf 'INTERVAL=%s\n' \"\$(uci -q get router_rules.global.external_source_interval 2>/dev/null || true)\""
+}
+
 require_vars \
   ROUTER_SSH \
   ROUTER_HOST \
@@ -195,6 +199,24 @@ if [[ "${PRESERVE_XRAY_RULES_MODE:-1}" == "1" ]]; then
       echo "Preserving router xray mode: $XRAY_RULES_MODE"
       ;;
   esac
+fi
+
+if [[ "${PRESERVE_EXTERNAL_SOURCE_SETTINGS:-1}" == "1" ]]; then
+  current_external_cfg="$(current_router_external_source_config || true)"
+  current_external_enabled="$(printf '%s\n' "$current_external_cfg" | sed -n 's/^ENABLED=//p' | sed -n '1p')"
+  current_external_url="$(printf '%s\n' "$current_external_cfg" | sed -n 's/^URL=//p' | sed -n '1p')"
+  current_external_interval="$(printf '%s\n' "$current_external_cfg" | sed -n 's/^INTERVAL=//p' | sed -n '1p')"
+  case "$current_external_enabled" in
+    0|1)
+      RULES_EXTERNAL_SOURCE_ENABLED="$current_external_enabled"
+      ;;
+  esac
+  if [[ -n "$current_external_url" ]]; then
+    RULES_EXTERNAL_SOURCE_URL="$current_external_url"
+  fi
+  if [[ "$current_external_interval" =~ ^[0-9]+$ ]]; then
+    RULES_EXTERNAL_SOURCE_INTERVAL="$current_external_interval"
+  fi
 fi
 
 if [[ "${ISOLATE_WIFI_LAN_ONLY:-0}" == "1" && "$ROUTER_HOST" == "$ROUTER_LAN_IP" ]]; then

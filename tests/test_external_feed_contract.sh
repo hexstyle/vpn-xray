@@ -33,6 +33,10 @@ grep -q "resolve_pkg_via_openwrt_fallback()" "$INSTALL_PLATFORM" \
 	|| fail "install-platform must resolve fallback package dependencies recursively"
 grep -q "python3_supports_external_fetcher()" "$INSTALL_PLATFORM" \
 	|| fail "install-platform must verify the Python runtime can import the external fetcher modules"
+grep -q "effective_external_source_enabled()" "$INSTALL_PLATFORM" \
+	|| fail "install-platform must preserve existing external source enable state on router updates"
+grep -q "current_router_external_source_config()" "$INSTALL_ROUTER" \
+	|| fail "install-router must preserve the router's current external source config on updates"
 grep -q "RULES_EXTERNAL_SOURCE_ENABLED" "$INSTALL_ROUTER" \
 	|| fail "install-router must pass external source settings to install-platform"
 
@@ -40,29 +44,43 @@ grep -q "external_source_enabled()" "$ROUTER_RULES_FILE" \
 	|| fail "router-rules must expose external_source_enabled()"
 grep -q "preview_external_source_internal()" "$ROUTER_RULES_FILE" \
 	|| fail "router-rules must implement preview_external_source_internal()"
-grep -q "refresh_external_source_internal()" "$ROUTER_RULES_FILE" \
-	|| fail "router-rules must implement refresh_external_source_internal()"
+grep -q "refresh_external_sources_internal()" "$ROUTER_RULES_FILE" \
+	|| fail "router-rules must implement refresh_external_sources_internal()"
+grep -q "compose_effective_rules_internal()" "$ROUTER_RULES_FILE" \
+	|| fail "router-rules must build an effective merged rules file from editable and managed sources"
+grep -q "read_external_source_internal()" "$ROUTER_RULES_FILE" \
+	|| fail "router-rules must expose read_external_source_internal() for source file viewing"
+grep -q "external_sources_json()" "$ROUTER_RULES_FILE" \
+	|| fail "router-rules status must emit per-source metadata"
 grep -q "preview-external-source" "$ROUTER_RULES_FILE" \
 	|| fail "router-rules must expose preview-external-source command"
+grep -q "read-external-source" "$ROUTER_RULES_FILE" \
+	|| fail "router-rules must expose read-external-source command"
+grep -q "status_include_rules_text()" "$ROUTER_RULES_FILE" \
+	|| fail "router-rules must support lightweight status responses without full rules_text"
 
 grep -q "preview_external_source)" "$CGI_FILE" \
 	|| fail "xray-rules.cgi must support preview_external_source action"
+grep -q "read_external_source)" "$CGI_FILE" \
+	|| fail "xray-rules.cgi must support read_external_source action"
 grep -q "sync_external_source)" "$CGI_FILE" \
 	|| fail "xray-rules.cgi must support sync_external_source action"
-grep -q "external_source_enabled" "$CGI_FILE" \
-	|| fail "xray-rules.cgi must persist external source settings"
+grep -q "external_source_enabled_ids" "$CGI_FILE" \
+	|| fail "xray-rules.cgi must persist per-source external enable flags"
 grep -q 'ROUTER_RULES_LOCK_WAIT="\$RULES_EXTERNAL_LOCK_WAIT"' "$CGI_FILE" \
 	|| fail "xray-rules.cgi must let external preview/sync wait for the router-rules lock"
+grep -q "include_rules_text" "$CGI_FILE" \
+	|| fail "xray-rules.cgi status must be able to omit or include the full rules_text payload"
 
-grep -q 'id="rulesExternalEnabled"' "$HTML_FILE" \
-	|| fail "xray.html must render the external source toggle"
-grep -q 'id="rulesExternalUrl"' "$HTML_FILE" \
-	|| fail "xray.html must render the external source URL field"
-grep -q 'id="rulesExternalPreviewBtn"' "$HTML_FILE" \
-	|| fail "xray.html must render the external source preview button"
+grep -q 'id="rulesExternalSources"' "$HTML_FILE" \
+	|| fail "xray.html must render the managed external source list"
 grep -q 'id="rulesExternalRunBtn"' "$HTML_FILE" \
 	|| fail "xray.html must render the external source run button"
-grep -q "external_source_enabled" "$HTML_FILE" \
-	|| fail "xray.html must submit external source settings"
+grep -q 'id="rulesLoadTextBtn"' "$HTML_FILE" \
+	|| fail "xray.html must render a button for loading the full rules list on demand"
+grep -q 'id="rulesTextModal"' "$HTML_FILE" \
+	|| fail "xray.html must render a popup/modal for viewing managed source contents"
+grep -q "external_source_enabled_ids" "$HTML_FILE" \
+	|| fail "xray.html must submit per-source external source settings"
 
 printf 'ok\n'

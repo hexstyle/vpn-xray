@@ -369,6 +369,49 @@ effective_xray_rules_mode() {
 	esac
 }
 
+existing_router_rules_value() {
+	uci -q get "router_rules.global.$1" 2>/dev/null || true
+}
+
+effective_external_source_enabled() {
+	local existing
+
+	existing="$(existing_router_rules_value external_source_enabled)"
+	case "$existing" in
+		0|1)
+			printf '%s\n' "$existing"
+			;;
+		*)
+			printf '%s\n' "${RULES_EXTERNAL_SOURCE_ENABLED:-0}"
+			;;
+	esac
+}
+
+effective_external_source_url() {
+	local existing
+
+	existing="$(existing_router_rules_value external_source_url)"
+	if [ -n "$existing" ]; then
+		printf '%s\n' "$existing"
+	else
+		printf '%s\n' "${RULES_EXTERNAL_SOURCE_URL:-}"
+	fi
+}
+
+effective_external_source_interval() {
+	local existing
+
+	existing="$(existing_router_rules_value external_source_interval)"
+	case "$existing" in
+		''|*[!0-9]*)
+			printf '%s\n' "${RULES_EXTERNAL_SOURCE_INTERVAL:-3600}"
+			;;
+		*)
+			printf '%s\n' "$existing"
+			;;
+	esac
+}
+
 defer_xray_activation() {
 	[ "${DEFER_XRAY_ACTIVATION:-0}" = '1' ]
 }
@@ -524,9 +567,9 @@ render_router_rules_conf() {
 	RULES_ENABLE_PUSH="${RULES_ENABLE_PUSH:-0}" \
 	XRAY_RULES_MODE="$(effective_xray_rules_mode)" \
 	RULES_SYNC_INTERVAL="${RULES_SYNC_INTERVAL:-30}" \
-	RULES_EXTERNAL_SOURCE_ENABLED="${RULES_EXTERNAL_SOURCE_ENABLED:-0}" \
-	RULES_EXTERNAL_SOURCE_URL="${RULES_EXTERNAL_SOURCE_URL:-}" \
-	RULES_EXTERNAL_SOURCE_INTERVAL="${RULES_EXTERNAL_SOURCE_INTERVAL:-3600}" \
+	RULES_EXTERNAL_SOURCE_ENABLED="$(effective_external_source_enabled)" \
+	RULES_EXTERNAL_SOURCE_URL="$(effective_external_source_url)" \
+	RULES_EXTERNAL_SOURCE_INTERVAL="$(effective_external_source_interval)" \
 	python3 - "$COMMON_DIR/files/router-rules.config.template" "$output" <<'PY'
 import os
 import pathlib
@@ -681,9 +724,9 @@ set router_rules.global.local_device_id='${RULES_DEVICE_ID:-gl-router}'
 set router_rules.global.enable_push='${RULES_ENABLE_PUSH:-0}'
 set router_rules.global.xray_mode='$(effective_xray_rules_mode)'
 set router_rules.global.sync_interval='${RULES_SYNC_INTERVAL:-30}'
-set router_rules.global.external_source_enabled='${RULES_EXTERNAL_SOURCE_ENABLED:-0}'
-set router_rules.global.external_source_url='${RULES_EXTERNAL_SOURCE_URL:-}'
-set router_rules.global.external_source_interval='${RULES_EXTERNAL_SOURCE_INTERVAL:-3600}'
+set router_rules.global.external_source_enabled='$(effective_external_source_enabled)'
+set router_rules.global.external_source_url='$(effective_external_source_url)'
+set router_rules.global.external_source_interval='$(effective_external_source_interval)'
 EOF
 	uci commit router_rules
 	chmod 600 /etc/config/router_rules

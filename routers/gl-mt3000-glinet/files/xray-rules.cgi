@@ -105,9 +105,45 @@ ssh_key_path() {
 	fi
 }
 
+external_source_ids() {
+	cat <<'EOF'
+microsoft_service_tags
+cloudflare_ipv4
+google_ipv4
+aws_ipv4
+EOF
+}
+
+source_ids_csv_contains() {
+	local csv="$1"
+	local wanted="$2"
+	local normalized
+
+	normalized=",$(printf '%s' "$csv" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'),"
+	case "$normalized" in
+		*",$wanted,"*)
+			return 0
+			;;
+	esac
+	return 1
+}
+
 status_action() {
+	local include_rules_text
+
+	include_rules_text='0'
+	if request_has_key include_rules_text; then
+		include_rules_text="$(request_value include_rules_text)"
+	fi
 	emit_header
-	/usr/bin/router-rules status-json
+	case "$include_rules_text" in
+		1)
+			ROUTER_RULES_STATUS_INCLUDE_RULES_TEXT='1' /usr/bin/router-rules status-json
+			;;
+		*)
+			ROUTER_RULES_STATUS_INCLUDE_RULES_TEXT='0' /usr/bin/router-rules status-json
+			;;
+	esac
 }
 
 restart_sync_service() {
@@ -198,7 +234,7 @@ mode_error_message() {
 
 save_config_action() {
 	local fetch_url push_url branch auth_mode username password enable_push sync_interval ssh_private_key key_path
-	local sync_enabled check_error tmp_key external_enabled external_url external_interval
+	local sync_enabled check_error tmp_key external_enabled_ids external_interval source_id
 
 	fetch_url=''
 	push_url=''
@@ -210,8 +246,7 @@ save_config_action() {
 	sync_interval=''
 	ssh_private_key=''
 	sync_enabled=''
-	external_enabled=''
-	external_url=''
+	external_enabled_ids=''
 	external_interval=''
 
 	ensure_config_section
@@ -260,22 +295,18 @@ save_config_action() {
 		cfg_set_or_delete sync_interval "$sync_interval"
 	fi
 
-	if request_has_key external_source_enabled; then
-		external_enabled="$(request_value external_source_enabled)"
-		case "$external_enabled" in
-			0|1)
-				cfg_set_or_delete external_source_enabled "$external_enabled"
-				;;
-			*)
-				emit_error save_config 'Invalid external source mode.'
-				return 0
-				;;
-		esac
-	fi
-
-	if request_has_key external_source_url; then
-		external_url="$(request_value external_source_url)"
-		cfg_set_or_delete external_source_url "$external_url"
+	if request_has_key external_source_enabled_ids; then
+		external_enabled_ids="$(request_value external_source_enabled_ids)"
+		while IFS= read -r source_id || [ -n "$source_id" ]; do
+			[ -n "$source_id" ] || continue
+			if source_ids_csv_contains "$external_enabled_ids" "$source_id"; then
+				cfg_set_or_delete "external_source_${source_id}_enabled" '1'
+			else
+				cfg_set_or_delete "external_source_${source_id}_enabled" '0'
+			fi
+		done <<EOF
+$(external_source_ids)
+EOF
 	fi
 
 	if request_has_key external_source_interval; then
@@ -351,24 +382,10 @@ save_config_action() {
 
 	sync_enabled="$(cfg_get git_sync_enabled)"
 	fetch_url="$(cfg_get repo_fetch_url)"
-	external_enabled="$(cfg_get external_source_enabled)"
-	external_url="$(cfg_get external_source_url)"
 	auth_mode="$(cfg_get git_auth_mode)"
 	if [ "$sync_enabled" = '1' ] && [ -z "$fetch_url" ]; then
 		emit_error save_config 'Repository URL is required when Git sync is enabled.'
 		return 0
-	fi
-	if [ "$external_enabled" = '1' ] && [ -z "$external_url" ]; then
-		emit_error save_config 'External source URL is required when external import is enabled.'
-		return 0
-	fi
-	if [ "$external_enabled" = '1' ] && [ "$sync_enabled" = '1' ]; then
-		case "$auth_mode" in
-			none|readonly)
-				emit_error save_config 'External source import cannot be enabled while Git sync is read-only.'
-				return 0
-				;;
-		esac
 	fi
 
 	cfg_set_or_delete ssh_key_path "$(ssh_key_path)"
@@ -393,20 +410,20 @@ save_config_action() {
 }
 
 preview_external_source_action() {
-	local url preview_file error_file rc message preview_text preview_count
+	local source_id preview_file error_file rc message preview_text preview_count
 
-	url=''
+	source_id=''
 	preview_file="$(mktemp)"
 	error_file="$(mktemp)"
 	rc=0
-	if request_has_key external_source_url; then
-		url="$(request_value external_source_url)"
+	if request_has_key source_id; then
+		source_id="$(request_value source_id)"
 	fi
 
 	if command -v timeout >/dev/null 2>&1; then
-		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-external-preview' timeout "$RULES_EXTERNAL_PREVIEW_TIMEOUT" /usr/bin/router-rules preview-external-source "$url" > "$preview_file" 2> "$error_file" || rc=$?
+		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-external-preview' timeout "$RULES_EXTERNAL_PREVIEW_TIMEOUT" /usr/bin/router-rules preview-external-source "$source_id" > "$preview_file" 2> "$error_file" || rc=$?
 	else
-		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-external-preview' /usr/bin/router-rules preview-external-source "$url" > "$preview_file" 2> "$error_file" || rc=$?
+		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-external-preview' /usr/bin/router-rules preview-external-source "$source_id" > "$preview_file" 2> "$error_file" || rc=$?
 	fi
 
 	if [ "$rc" -ne 0 ]; then
@@ -427,6 +444,44 @@ preview_external_source_action() {
 	printf '"action":"preview_external_source",'
 	printf '"generated_count":"%s",' "$(json_escape "$preview_count")"
 	printf '"generated_text":"%s"' "$(json_escape "$preview_text")"
+	printf '}'
+}
+
+read_external_source_action() {
+	local source_id read_file error_file rc message output_text output_count
+
+	source_id=''
+	read_file="$(mktemp)"
+	error_file="$(mktemp)"
+	rc=0
+	if request_has_key source_id; then
+		source_id="$(request_value source_id)"
+	fi
+
+	if command -v timeout >/dev/null 2>&1; then
+		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-external-read' timeout "$RULES_EXTERNAL_PREVIEW_TIMEOUT" /usr/bin/router-rules read-external-source "$source_id" > "$read_file" 2> "$error_file" || rc=$?
+	else
+		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-external-read' /usr/bin/router-rules read-external-source "$source_id" > "$read_file" 2> "$error_file" || rc=$?
+	fi
+
+	if [ "$rc" -ne 0 ]; then
+		message="$(sed '/^[[:space:]]*$/d' "$error_file" | sed -n '1p')"
+		[ -n "$message" ] || message='Managed external source file read failed.'
+		rm -f "$read_file" "$error_file"
+		emit_error read_external_source "$message"
+		return 0
+	fi
+
+	output_text="$(cat "$read_file")"
+	output_count="$(sed '/^[[:space:]]*$/d' "$read_file" | wc -l | awk '{print $1}')"
+	rm -f "$read_file" "$error_file"
+
+	emit_header
+	printf '{'
+	printf '"ok":true,'
+	printf '"action":"read_external_source",'
+	printf '"file_count":"%s",' "$(json_escape "$output_count")"
+	printf '"file_text":"%s"' "$(json_escape "$output_text")"
 	printf '}'
 }
 
@@ -547,6 +602,9 @@ case "$(request_value action)" in
 		;;
 	preview_external_source)
 		preview_external_source_action
+		;;
+	read_external_source)
+		read_external_source_action
 		;;
 	sync_external_source)
 		sync_external_source_action
