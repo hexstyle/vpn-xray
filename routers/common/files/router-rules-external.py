@@ -51,6 +51,11 @@ def parse_args() -> argparse.Namespace:
         default=45.0,
         help="Network timeout in seconds for URL fetches.",
     )
+    parser.add_argument(
+        "--collapse",
+        action="store_true",
+        help="Collapse IPv4 targets into the minimal set of covering subnets after normalization.",
+    )
     return parser.parse_args()
 
 
@@ -153,6 +158,31 @@ def sort_targets(values: Set[str]) -> List[str]:
         return (1, 0, 0, value)
 
     return sorted(values, key=key)
+
+
+def collapse_targets(values: Sequence[str]) -> List[str]:
+    ipv4_networks = []
+    normalized_domains: Set[str] = set()
+
+    for value in values:
+        normalized_ipv4 = normalize_ipv4_target(value)
+        if normalized_ipv4:
+            ipv4_networks.append(ipaddress.ip_network(normalized_ipv4, strict=False))
+            continue
+        normalized = normalize_domain(value)
+        if normalized:
+            normalized_domains.add(normalized)
+
+    collapsed_values: Set[str] = set(normalized_domains)
+    for network in ipaddress.collapse_addresses(ipv4_networks):
+        if network.version != 4:
+            continue
+        if network.prefixlen == 32:
+            collapsed_values.add(str(network.network_address))
+        else:
+            collapsed_values.add(str(network))
+
+    return sort_targets(collapsed_values)
 
 
 def iter_json_strings(value: object) -> Iterator[str]:
@@ -359,7 +389,8 @@ def main() -> int:
     else:
         targets.update(extract_targets(sys.stdin.read(), source_url=args.source_url, timeout=args.timeout))
 
-    for line in sort_targets(targets):
+    lines = collapse_targets(list(targets)) if args.collapse else sort_targets(targets)
+    for line in lines:
         print(line)
     return 0
 

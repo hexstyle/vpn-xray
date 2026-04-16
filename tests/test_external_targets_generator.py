@@ -160,6 +160,23 @@ class ExternalTargetsGeneratorTests(unittest.TestCase):
             ],
         )
 
+    def test_collapse_targets_merges_ipv4_networks_but_keeps_domains(self) -> None:
+        self.assertEqual(
+            MODULE.collapse_targets(
+                [
+                    "10.0.0.0/25",
+                    "10.0.0.128/25",
+                    "10.0.1.0/24",
+                    "Example.com",
+                    "example.com",
+                ]
+            ),
+            [
+                "10.0.0.0/23",
+                "example.com",
+            ],
+        )
+
     def test_resolves_microsoft_download_page_to_service_tags_json(self) -> None:
         microsoft_page = "https://www.microsoft.com/en-us/download/details.aspx?id=56519"
         microsoft_json = "https://download.microsoft.com/download/example/ServiceTags_Public_20260413.json"

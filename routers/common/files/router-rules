@@ -371,6 +371,10 @@ effective_rules_file() {
 	printf '%s/effective_shared_targets.txt\n' "$(generated_dir)"
 }
 
+effective_rules_signature_file() {
+	printf '%s/effective_shared_targets.sig\n' "$(generated_dir)"
+}
+
 external_source_repo_layout_version() {
 	cfg_get external_source_repo_layout_version '0'
 }
@@ -1070,11 +1074,19 @@ EOF
 }
 
 compose_effective_rules_internal() {
-	local manual_file combined_file out_file id label url path
+	local manual_file combined_file out_file collapsed_file tracked_sig id label url path
 
 	manual_file="$(repo_rules_path)"
+	tracked_sig="$(tracked_rules_signature)"
+	if [ -s "$(effective_rules_file)" ] \
+		&& [ -f "$(effective_rules_signature_file)" ] \
+		&& [ "$(cat "$(effective_rules_signature_file)" 2>/dev/null || true)" = "$tracked_sig" ]; then
+		printf '%s\n' "$(effective_rules_file)"
+		return 0
+	fi
 	combined_file="$(mktemp)"
 	out_file="$(mktemp)"
+	collapsed_file="$(mktemp)"
 
 	: > "$combined_file"
 	if [ -s "$manual_file" ]; then
@@ -1114,8 +1126,19 @@ EOF
 		}
 	' "$combined_file" > "$out_file"
 
-	mv "$out_file" "$(effective_rules_file)"
-	rm -f "$combined_file"
+	if command -v python3 >/dev/null 2>&1 && [ -f "$(external_source_script)" ]; then
+		if python3 "$(external_source_script)" --collapse --input-file "$out_file" > "$collapsed_file" 2>/dev/null; then
+			mv "$collapsed_file" "$(effective_rules_file)"
+		else
+			rm -f "$collapsed_file"
+			mv "$out_file" "$(effective_rules_file)"
+		fi
+	else
+		rm -f "$collapsed_file"
+		mv "$out_file" "$(effective_rules_file)"
+	fi
+	printf '%s\n' "$tracked_sig" > "$(effective_rules_signature_file)"
+	rm -f "$combined_file" "$out_file"
 	printf '%s\n' "$(effective_rules_file)"
 }
 
@@ -1686,21 +1709,30 @@ hard_cutover_xray_internal() {
 	set_sync_phase verified "Current ruleset is active after hard cutover (mode=${mode}, conntrack_flushed=${conntrack_flushed})"
 }
 
+refresh_resolved_runtime_internal() {
+	local mode
+
+	mode="$(xray_mode)"
+	set_sync_phase drift_detected 'Resolved domain targets changed for selective routing; refreshing runtime targets'
+	apply_xray_internal
+	status_set last_verified_at "$(date +%s)"
+	set_sync_phase verified "Resolved selective targets refreshed without hard cutover (mode=${mode})"
+}
+
 sync_apply_xray_internal() {
 	if ! repo_configured && [ "$(sync_actor)" = 'background' ]; then
 		status_set last_sync_changed '0'
 		status_set last_sync_strategy 'local-only'
 		status_set last_sync_remote_head ''
 		status_set last_sync_actor "$(sync_actor)"
-		status_set last_sync_status 'local-only'
-		status_set last_sync_message 'Git sync is not configured; background checks stay idle and the local router rules file remains authoritative.'
-		status_set last_sync_at "$(date +%s)"
-		if resolved_snapshot_needs_apply_internal; then
-			set_sync_phase drift_detected 'Resolved domain targets changed for selective routing; starting cutover'
-			hard_cutover_xray_internal
-		elif xray_needs_apply_internal; then
-			set_sync_phase drift_detected 'Found runtime drift against the current ruleset; starting cutover'
-			hard_cutover_xray_internal
+			status_set last_sync_status 'local-only'
+			status_set last_sync_message 'Git sync is not configured; background checks stay idle and the local router rules file remains authoritative.'
+			status_set last_sync_at "$(date +%s)"
+			if resolved_snapshot_needs_apply_internal; then
+				refresh_resolved_runtime_internal
+			elif xray_needs_apply_internal; then
+				set_sync_phase drift_detected 'Found runtime drift against the current ruleset; starting cutover'
+				hard_cutover_xray_internal
 		else
 			status_set last_verified_at "$(date +%s)"
 			set_sync_phase verified 'Git sync is disabled; local router rules are authoritative.'
@@ -1714,8 +1746,7 @@ sync_apply_xray_internal() {
 		set_sync_phase drift_detected 'Found changes between Git remote and the current router ruleset; starting cutover'
 		hard_cutover_xray_internal
 	elif resolved_snapshot_needs_apply_internal; then
-		set_sync_phase drift_detected 'Resolved domain targets changed for selective routing; starting cutover'
-		hard_cutover_xray_internal
+		refresh_resolved_runtime_internal
 	elif xray_needs_apply_internal; then
 		set_sync_phase drift_detected 'Found runtime drift against the current ruleset; starting cutover'
 		hard_cutover_xray_internal

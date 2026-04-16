@@ -17,6 +17,8 @@ fail() {
 }
 
 [ -f "$PYTHON_GENERATOR" ] || fail "router-rules external generator script is missing"
+grep -q -- "--collapse" "$PYTHON_GENERATOR" \
+	|| fail "router-rules external generator must support collapsing IPv4 targets for the runtime-effective ruleset"
 
 grep -q "option external_source_enabled" "$CONFIG_TEMPLATE" \
 	|| fail "router-rules config template must expose external_source_enabled"
@@ -48,6 +50,10 @@ grep -q "refresh_external_sources_internal()" "$ROUTER_RULES_FILE" \
 	|| fail "router-rules must implement refresh_external_sources_internal()"
 grep -q "compose_effective_rules_internal()" "$ROUTER_RULES_FILE" \
 	|| fail "router-rules must build an effective merged rules file from editable and managed sources"
+grep -q -- "--collapse --input-file" "$ROUTER_RULES_FILE" \
+	|| fail "router-rules must collapse managed IPv4 targets before applying the runtime-effective ruleset"
+grep -q "refresh_resolved_runtime_internal()" "$ROUTER_RULES_FILE" \
+	|| fail "router-rules must refresh resolved selective targets without forcing a hard cutover every time"
 grep -q "read_external_source_internal()" "$ROUTER_RULES_FILE" \
 	|| fail "router-rules must expose read_external_source_internal() for source file viewing"
 grep -q "external_sources_json()" "$ROUTER_RULES_FILE" \
