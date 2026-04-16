@@ -41,7 +41,7 @@ DOWNLOAD_DIR="${WORK_DIR}/downloads"
 EXTRACT_DIR="${WORK_DIR}/extract"
 OPKG_UPDATE_OK='0'
 BUNDLED_PAYLOAD_DIR="${PROFILE_DIR}/packages"
-OPENWRT_FALLBACK_PACKAGES_BASE='https://downloads.openwrt.org/releases/21.02.3/packages'
+OPENWRT_FALLBACK_RELEASE='21.02.3'
 
 [ -f "$PROFILE_DIR/profile.env" ] || {
 	echo "Missing router profile defaults: $PROFILE_DIR/profile.env" >&2
@@ -83,10 +83,16 @@ require_cmd() {
 	have_cmd "$1" || fail "Missing required router command: $1"
 }
 
+pkg_installed_exact() {
+	local package="$1"
+
+	opkg list-installed 2>/dev/null | awk -v pkg="$package" '$1 == pkg { found = 1 } END { exit(found ? 0 : 1) }'
+}
+
 ensure_pkg_installed() {
 	local package="$1"
 
-	opkg list-installed "$package" >/dev/null 2>&1 && return 0
+	pkg_installed_exact "$package" && return 0
 	opkg install "$package" >/dev/null 2>&1 || fail "Could not install package '$package' with opkg. Check router internet access and package feeds."
 }
 
@@ -103,7 +109,7 @@ try_pkg_install() {
 	local package="$1"
 	local purpose="$2"
 
-	opkg list-installed "$package" >/dev/null 2>&1 && return 0
+	pkg_installed_exact "$package" && return 0
 	opkg install "$package" >/dev/null 2>&1 || {
 		warn "Could not install optional package '$package' for $purpose. The core VPN path can still work, but the related feature may stay unavailable."
 		return 1
@@ -128,60 +134,221 @@ router_package_arch() {
 	printf '%s\n' "$arch"
 }
 
+openwrt_target_path() {
+	local target=''
+
+	if [ -f /etc/openwrt_release ]; then
+		# shellcheck disable=SC1091
+		. /etc/openwrt_release
+		target="${DISTRIB_TARGET:-}"
+	fi
+
+	[ -n "$target" ] || return 1
+	printf '%s\n' "$target"
+}
+
 openwrt_fallback_repo_url() {
-	local arch
+	local feed="$1"
+	local arch target
 
 	arch="$(router_package_arch)" || return 1
-	printf '%s/%s/packages\n' "$OPENWRT_FALLBACK_PACKAGES_BASE" "$arch"
+	case "$feed" in
+		base)
+			target="$(openwrt_target_path)" || return 1
+			printf 'https://downloads.openwrt.org/releases/%s/targets/%s/packages\n' "$OPENWRT_FALLBACK_RELEASE" "$target"
+			;;
+		packages)
+			printf 'https://downloads.openwrt.org/releases/%s/packages/%s/packages\n' "$OPENWRT_FALLBACK_RELEASE" "$arch"
+			;;
+		*)
+			return 1
+			;;
+	esac
 }
 
 openwrt_fallback_index_path() {
-	local arch
+	local feed="$1"
+	local arch target index_suffix
 
 	arch="$(router_package_arch)" || return 1
-	printf '%s/openwrt-packages-%s.gz\n' "$DOWNLOAD_DIR" "$arch"
+	case "$feed" in
+		base)
+			target="$(openwrt_target_path)" || return 1
+			index_suffix="$(printf '%s\n' "$target" | tr '/' '-')"
+			;;
+		packages)
+			index_suffix="$arch"
+			;;
+		*)
+			return 1
+			;;
+	esac
+	printf '%s/openwrt-%s-%s.gz\n' "$DOWNLOAD_DIR" "$feed" "$index_suffix"
 }
 
-openwrt_fallback_package_filename() {
+openwrt_fallback_package_metadata() {
 	local package="$1"
-	local repo_url index_path filename
+	local metadata_path feed repo_url index_path raw filename depends
 
-	repo_url="$(openwrt_fallback_repo_url)" || return 1
-	index_path="$(openwrt_fallback_index_path)" || return 1
-
-	if [ ! -f "$index_path" ]; then
-		download_to_file "$repo_url/Packages.gz" "$index_path" || return 1
+	metadata_path="${DOWNLOAD_DIR}/openwrt-package-$(printf '%s\n' "$package" | tr '/ ' '__').meta"
+	if [ -f "$metadata_path" ]; then
+		cat "$metadata_path"
+		return 0
 	fi
 
-	filename="$(gzip -dc "$index_path" 2>/dev/null | awk -v pkg="$package" '
-		/^Package: / { found = ($2 == pkg); next }
-		found && /^Filename: / { print $2; exit }
-	')"
-	[ -n "$filename" ] || return 1
-	printf '%s\n' "$filename"
+	for feed in base packages; do
+		repo_url="$(openwrt_fallback_repo_url "$feed")" || continue
+		index_path="$(openwrt_fallback_index_path "$feed")" || continue
+
+		if [ ! -f "$index_path" ]; then
+			download_to_file "$repo_url/Packages.gz" "$index_path" || continue
+		fi
+
+		raw="$(gzip -dc "$index_path" 2>/dev/null | awk -v pkg="$package" -v feed="$feed" '
+			BEGIN { RS = ""; FS = "\n" }
+			{
+				found = 0
+				for (i = 1; i <= NF; i++) {
+					if ($i == "Package: " pkg) {
+						found = 1
+						break
+					}
+				}
+				if (!found) {
+					next
+				}
+				for (i = 1; i <= NF; i++) {
+					if ($i ~ /^Filename: /) {
+						filename = substr($i, 11)
+					} else if ($i ~ /^Depends: /) {
+						depends = substr($i, 10)
+					}
+				}
+				printf "FEED=%s\nFILENAME=%s\nDEPENDS=%s\n", feed, filename, depends
+				exit
+			}
+		')"
+		[ -n "$raw" ] || continue
+
+		filename="$(printf '%s\n' "$raw" | sed -n 's/^FILENAME=//p' | sed -n '1p')"
+		[ -n "$filename" ] || continue
+		depends="$(printf '%s\n' "$raw" | sed -n 's/^DEPENDS=//p' | sed -n '1p')"
+		printf 'FEED=%s\nFILENAME=%s\nDEPENDS=%s\n' "$feed" "$filename" "$depends" > "$metadata_path"
+		cat "$metadata_path"
+		return 0
+	done
+
+	return 1
+}
+
+normalize_openwrt_dependency() {
+	local dependency="$1"
+
+	dependency="$(printf '%s\n' "$dependency" | sed \
+		-e 's/|.*$//' \
+		-e 's/([^)]*)//g' \
+		-e 's/^[[:space:]]*//' \
+		-e 's/[[:space:]]*$//' \
+		-e 's/^+//')"
+	case "$dependency" in
+		''|@*)
+			return 1
+			;;
+		*:* )
+			dependency="${dependency##*:}"
+			;;
+	esac
+	dependency="$(printf '%s\n' "$dependency" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+	[ -n "$dependency" ] || return 1
+	printf '%s\n' "$dependency"
+}
+
+openwrt_dependency_list() {
+	local depends="$1"
+	local old_ifs raw dependency
+
+	[ -n "$depends" ] || return 0
+	old_ifs="$IFS"
+	IFS=','
+	set -- $depends
+	IFS="$old_ifs"
+	for raw in "$@"; do
+		dependency="$(normalize_openwrt_dependency "$raw")" || continue
+		printf '%s\n' "$dependency"
+	done
+}
+
+resolve_pkg_via_openwrt_fallback() {
+	local package="$1"
+	local seen_file="$2"
+	local ordered_file="$3"
+	local metadata depends dependency
+
+	pkg_installed_exact "$package" && return 0
+	grep -Fxq "$package" "$seen_file" >/dev/null 2>&1 && return 0
+	printf '%s\n' "$package" >> "$seen_file"
+
+	metadata="$(openwrt_fallback_package_metadata "$package")" || return 1
+	depends="$(printf '%s\n' "$metadata" | sed -n 's/^DEPENDS=//p' | sed -n '1p')"
+	while IFS= read -r dependency; do
+		[ -n "$dependency" ] || continue
+		if pkg_installed_exact "$dependency"; then
+			continue
+		fi
+		if openwrt_fallback_package_metadata "$dependency" >/dev/null 2>&1; then
+			resolve_pkg_via_openwrt_fallback "$dependency" "$seen_file" "$ordered_file" || return 1
+			continue
+		fi
+		warn "Assuming dependency '$dependency' for package '$package' is already provided by the router firmware."
+	done <<EOF
+$(openwrt_dependency_list "$depends")
+EOF
+
+	printf '%s\n' "$package" >> "$ordered_file"
 }
 
 install_pkg_via_openwrt_fallback() {
 	local package="$1"
-	local repo_url filename target
+	local seen_file ordered_file resolved_package metadata feed repo_url filename target
 
-	repo_url="$(openwrt_fallback_repo_url)" || return 1
-	filename="$(openwrt_fallback_package_filename "$package")" || return 1
-	target="${DOWNLOAD_DIR}/$(basename "$filename")"
-	download_to_file "$repo_url/$filename" "$target" || return 1
-	opkg install "$target" >/dev/null 2>&1
+	if pkg_installed_exact "$package"; then
+		return 0
+	fi
+
+	seen_file="${DOWNLOAD_DIR}/openwrt-fallback-seen.$$.txt"
+	ordered_file="${DOWNLOAD_DIR}/openwrt-fallback-order.$$.txt"
+	: > "$seen_file"
+	: > "$ordered_file"
+	resolve_pkg_via_openwrt_fallback "$package" "$seen_file" "$ordered_file" || return 1
+
+	set --
+	while IFS= read -r resolved_package; do
+		[ -n "$resolved_package" ] || continue
+		metadata="$(openwrt_fallback_package_metadata "$resolved_package")" || return 1
+		feed="$(printf '%s\n' "$metadata" | sed -n 's/^FEED=//p' | sed -n '1p')"
+		filename="$(printf '%s\n' "$metadata" | sed -n 's/^FILENAME=//p' | sed -n '1p')"
+		[ -n "$feed" ] || return 1
+		[ -n "$filename" ] || return 1
+		repo_url="$(openwrt_fallback_repo_url "$feed")" || return 1
+		target="${DOWNLOAD_DIR}/$(basename "$filename")"
+		[ -f "$target" ] || download_to_file "$repo_url/$filename" "$target" || return 1
+		set -- "$@" "$target"
+	done < "$ordered_file"
+
+	[ "$#" -gt 0 ] || return 1
+	opkg install "$@" >/tmp/vpn-xray-opkg-fallback.log 2>&1
 }
 
 ensure_pkg_installed_or_fallback() {
 	local package="$1"
 	local purpose="$2"
 
-	opkg list-installed "$package" >/dev/null 2>&1 && return 0
+	pkg_installed_exact "$package" && return 0
 	opkg install "$package" >/dev/null 2>&1 && return 0
 
 	warn "Could not install package '$package' from configured feeds for $purpose. Trying the official OpenWrt 21.02.3 package mirror."
 	install_pkg_via_openwrt_fallback "$package" || fail "Could not install package '$package' for $purpose from either opkg feeds or the official OpenWrt package mirror."
-	opkg list-installed "$package" >/dev/null 2>&1 || fail "Package '$package' is still unavailable after fallback install."
+	pkg_installed_exact "$package" || fail "Package '$package' is still unavailable after fallback install."
 }
 
 git_sync_requested() {
@@ -218,6 +385,30 @@ ensure_git_sync_dependencies() {
 	ssh -V 2>&1 | grep -q 'OpenSSH_' || fail "ssh is still not provided by OpenSSH after installing openssh-client."
 	command -v ssh-keygen >/dev/null 2>&1 || fail "ssh-keygen is still unavailable after installing openssh-keygen."
 	command -v git >/dev/null 2>&1 || fail "git is still unavailable after installing git."
+}
+
+python3_supports_external_fetcher() {
+	command -v python3 >/dev/null 2>&1 || return 1
+	python3 - <<'PY' >/dev/null 2>&1
+import html
+import ipaddress
+import json
+import ssl
+import urllib.request
+PY
+}
+
+ensure_python3_runtime() {
+	if python3_supports_external_fetcher; then
+		return 0
+	fi
+
+	info "Ensuring Python 3 runtime for external shared-rules imports..."
+	if ensure_pkg_installed_or_fallback python3-light "external shared-rules import"; then
+		python3_supports_external_fetcher && return 0
+	fi
+	ensure_pkg_installed_or_fallback python3 "external shared-rules import"
+	python3_supports_external_fetcher || fail "python3 is installed, but it still cannot import the modules required for external shared-rules imports."
 }
 
 ensure_vps_ssh_dependencies() {
@@ -318,39 +509,40 @@ render_redsocks_conf() {
 
 render_router_rules_conf() {
 	local output="$1"
-	local sync_enabled fetch_url push_url branch auth_mode http_username http_password user_name user_email dns_resolver device_id enable_push mode sync_interval
 
-	sync_enabled="$(escape_sed_replacement "${RULES_GIT_SYNC_ENABLED:-}")"
-	fetch_url="$(escape_sed_replacement "${RULES_REPO_FETCH_URL:-}")"
-	push_url="$(escape_sed_replacement "${RULES_REPO_PUSH_URL:-}")"
-	branch="$(escape_sed_replacement "${RULES_REPO_BRANCH:-main}")"
-	auth_mode="$(escape_sed_replacement "${RULES_GIT_AUTH_MODE:-auto}")"
-	http_username="$(escape_sed_replacement "${RULES_GIT_HTTP_USERNAME:-}")"
-	http_password="$(escape_sed_replacement "${RULES_GIT_HTTP_PASSWORD:-}")"
-	user_name="$(escape_sed_replacement "${RULES_GIT_USER_NAME:-router-rules}")"
-	user_email="$(escape_sed_replacement "${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}")"
-	dns_resolver="$(escape_sed_replacement "${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}")"
-	device_id="$(escape_sed_replacement "${RULES_DEVICE_ID:-gl-router}")"
-	enable_push="$(escape_sed_replacement "${RULES_ENABLE_PUSH:-0}")"
-	mode="$(escape_sed_replacement "$(effective_xray_rules_mode)")"
-	sync_interval="$(escape_sed_replacement "${RULES_SYNC_INTERVAL:-30}")"
+	RULES_GIT_SYNC_ENABLED="${RULES_GIT_SYNC_ENABLED:-}" \
+	RULES_REPO_FETCH_URL="${RULES_REPO_FETCH_URL:-}" \
+	RULES_REPO_PUSH_URL="${RULES_REPO_PUSH_URL:-}" \
+	RULES_REPO_BRANCH="${RULES_REPO_BRANCH:-main}" \
+	RULES_GIT_AUTH_MODE="${RULES_GIT_AUTH_MODE:-auto}" \
+	RULES_GIT_HTTP_USERNAME="${RULES_GIT_HTTP_USERNAME:-}" \
+	RULES_GIT_HTTP_PASSWORD="${RULES_GIT_HTTP_PASSWORD:-}" \
+	RULES_GIT_USER_NAME="${RULES_GIT_USER_NAME:-router-rules}" \
+	RULES_GIT_USER_EMAIL="${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}" \
+	RULES_DNS_RESOLVER="${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}" \
+	RULES_DEVICE_ID="${RULES_DEVICE_ID:-gl-router}" \
+	RULES_ENABLE_PUSH="${RULES_ENABLE_PUSH:-0}" \
+	XRAY_RULES_MODE="$(effective_xray_rules_mode)" \
+	RULES_SYNC_INTERVAL="${RULES_SYNC_INTERVAL:-30}" \
+	RULES_EXTERNAL_SOURCE_ENABLED="${RULES_EXTERNAL_SOURCE_ENABLED:-0}" \
+	RULES_EXTERNAL_SOURCE_URL="${RULES_EXTERNAL_SOURCE_URL:-}" \
+	RULES_EXTERNAL_SOURCE_INTERVAL="${RULES_EXTERNAL_SOURCE_INTERVAL:-3600}" \
+	python3 - "$COMMON_DIR/files/router-rules.config.template" "$output" <<'PY'
+import os
+import pathlib
+import re
+import sys
 
-	sed \
-		-e "s|\${RULES_GIT_SYNC_ENABLED}|$sync_enabled|g" \
-		-e "s|\${RULES_REPO_FETCH_URL}|$fetch_url|g" \
-		-e "s|\${RULES_REPO_PUSH_URL}|$push_url|g" \
-		-e "s|\${RULES_REPO_BRANCH}|$branch|g" \
-		-e "s|\${RULES_GIT_AUTH_MODE}|$auth_mode|g" \
-		-e "s|\${RULES_GIT_HTTP_USERNAME}|$http_username|g" \
-		-e "s|\${RULES_GIT_HTTP_PASSWORD}|$http_password|g" \
-		-e "s|\${RULES_GIT_USER_NAME}|$user_name|g" \
-		-e "s|\${RULES_GIT_USER_EMAIL}|$user_email|g" \
-		-e "s|\${RULES_DNS_RESOLVER}|$dns_resolver|g" \
-		-e "s|\${RULES_DEVICE_ID}|$device_id|g" \
-		-e "s|\${RULES_ENABLE_PUSH}|$enable_push|g" \
-		-e "s|\${XRAY_RULES_MODE}|$mode|g" \
-		-e "s|\${RULES_SYNC_INTERVAL}|$sync_interval|g" \
-		"$COMMON_DIR/files/router-rules.config.template" > "$output"
+template_path = pathlib.Path(sys.argv[1])
+output_path = pathlib.Path(sys.argv[2])
+template = template_path.read_text()
+
+def repl(match):
+    key = match.group(1)
+    return os.environ.get(key, "")
+
+output_path.write_text(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
+PY
 }
 
 current_switch_state() {
@@ -434,6 +626,7 @@ install_platform() {
 	try_pkg_install git "Git-backed shared rules sync" || true
 	try_pkg_install git-http "Git-backed shared rules sync" || true
 	ensure_git_sync_dependencies
+	ensure_python3_runtime
 
 	archive="$DOWNLOAD_DIR/$XRAY_CORE_ARCHIVE"
 	stage_bundled_or_download "$XRAY_CORE_ARCHIVE" "$archive" "$XRAY_CORE_URL" "$XRAY_CORE_ARCHIVE_SHA256"
@@ -488,6 +681,9 @@ set router_rules.global.local_device_id='${RULES_DEVICE_ID:-gl-router}'
 set router_rules.global.enable_push='${RULES_ENABLE_PUSH:-0}'
 set router_rules.global.xray_mode='$(effective_xray_rules_mode)'
 set router_rules.global.sync_interval='${RULES_SYNC_INTERVAL:-30}'
+set router_rules.global.external_source_enabled='${RULES_EXTERNAL_SOURCE_ENABLED:-0}'
+set router_rules.global.external_source_url='${RULES_EXTERNAL_SOURCE_URL:-}'
+set router_rules.global.external_source_interval='${RULES_EXTERNAL_SOURCE_INTERVAL:-3600}'
 EOF
 	uci commit router_rules
 	chmod 600 /etc/config/router_rules
@@ -511,13 +707,14 @@ EOF
 	cp "$PROFILE_DIR/files/codex-transproxy.init" /etc/init.d/codex-transproxy
 	cp "$PROFILE_DIR/files/xray-switch-watchdog.init" /etc/init.d/xray-switch-watchdog
 	cp "$COMMON_DIR/files/router-rules-sync.init" /etc/init.d/router-rules-sync
+	cp "$COMMON_DIR/files/router-rules-external.py" /usr/share/vpn-xray/router-rules-external.py
 	cp "$PROFILE_DIR/files/gl-switch-xray.sh" /etc/gl-switch.d/xray.sh
 	cp "$COMMON_DIR/files/router-rules" /usr/bin/router-rules
 	cp "$PROFILE_DIR/files/xray.html" /www/xray.html
 	cp "$PROFILE_DIR/files/xray-admin.cgi" /www/cgi-bin/xray-admin
 	cp "$PROFILE_DIR/files/xray-vps.cgi" /www/cgi-bin/xray-vps
 	cp "$PROFILE_DIR/files/xray-rules.cgi" /www/cgi-bin/xray-rules
-	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/init.d/xray-switch-watchdog /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
+	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/init.d/xray-switch-watchdog /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
 	chmod 644 /www/xray.html
 
 	rm -rf /usr/share/vpn-xray/vps

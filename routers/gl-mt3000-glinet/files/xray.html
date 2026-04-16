@@ -829,6 +829,42 @@
         </div>
         </div>
       </details>
+      <details class="readonly-pane" style="margin-top:12px;">
+        <summary class="label" style="cursor:pointer;">External Source Import</summary>
+        <div class="field field-full" style="margin-top:12px;">
+          <label for="rulesExternalEnabled">Hourly External Import</label>
+          <div class="toggle-row">
+            <label class="toggle-switch" for="rulesExternalEnabled">
+              <input type="checkbox" id="rulesExternalEnabled" aria-label="Enable hourly external source import">
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">External feed</span>
+            <span class="toggle-state" id="rulesExternalStateText">External source import disabled.</span>
+          </div>
+          <div class="hint" id="rulesExternalHint">
+            The router can fetch one or more external pages or feeds once per hour, normalize domains/IP/CIDRs with the built-in Python generator, and append only truly new targets to the shared rules file.
+          </div>
+        </div>
+        <div class="field field-full" style="margin-top:12px;">
+          <label for="rulesExternalUrl">External Source URLs</label>
+          <textarea id="rulesExternalUrl" class="mono" spellcheck="false" style="min-height:110px;" placeholder="https://www.microsoft.com/en-us/download/details.aspx?id=56519&#10;https://www.cloudflare.com/ips-v4&#10;https://www.gstatic.com/ipranges/goog.json&#10;https://ip-ranges.amazonaws.com/ip-ranges.json"></textarea>
+          <div class="hint">One URL per line. Preview can use the current list immediately. Hourly background import uses the saved list from router settings.</div>
+        </div>
+        <div class="button-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:12px;">
+          <div class="field">
+            <label for="rulesExternalInterval">External Refresh Interval (s)</label>
+            <input type="number" id="rulesExternalInterval" min="3600" step="60" value="3600">
+          </div>
+        </div>
+        <div class="button-wrap" style="margin-top:12px;">
+          <button id="rulesExternalPreviewBtn">Preview External Output</button>
+          <button id="rulesExternalRunBtn" class="warn-btn">Run External Import Now</button>
+        </div>
+        <div class="readonly-pane" style="margin-top:12px;">
+          <div class="label">External Preview / Last Output</div>
+          <pre id="rulesExternalPreviewOutput" style="margin-top:12px;">No external source output yet.</pre>
+        </div>
+      </details>
       <div class="field field-full" style="margin-top:12px;">
         <label for="rulesText">Shared Rules List</label>
         <div class="hint" id="rulesEditorHint">
@@ -951,6 +987,11 @@
         "rulesGitHttpUsername",
         "rulesGitHttpPassword",
         "rulesGitSshPrivateKey",
+        "rulesExternalEnabled",
+        "rulesExternalUrl",
+        "rulesExternalInterval",
+        "rulesExternalPreviewBtn",
+        "rulesExternalRunBtn",
         "rulesText"
       ].forEach((id) => {
         const el = document.getElementById(id);
@@ -981,6 +1022,11 @@
         "rulesGitHttpUsername",
         "rulesGitHttpPassword",
         "rulesGitSshPrivateKey",
+        "rulesExternalEnabled",
+        "rulesExternalUrl",
+        "rulesExternalInterval",
+        "rulesExternalPreviewBtn",
+        "rulesExternalRunBtn",
         "rulesText"
       ].forEach((id) => {
         const el = document.getElementById(id);
@@ -993,6 +1039,8 @@
     const RULES_MODE_TIMEOUT_MS = 160000;
     const RULES_SAVE_CONFIG_TIMEOUT_MS = 70000;
     const RULES_SYNC_TIMEOUT_MS = 190000;
+    const RULES_EXTERNAL_PREVIEW_TIMEOUT_MS = 370000;
+    const RULES_EXTERNAL_RUN_TIMEOUT_MS = 610000;
 
     function beginForegroundTask(message, pauseMs = 15000) {
       setControlsBusy(true);
@@ -1185,6 +1233,9 @@
         repo_push_url: document.getElementById("rulesRepoPushUrl").value.trim(),
         repo_branch: document.getElementById("rulesRepoBranch").value.trim(),
         sync_interval: document.getElementById("rulesSyncInterval").value.trim() || "30",
+        external_source_enabled: document.getElementById("rulesExternalEnabled").checked ? "1" : "0",
+        external_source_url: document.getElementById("rulesExternalUrl").value.trim(),
+        external_source_interval: document.getElementById("rulesExternalInterval").value.trim() || "3600",
         git_auth_mode: document.getElementById("rulesGitAuthMode").value,
         git_http_username: document.getElementById("rulesGitHttpUsername").value.trim(),
         enable_push: document.getElementById("rulesEnablePush").value
@@ -1497,13 +1548,18 @@
       const gitConfigured = !!data.git_configured;
       const gitReadonly = !!data.git_readonly;
       const repoReady = !!data.repo_ready;
+      const externalEnabled = !!data.external_source_enabled;
+      const externalDue = !!data.external_source_due;
       const mode = effectiveRulesMode(data);
       const modePending = !!state.pendingRulesMode;
       const intervalSeconds = Number(data.sync_interval || 0) || 30;
+      const externalIntervalSeconds = Number(data.external_source_interval || 0) || 3600;
       const lastSyncStatus = data.last_sync_status || "never";
       const lastSyncAt = data.last_sync_at ? ` · ${formatUnixTime(data.last_sync_at)}` : "";
       const lastSyncEpoch = Number(data.last_sync_at || 0) || 0;
       const syncFresh = lastSyncEpoch > 0 && ((Math.floor(Date.now() / 1000) - lastSyncEpoch) <= intervalSeconds * 3);
+      const lastExternalStatus = data.last_external_status || "never";
+      const lastExternalAt = data.last_external_run_at ? ` · ${formatUnixTime(data.last_external_run_at)}` : "";
       const lastCutoverStatus = data.last_cutover_status || "never";
       const lastCutoverAt = data.last_cutover_at ? ` · ${formatUnixTime(data.last_cutover_at)}` : "";
       const cutoverRequired = !!data.cutover_required;
@@ -1526,6 +1582,8 @@
       const statusRows = [
         ["Sync backend", gitConfigured ? "Git repository" : (gitSyncEnabled ? "Git requested, configuration check failed or is incomplete" : "Local-only fallback")],
         ["Background checks", gitConfigured ? `Every ${intervalSeconds}s · ${syncFresh ? "running normally" : "status is stale"}` : "Idle in local-only mode"],
+        ["External import", externalEnabled ? `Every ${externalIntervalSeconds}s · ${externalDue ? "due now" : "scheduled"}${lastExternalAt}` : "Disabled"],
+        ["External status", externalEnabled ? `${lastExternalStatus}${lastExternalAt} · actor=${data.last_external_actor || "unknown"}` : "Disabled"],
         ["Current phase", `${currentPhase}${phaseAt}`],
         ["Phase detail", data.sync_phase_message || "(no detail)"],
         ["Sync status", `${lastSyncStatus}${lastSyncAt} · actor=${syncActor}`],
@@ -1541,6 +1599,8 @@
         `Routing mode: ${mode}${modePending ? " (apply in progress)" : ""}`,
         `Counts: ${counts}`,
         data.last_sync_message ? `Sync message: ${data.last_sync_message}` : "",
+        data.last_external_message ? `External message: ${data.last_external_message}` : "",
+        externalEnabled ? `External generated/additions: ${data.last_external_generated_count || 0}/${data.last_external_added_count || 0}` : "",
         data.last_cutover_message ? `Cutover message: ${data.last_cutover_message}` : "",
         "",
         trace.length ? "Recent activity:" : "Recent activity: (none yet)",
@@ -1558,6 +1618,11 @@
         `Repo dirty: ${data.repo_dirty ? "yes" : "no"}`,
         `Auth mode: ${data.git_auth_mode || "none"}`,
         `Read-only sync: ${gitReadonly ? "yes" : "no"}`,
+        `External import enabled: ${externalEnabled ? "yes" : "no"}`,
+        `External URL: ${data.external_source_url || "(not set)"}`,
+        `External interval: ${externalIntervalSeconds}s`,
+        `External due now: ${externalDue ? "yes" : "no"}`,
+        `External last status: ${lastExternalStatus || "(never)"}`,
         `HTTPS username: ${data.git_http_username || "(not set)"}`,
         `HTTPS secret stored: ${data.git_http_password_set ? "yes" : "no"}`,
         `SSH key present: ${data.git_ssh_key_present ? "yes" : "no"}`,
@@ -1571,6 +1636,7 @@
         `<span class="chip">Rules: ${escapeHtml(counts)}</span>`,
         `<span class="chip ${gitConfigured ? (syncFresh ? "ok" : "warn") : "ok"}">Loop: ${escapeHtml(gitConfigured ? (syncFresh ? "fresh" : "stale") : "idle")}</span>`,
         `<span class="chip ${lastSyncStatus === "ok" || lastSyncStatus === "local-only" ? "ok" : "bad"}">Sync status: ${escapeHtml(lastSyncStatus)}</span>`,
+        `<span class="chip ${!externalEnabled ? "" : lastExternalStatus === "updated" ? "ok" : lastExternalStatus === "error" ? "bad" : "warn"}">External: ${escapeHtml(!externalEnabled ? "off" : lastExternalStatus)}</span>`,
         `<span class="chip ${cutoverRequired ? "warn" : "ok"}">Runtime: ${escapeHtml(cutoverRequired ? "reset pending" : "current")}</span>`,
         `<span class="chip ${phase === "error" ? "bad" : phase === "verified" ? "ok" : "warn"}">Phase: ${escapeHtml(phase)}</span>`,
         `<span class="chip ${state.rulesDirty ? "bad" : "ok"}">${state.rulesDirty ? "Local edits pending" : "Editor clean"}</span>`
@@ -1583,6 +1649,9 @@
         document.getElementById("rulesRepoPushUrl").value = data.repo_push_url || "";
         document.getElementById("rulesRepoBranch").value = data.repo_branch || "main";
         document.getElementById("rulesSyncInterval").value = data.sync_interval || "30";
+        document.getElementById("rulesExternalEnabled").checked = externalEnabled;
+        document.getElementById("rulesExternalUrl").value = data.external_source_url || "";
+        document.getElementById("rulesExternalInterval").value = data.external_source_interval || "3600";
         document.getElementById("rulesGitAuthMode").value = data.git_auth_mode || (gitSyncEnabled ? "auto" : "none");
         document.getElementById("rulesGitHttpUsername").value = data.git_http_username || "";
         document.getElementById("rulesEnablePush").value = data.enable_push ? "1" : "0";
@@ -1596,6 +1665,23 @@
           ? (gitConfigured ? "Git sync is enabled." : "Git sync is enabled, but the remote check has not passed.")
           : "Git sync is disabled.";
         gitSyncStateText.className = `toggle-state ${gitConfigured ? "ok" : gitSyncEnabled ? "warn" : ""}`;
+      }
+      const externalStateText = document.getElementById("rulesExternalStateText");
+      if (externalStateText) {
+        externalStateText.textContent = !externalEnabled
+          ? "External source import disabled."
+          : `${lastExternalStatus}${lastExternalAt}${externalDue ? " · due now" : ""}`;
+        externalStateText.className = `toggle-state ${!externalEnabled ? "" : lastExternalStatus === "updated" ? "ok" : lastExternalStatus === "error" ? "bad" : "warn"}`;
+      }
+      const externalPreviewOutput = document.getElementById("rulesExternalPreviewOutput");
+      if (externalPreviewOutput) {
+        externalPreviewOutput.textContent = [
+          `Last status: ${lastExternalStatus}${lastExternalAt}`,
+          `Generated targets: ${data.last_external_generated_count || 0}`,
+          `Added targets: ${data.last_external_added_count || 0}`,
+          "",
+          data.last_external_message || "No external source output yet."
+        ].join("\n");
       }
       if (data.git_readonly && state.rulesDirty) {
         clearRulesDirty();
@@ -1657,19 +1743,30 @@
       const syncEnabled = !!document.getElementById("rulesGitSyncEnabled")?.checked;
       const authMode = document.getElementById("rulesGitAuthMode")?.value || "none";
       const repoUrl = document.getElementById("rulesRepoFetchUrl")?.value.trim() || "";
+      const externalEnabled = !!document.getElementById("rulesExternalEnabled")?.checked;
+      const externalUrl = document.getElementById("rulesExternalUrl")?.value.trim() || "";
       const syncFieldsWrap = document.getElementById("rulesGitConfigFields");
       const httpsWrap = document.getElementById("rulesGitHttpsFields");
       const sshWrap = document.getElementById("rulesGitSshKeyWrap");
       const pushSelect = document.getElementById("rulesEnablePush");
       const saveButton = document.getElementById("rulesSaveConfigBtn");
+      const gitConfigured = !!state.rules?.git_configured;
       const sshHint = document.getElementById("rulesGitSshHint");
       const syncHint = document.getElementById("rulesGitSyncHint");
       const syncStateText = document.getElementById("rulesGitSyncStateText");
       const usernameInput = document.getElementById("rulesGitHttpUsername");
       const passwordInput = document.getElementById("rulesGitHttpPassword");
       const sshKeyInput = document.getElementById("rulesGitSshPrivateKey");
+      const externalEnabledInput = document.getElementById("rulesExternalEnabled");
+      const externalUrlInput = document.getElementById("rulesExternalUrl");
+      const externalIntervalInput = document.getElementById("rulesExternalInterval");
+      const externalPreviewButton = document.getElementById("rulesExternalPreviewBtn");
+      const externalRunButton = document.getElementById("rulesExternalRunBtn");
+      const externalHint = document.getElementById("rulesExternalHint");
+      const externalStateText = document.getElementById("rulesExternalStateText");
       const readonlyAuth = authMode === "readonly" || authMode === "none";
       const projectedReadonly = rulesGitReadonlyProjected();
+      const externalBlocked = syncEnabled && projectedReadonly;
 
       if (syncFieldsWrap) {
         syncFieldsWrap.style.display = syncEnabled ? "" : "none";
@@ -1725,6 +1822,38 @@
       }
       if (sshKeyInput) {
         sshKeyInput.disabled = !syncEnabled || authMode !== "ssh" || state.foregroundBusy;
+      }
+      if (externalEnabledInput) {
+        externalEnabledInput.disabled = state.foregroundBusy;
+      }
+      if (externalUrlInput) {
+        externalUrlInput.disabled = state.foregroundBusy;
+      }
+      if (externalIntervalInput) {
+        externalIntervalInput.disabled = state.foregroundBusy || !externalEnabled;
+      }
+      if (externalPreviewButton) {
+        externalPreviewButton.disabled = !externalUrl || state.foregroundBusy;
+      }
+      if (externalRunButton) {
+        externalRunButton.disabled = !externalEnabled || !externalUrl || externalBlocked || state.foregroundBusy;
+      }
+      if (externalHint) {
+        if (externalBlocked) {
+          externalHint.textContent = "External import can preview the current URL list, but it cannot append new targets while Git sync is projected read-only. Switch Git Auth to HTTPS/SSH or disable Git sync first.";
+        } else if (!externalEnabled) {
+          externalHint.textContent = "When enabled, the background loop checks the external URL list once per interval, appends only new targets, and leaves the shared rules file untouched if nothing new appears.";
+        } else {
+          externalHint.textContent = gitConfigured
+            ? "Hourly external import appends only new targets from the current URL list, then hands the updated file to the existing Git/local sync pipeline. If the sources add nothing new, that run stops without touching the file."
+            : "Hourly external import appends only new targets from the current URL list to the local shared rules file. If the sources add nothing new, that run stops without touching the file.";
+        }
+      }
+      if (externalStateText && state.rulesConfigDirty) {
+        externalStateText.textContent = !externalEnabled
+          ? "External source import will stay disabled after save."
+          : (externalBlocked ? "External source import is configured, but save will fail until Git is writable." : "External source import will run after save.");
+        externalStateText.className = `toggle-state ${!externalEnabled ? "" : externalBlocked ? "bad" : "warn"}`;
       }
     }
 
@@ -1903,6 +2032,61 @@
       }
     }
 
+    async function previewExternalSource(button) {
+      const url = document.getElementById("rulesExternalUrl").value.trim();
+      if (!url) {
+        flash("At least one external source URL is required for preview.", "bad");
+        document.getElementById("rulesExternalPreviewOutput").textContent = "At least one external source URL is required for preview.";
+        return;
+      }
+      beginForegroundTask("Fetching and normalizing the external source...", RULES_EXTERNAL_PREVIEW_TIMEOUT_MS);
+      setBusy(button, true);
+      try {
+        const data = await callApi(rulesApi, "preview_external_source", { external_source_url: url }, { timeoutMs: RULES_EXTERNAL_PREVIEW_TIMEOUT_MS });
+        if (data.ok === false) {
+          throw new Error(data.error || "backend error");
+        }
+        document.getElementById("rulesExternalPreviewOutput").textContent = [
+          `Generated targets: ${data.generated_count || 0}`,
+          "",
+          data.generated_text || "(empty)"
+        ].join("\n");
+        flash(`External source preview generated ${data.generated_count || 0} targets.`, "good");
+      } catch (err) {
+        document.getElementById("rulesExternalPreviewOutput").textContent = `External source preview failed: ${err.message}`;
+        flash(`External source preview failed: ${err.message}`, "bad");
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
+    async function runExternalSource(button) {
+      if (state.rulesConfigDirty) {
+        flash("Save Git/external source settings before running the external import.", "bad");
+        document.getElementById("rulesExternalPreviewOutput").textContent = "Save Git/external source settings before running the external import.";
+        return;
+      }
+      beginForegroundTask("Running external source import and applying new targets if needed...", RULES_EXTERNAL_RUN_TIMEOUT_MS);
+      setBusy(button, true);
+      try {
+        const data = await callApi(rulesApi, "sync_external_source", null, { timeoutMs: RULES_EXTERNAL_RUN_TIMEOUT_MS });
+        if (data.ok === false) {
+          throw new Error(data.error || "backend error");
+        }
+        state.rules = data;
+        renderRules(data);
+        await refreshAll(false, false, true);
+        flash(data.last_external_message || data.sync_phase_message || "External source import finished.", "good");
+      } catch (err) {
+        document.getElementById("rulesExternalPreviewOutput").textContent = `External source import failed: ${err.message}`;
+        flash(`External source import failed: ${err.message}`, "bad");
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
     async function runSmoke() {
       beginForegroundTask("Running live smoke test...", 15000);
       document.getElementById("smokeOutput").textContent = "Running smoke test...";
@@ -2038,6 +2222,8 @@
     document.getElementById("smokeBtn").addEventListener("click", runSmoke);
     document.getElementById("rulesSaveConfigBtn").addEventListener("click", (event) => saveRulesConfig(event.currentTarget));
     document.getElementById("rulesSyncBtn").addEventListener("click", (event) => syncRules(event.currentTarget));
+    document.getElementById("rulesExternalPreviewBtn").addEventListener("click", (event) => previewExternalSource(event.currentTarget));
+    document.getElementById("rulesExternalRunBtn").addEventListener("click", (event) => runExternalSource(event.currentTarget));
     document.getElementById("rulesModeToggle").addEventListener("change", (event) => {
       setRulesMode(event.currentTarget.checked ? "selective" : "full", event.currentTarget);
     });
@@ -2070,6 +2256,8 @@
       "rulesRepoPushUrl",
       "rulesRepoBranch",
       "rulesSyncInterval",
+      "rulesExternalUrl",
+      "rulesExternalInterval",
       "rulesGitHttpUsername",
       "rulesGitHttpPassword",
       "rulesGitSshPrivateKey"
@@ -2081,6 +2269,7 @@
     });
     [
       "rulesGitSyncEnabled",
+      "rulesExternalEnabled",
       "rulesGitAuthMode",
       "rulesEnablePush"
     ].forEach((id) => {
@@ -2090,9 +2279,11 @@
       }
     });
     document.getElementById("rulesGitSyncEnabled").addEventListener("change", updateRulesConfigUi);
+    document.getElementById("rulesExternalEnabled").addEventListener("change", updateRulesConfigUi);
     document.getElementById("rulesGitAuthMode").addEventListener("change", updateRulesConfigUi);
     [
       "rulesRepoFetchUrl",
+      "rulesExternalUrl",
       "rulesGitHttpUsername",
       "rulesGitHttpPassword"
     ].forEach((id) => {

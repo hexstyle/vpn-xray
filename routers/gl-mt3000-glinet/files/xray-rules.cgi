@@ -9,6 +9,9 @@ CONFIG_SECTION='global'
 DEFAULT_SSH_KEY_PATH='/etc/router-rules/ssh/routerRules_ed25519'
 RULES_MODE_LOCK_WAIT='120'
 RULES_MODE_TIMEOUT='150'
+RULES_EXTERNAL_LOCK_WAIT='300'
+RULES_EXTERNAL_PREVIEW_TIMEOUT='360'
+RULES_EXTERNAL_SYNC_TIMEOUT='600'
 
 emit_header() {
 	printf 'Content-Type: application/json\r\n'
@@ -195,7 +198,7 @@ mode_error_message() {
 
 save_config_action() {
 	local fetch_url push_url branch auth_mode username password enable_push sync_interval ssh_private_key key_path
-	local sync_enabled check_error tmp_key
+	local sync_enabled check_error tmp_key external_enabled external_url external_interval
 
 	fetch_url=''
 	push_url=''
@@ -207,6 +210,9 @@ save_config_action() {
 	sync_interval=''
 	ssh_private_key=''
 	sync_enabled=''
+	external_enabled=''
+	external_url=''
+	external_interval=''
 
 	ensure_config_section
 
@@ -252,6 +258,39 @@ save_config_action() {
 				;;
 		esac
 		cfg_set_or_delete sync_interval "$sync_interval"
+	fi
+
+	if request_has_key external_source_enabled; then
+		external_enabled="$(request_value external_source_enabled)"
+		case "$external_enabled" in
+			0|1)
+				cfg_set_or_delete external_source_enabled "$external_enabled"
+				;;
+			*)
+				emit_error save_config 'Invalid external source mode.'
+				return 0
+				;;
+		esac
+	fi
+
+	if request_has_key external_source_url; then
+		external_url="$(request_value external_source_url)"
+		cfg_set_or_delete external_source_url "$external_url"
+	fi
+
+	if request_has_key external_source_interval; then
+		external_interval="$(request_value external_source_interval)"
+		case "$external_interval" in
+			''|*[!0-9]*)
+				emit_error save_config 'Invalid external source interval.'
+				return 0
+				;;
+		esac
+		if [ "$external_interval" -lt 3600 ] 2>/dev/null; then
+			emit_error save_config 'External source interval must be at least 3600 seconds.'
+			return 0
+		fi
+		cfg_set_or_delete external_source_interval "$external_interval"
 	fi
 
 	if request_has_key git_sync_enabled; then
@@ -312,15 +351,29 @@ save_config_action() {
 
 	sync_enabled="$(cfg_get git_sync_enabled)"
 	fetch_url="$(cfg_get repo_fetch_url)"
+	external_enabled="$(cfg_get external_source_enabled)"
+	external_url="$(cfg_get external_source_url)"
+	auth_mode="$(cfg_get git_auth_mode)"
 	if [ "$sync_enabled" = '1' ] && [ -z "$fetch_url" ]; then
 		emit_error save_config 'Repository URL is required when Git sync is enabled.'
 		return 0
+	fi
+	if [ "$external_enabled" = '1' ] && [ -z "$external_url" ]; then
+		emit_error save_config 'External source URL is required when external import is enabled.'
+		return 0
+	fi
+	if [ "$external_enabled" = '1' ] && [ "$sync_enabled" = '1' ]; then
+		case "$auth_mode" in
+			none|readonly)
+				emit_error save_config 'External source import cannot be enabled while Git sync is read-only.'
+				return 0
+				;;
+		esac
 	fi
 
 	cfg_set_or_delete ssh_key_path "$(ssh_key_path)"
 	uci commit "$CONFIG_PKG"
 
-	auth_mode="$(cfg_get git_auth_mode)"
 	if [ "$auth_mode" = 'ssh' ]; then
 		/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
 	fi
@@ -337,6 +390,44 @@ save_config_action() {
 	restart_sync_service
 
 	status_action
+}
+
+preview_external_source_action() {
+	local url preview_file error_file rc message preview_text preview_count
+
+	url=''
+	preview_file="$(mktemp)"
+	error_file="$(mktemp)"
+	rc=0
+	if request_has_key external_source_url; then
+		url="$(request_value external_source_url)"
+	fi
+
+	if command -v timeout >/dev/null 2>&1; then
+		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-external-preview' timeout "$RULES_EXTERNAL_PREVIEW_TIMEOUT" /usr/bin/router-rules preview-external-source "$url" > "$preview_file" 2> "$error_file" || rc=$?
+	else
+		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-external-preview' /usr/bin/router-rules preview-external-source "$url" > "$preview_file" 2> "$error_file" || rc=$?
+	fi
+
+	if [ "$rc" -ne 0 ]; then
+		message="$(sed '/^[[:space:]]*$/d' "$error_file" | sed -n '1p')"
+		[ -n "$message" ] || message='External source preview failed.'
+		rm -f "$preview_file" "$error_file"
+		emit_error preview_external_source "$message"
+		return 0
+	fi
+
+	preview_text="$(cat "$preview_file")"
+	preview_count="$(sed '/^[[:space:]]*$/d' "$preview_file" | wc -l | awk '{print $1}')"
+	rm -f "$preview_file" "$error_file"
+
+	emit_header
+	printf '{'
+	printf '"ok":true,'
+	printf '"action":"preview_external_source",'
+	printf '"generated_count":"%s",' "$(json_escape "$preview_count")"
+	printf '"generated_text":"%s"' "$(json_escape "$preview_text")"
+	printf '}'
 }
 
 sync_action() {
@@ -379,6 +470,31 @@ sync_action() {
 	fi
 
 	rm -f "$tmp" "$run_log"
+	status_action
+}
+
+sync_external_source_action() {
+	local run_log rc error_message prev_last_sync_at prev_sync_phase_at
+
+	run_log="$(mktemp)"
+	rc=0
+	prev_last_sync_at="$(status_file_value last_sync_at)"
+	prev_sync_phase_at="$(status_file_value sync_phase_at)"
+
+	if command -v timeout >/dev/null 2>&1; then
+		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_EXTERNAL_FORCE=1 ROUTER_RULES_SYNC_ACTOR='ui-external' timeout "$RULES_EXTERNAL_SYNC_TIMEOUT" /usr/bin/router-rules sync-external-source >"$run_log" 2>&1 || rc=$?
+	else
+		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_EXTERNAL_FORCE=1 ROUTER_RULES_SYNC_ACTOR='ui-external' /usr/bin/router-rules sync-external-source >"$run_log" 2>&1 || rc=$?
+	fi
+
+	if [ "$rc" -ne 0 ]; then
+		error_message="$(sync_error_message "$run_log" "$rc" "$prev_last_sync_at" "$prev_sync_phase_at")"
+		rm -f "$run_log"
+		emit_error sync_external_source "$error_message"
+		return 0
+	fi
+
+	rm -f "$run_log"
 	status_action
 }
 
@@ -428,6 +544,12 @@ case "$(request_value action)" in
 		;;
 	sync_rules)
 		sync_action
+		;;
+	preview_external_source)
+		preview_external_source_action
+		;;
+	sync_external_source)
+		sync_external_source_action
 		;;
 	set_mode)
 		set_mode_action

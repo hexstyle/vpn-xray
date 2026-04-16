@@ -23,10 +23,15 @@ DEFAULT_XRAY_MODE='full'
 DEFAULT_XRAY_IPSET='xray_selective_dst'
 DEFAULT_XRAY_DNSMASQ_CONF='/tmp/dnsmasq.d/router-rules-xray-ipset.conf'
 DEFAULT_SYNC_INTERVAL='30'
+DEFAULT_EXTERNAL_SOURCE_ENABLED='0'
+DEFAULT_EXTERNAL_SOURCE_URL=''
+DEFAULT_EXTERNAL_SOURCE_INTERVAL='3600'
 DEFAULT_GIT_AUTH_MODE='auto'
 DEFAULT_GIT_HTTP_USERNAME=''
 DEFAULT_GIT_HTTP_PASSWORD=''
 DEFAULT_GIT_ASKPASS='/tmp/router-rules-git-askpass.sh'
+EXTERNAL_SOURCE_SCRIPT='/usr/share/vpn-xray/router-rules-external.py'
+DEFAULT_EXTERNAL_SOURCE_TIMEOUT='90'
 STATUS_FILE='/tmp/router-rules.status'
 LOCK_DIR='/tmp/router-rules.lock.d'
 
@@ -64,10 +69,33 @@ cfg_get() {
 	fi
 }
 
-repo_fetch_url() { cfg_get repo_fetch_url "$DEFAULT_REPO_FETCH_URL"; }
+repo_path() { cfg_get repo_path "$DEFAULT_REPO_PATH"; }
+
+repo_origin_url_from_clone() {
+	local repo value
+
+	repo="$(repo_path)"
+	[ -d "$repo/.git" ] || return 1
+	value="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
+	[ -n "$value" ] || return 1
+	printf '%s\n' "$value"
+}
+
+repo_fetch_url() {
+	local value
+
+	value="$(cfg_get repo_fetch_url "$DEFAULT_REPO_FETCH_URL")"
+	if is_placeholder_value "$value"; then
+		value=''
+	fi
+	if [ -z "$value" ]; then
+		value="$(repo_origin_url_from_clone || true)"
+	fi
+	printf '%s\n' "$value"
+}
+
 repo_push_url_raw() { cfg_get repo_push_url "$DEFAULT_REPO_PUSH_URL"; }
 repo_branch() { cfg_get repo_branch "$DEFAULT_REPO_BRANCH"; }
-repo_path() { cfg_get repo_path "$DEFAULT_REPO_PATH"; }
 rules_relpath() { cfg_get rules_relpath "$DEFAULT_RULES_RELPATH"; }
 generated_dir() { cfg_get generated_dir "$DEFAULT_GENERATED_DIR"; }
 ssh_key_path() { cfg_get ssh_key_path "$DEFAULT_SSH_KEY_PATH"; }
@@ -81,11 +109,35 @@ xray_mode() { cfg_get xray_mode "$DEFAULT_XRAY_MODE"; }
 xray_ipset() { cfg_get xray_ipset "$DEFAULT_XRAY_IPSET"; }
 xray_dnsmasq_conf() { cfg_get xray_dnsmasq_conf "$DEFAULT_XRAY_DNSMASQ_CONF"; }
 sync_interval() { cfg_get sync_interval "$DEFAULT_SYNC_INTERVAL"; }
+external_source_enabled() { cfg_get external_source_enabled "$DEFAULT_EXTERNAL_SOURCE_ENABLED"; }
+external_source_url() { cfg_get external_source_url "$DEFAULT_EXTERNAL_SOURCE_URL"; }
+external_source_interval() { cfg_get external_source_interval "$DEFAULT_EXTERNAL_SOURCE_INTERVAL"; }
 git_sync_enabled_raw() { cfg_get git_sync_enabled ''; }
 git_auth_mode_raw() { cfg_get git_auth_mode "$DEFAULT_GIT_AUTH_MODE"; }
 git_http_username() { cfg_get git_http_username "$DEFAULT_GIT_HTTP_USERNAME"; }
 git_http_password() { cfg_get git_http_password "$DEFAULT_GIT_HTTP_PASSWORD"; }
 git_askpass_path() { cfg_get git_askpass_path "$DEFAULT_GIT_ASKPASS"; }
+
+external_source_interval_seconds() {
+	local raw
+
+	raw="$(external_source_interval)"
+	case "$raw" in
+		''|*[!0-9]*)
+			raw="$DEFAULT_EXTERNAL_SOURCE_INTERVAL"
+			;;
+	esac
+	[ "$raw" -ge 3600 ] 2>/dev/null || raw="$DEFAULT_EXTERNAL_SOURCE_INTERVAL"
+	printf '%s\n' "$raw"
+}
+
+external_source_script() {
+	printf '%s\n' "$EXTERNAL_SOURCE_SCRIPT"
+}
+
+external_source_timeout() {
+	printf '%s\n' "$DEFAULT_EXTERNAL_SOURCE_TIMEOUT"
+}
 
 repo_push_url() {
 	local value
@@ -566,7 +618,7 @@ merge_remote_preferred() {
 	appended_lines="$(mktemp)"
 	cp "$remote_file" "$out_file"
 	appended=0
-	marker="# merged unique local rules from $(device_id) on $(date '+%Y-%m-%d %H:%M:%S')"
+	marker="# merged unique local rules from $(device_id)"
 
 	awk '
 		function trim(s) {
@@ -607,6 +659,200 @@ merge_remote_preferred() {
 
 rule_count() {
 	rule_data_stream "$1" | wc -l | awk '{print $1}'
+}
+
+external_source_due_now() {
+	local last now interval
+
+	[ "$(external_source_enabled)" = '1' ] || return 1
+	[ -n "$(external_source_url)" ] || return 1
+	interval="$(external_source_interval_seconds)"
+	last="$(status_get last_external_run_at)"
+	[ -n "$last" ] || return 0
+	now="$(date +%s)"
+	[ $((now - last)) -ge "$interval" ]
+}
+
+should_refresh_external_source_internal() {
+	if [ "${ROUTER_RULES_EXTERNAL_FORCE:-0}" = '1' ]; then
+		[ "$(external_source_enabled)" = '1' ] || return 1
+		[ -n "$(external_source_url)" ] || return 1
+		return 0
+	fi
+	[ "$(sync_actor)" = 'background' ] || return 1
+	external_source_due_now
+}
+
+set_external_status() {
+	local status="$1"
+	local message="$2"
+	local generated_count="${3:-0}"
+	local added_count="${4:-0}"
+
+	status_set last_external_run_at "$(date +%s)"
+	status_set last_external_status "$status"
+	status_set last_external_message "$message"
+	status_set last_external_generated_count "$generated_count"
+	status_set last_external_added_count "$added_count"
+	status_set last_external_actor "$(sync_actor)"
+	status_trace_add sync_trace "external ${status}: ${message}"
+}
+
+generate_external_source_internal() {
+	local url="$1"
+	local script timeout_seconds
+
+	[ -n "$url" ] || {
+		echo 'External source URL is not configured.' >&2
+		return 1
+	}
+	command -v python3 >/dev/null 2>&1 || {
+		echo 'python3 is required for external source imports on this router.' >&2
+		return 1
+	}
+	script="$(external_source_script)"
+	[ -f "$script" ] || {
+		echo "External source generator is missing on this router: $script" >&2
+		return 1
+	}
+	timeout_seconds="$(external_source_timeout)"
+	run_with_timeout "$timeout_seconds" python3 "$script" --url "$url" --timeout "$timeout_seconds"
+}
+
+preview_external_source_internal() {
+	local url="${1:-}"
+
+	[ -n "$url" ] || url="$(external_source_url)"
+	generate_external_source_internal "$url"
+}
+
+prepare_rules_file_for_local_edit_internal() {
+	if repo_configured && git_readonly_mode; then
+		echo 'Git sync is configured in read-only mode; local rule editing on the router is locked.' >&2
+		return 1
+	fi
+
+	ensure_dirs
+	if repo_configured; then
+		repo_bootstrap || return 1
+	else
+		mkdir -p "$(repo_path)" "$(dirname "$(repo_rules_path)")"
+		[ -f "$(repo_rules_path)" ] || : > "$(repo_rules_path)"
+	fi
+}
+
+append_rule_lines_internal() {
+	local dst="$1"
+	local src="$2"
+
+	[ -s "$src" ] || return 0
+	if [ -s "$dst" ]; then
+		printf '\n' >> "$dst"
+	fi
+	cat "$src" >> "$dst"
+}
+
+compute_unique_rule_additions_internal() {
+	local base_file="$1"
+	local candidate_file="$2"
+	local out_file="$3"
+
+	awk '
+		function trim(s) {
+			sub(/\r$/, "", s)
+			sub(/^[[:space:]]+/, "", s)
+			sub(/[[:space:]]+$/, "", s)
+			return s
+		}
+		NR == FNR {
+			line = trim($0)
+			if (line == "" || line ~ /^#/) {
+				next
+			}
+			seen[tolower(line)] = 1
+			next
+		}
+		{
+			line = trim($0)
+			if (line == "" || line ~ /^#/) {
+				next
+			}
+			norm = tolower(line)
+			if (!(norm in seen) && !(norm in emitted)) {
+				print line
+				emitted[norm] = 1
+			}
+		}
+	' "$base_file" "$candidate_file" > "$out_file"
+}
+
+refresh_external_source_internal() {
+	local generated_file additions_file error_file rules_file url generated_count added_count message
+
+	url="$(external_source_url)"
+	generated_file="$(mktemp)"
+	additions_file="$(mktemp)"
+	error_file="$(mktemp)"
+
+	if ! generate_external_source_internal "$url" > "$generated_file" 2> "$error_file"; then
+		message="$(sed '/^[[:space:]]*$/d' "$error_file" | sed -n '1p')"
+		[ -n "$message" ] || message='External source fetch failed.'
+		set_external_status error "$message" '0' '0'
+		set_status_error "$message"
+		rm -f "$generated_file" "$additions_file" "$error_file"
+		return 1
+	fi
+
+	generated_count="$(rule_count "$generated_file")"
+	[ -n "$generated_count" ] || generated_count='0'
+	if [ "$generated_count" = '0' ]; then
+		set_external_status no_change 'External source returned no targets.' "$generated_count" '0'
+		rm -f "$generated_file" "$additions_file" "$error_file"
+		return 0
+	fi
+
+	if ! prepare_rules_file_for_local_edit_internal 2> "$error_file"; then
+		message="$(sed '/^[[:space:]]*$/d' "$error_file" | sed -n '1p')"
+		[ -n "$message" ] || message='Could not prepare the shared rules file for external updates.'
+		set_external_status error "$message" "$generated_count" '0'
+		set_status_error "$message"
+		rm -f "$generated_file" "$additions_file" "$error_file"
+		return 1
+	fi
+
+	rules_file="$(repo_rules_path)"
+	compute_unique_rule_additions_internal "$rules_file" "$generated_file" "$additions_file"
+	added_count="$(rule_count "$additions_file")"
+	[ -n "$added_count" ] || added_count='0'
+
+	if [ "$added_count" = '0' ]; then
+		set_external_status no_change 'External source returned no new targets.' "$generated_count" "$added_count"
+		rm -f "$generated_file" "$additions_file" "$error_file"
+		return 0
+	fi
+
+	append_rule_lines_internal "$rules_file" "$additions_file"
+	set_external_status updated "External source added ${added_count} new targets." "$generated_count" "$added_count"
+	rm -f "$generated_file" "$additions_file" "$error_file"
+	return 0
+}
+
+sync_external_source_internal() {
+	local before_sig after_sig
+
+	before_sig="$(file_signature "$(repo_rules_path)")"
+	refresh_external_source_internal || return 1
+	after_sig="$(file_signature "$(repo_rules_path)")"
+	[ "$before_sig" = "$after_sig" ] && return 0
+	sync_apply_xray_internal
+}
+
+background_tick_internal() {
+	if should_refresh_external_source_internal; then
+		sync_external_source_internal
+	else
+		sync_apply_xray_internal
+	fi
 }
 
 resolve_domain_ipv4() {
@@ -945,7 +1191,7 @@ resolved_snapshot_needs_apply_internal() {
 
 sync_repo_internal() {
 	local repo rel branch work_file local_snapshot remote_snapshot changed pushed
-	local local_head_before remote_head requested_base_head strategy
+	local local_head_before remote_head requested_base_head strategy repo_clean last_remote_head
 
 	if ! repo_configured; then
 		ensure_dirs
@@ -986,6 +1232,22 @@ sync_repo_internal() {
 	}
 
 	remote_head="$(git_cmd -C "$repo" rev-parse --verify "origin/$branch" 2>/dev/null || true)"
+	repo_clean=1
+	git_cmd -C "$repo" diff --quiet -- "$rel" 2>/dev/null || repo_clean=0
+	last_remote_head="$(status_get last_sync_remote_head)"
+	if [ "$(enable_push)" != '1' ] \
+		&& [ "$repo_clean" = '1' ] \
+		&& [ -n "$local_head_before" ] \
+		&& [ "$local_head_before" != "$remote_head" ] \
+		&& [ -n "$last_remote_head" ] \
+		&& [ "$last_remote_head" = "$remote_head" ]; then
+		set_status_ok 'synced changed=0 pushed=0 strategy=local-ahead'
+		status_set last_sync_changed '0'
+		status_set last_sync_strategy 'local-ahead'
+		status_set last_sync_remote_head "$remote_head"
+		rm -f "$local_snapshot" "$remote_snapshot"
+		return 0
+	fi
 	if ! git_cmd -C "$repo" show "origin/$branch:$rel" > "$remote_snapshot" 2>/dev/null; then
 		set_status_error "Remote rules file not found in origin/$branch: $rel"
 		rm -f "$local_snapshot" "$remote_snapshot"
@@ -1041,18 +1303,7 @@ save_rules_file_internal() {
 	local src="$1"
 	local dst
 
-	if repo_configured && git_readonly_mode; then
-		echo 'Git sync is configured in read-only mode; local rule editing on the router is locked.' >&2
-		return 1
-	fi
-
-	ensure_dirs
-	if repo_configured; then
-		repo_bootstrap || return 1
-	else
-		mkdir -p "$(repo_path)" "$(dirname "$(repo_rules_path)")"
-		[ -f "$(repo_rules_path)" ] || : > "$(repo_rules_path)"
-	fi
+	prepare_rules_file_for_local_edit_internal || return 1
 	dst="$(repo_rules_path)"
 	cp "$src" "$dst"
 }
@@ -1102,6 +1353,7 @@ status_json() {
 	local setname current_signature last_cutover_at last_cutover_status last_cutover_message last_cutover_signature cutover_required
 	local sync_phase sync_phase_at sync_phase_message sync_trace last_verified_at last_sync_actor rules_checksum last_apply_signature interval
 	local fetch_url push_url_raw push_url_effective auth_mode http_username http_password_set ssh_key_present ssh_pub git_configured sync_enabled git_readonly
+	local external_enabled external_url external_interval external_due last_external_run_at last_external_status last_external_message last_external_generated_count last_external_added_count last_external_actor
 
 	repo="$(repo_path)"
 	rel="$(rules_relpath)"
@@ -1114,6 +1366,9 @@ status_json() {
 	file_text=''
 	[ -f "$rules_file" ] && file_text="$(cat "$rules_file")"
 	interval="$(sync_interval)"
+	external_enabled="$(external_source_enabled)"
+	external_url="$(external_source_url)"
+	external_interval="$(external_source_interval_seconds)"
 	fetch_url="$(repo_fetch_url)"
 	push_url_raw="$(repo_push_url_raw)"
 	push_url_effective="$(repo_push_url)"
@@ -1169,6 +1424,14 @@ status_json() {
 	sync_phase_at="$(status_get sync_phase_at)"
 	sync_phase_message="$(status_get sync_phase_message)"
 	sync_trace="$(status_get sync_trace)"
+	last_external_run_at="$(status_get last_external_run_at)"
+	last_external_status="$(status_get last_external_status)"
+	last_external_message="$(status_get last_external_message)"
+	last_external_generated_count="$(status_get last_external_generated_count)"
+	last_external_added_count="$(status_get last_external_added_count)"
+	last_external_actor="$(status_get last_external_actor)"
+	external_due='0'
+	external_source_due_now && external_due='1'
 	cutover_required='0'
 	[ "$current_signature" = "$last_cutover_signature" ] || cutover_required='1'
 
@@ -1195,6 +1458,10 @@ status_json() {
 	printf '"git_ssh_public_key":"%s",' "$(json_escape "$ssh_pub")"
 	printf '"xray_mode":"%s",' "$(json_escape "$mode")"
 	printf '"sync_interval":"%s",' "$(json_escape "$interval")"
+	printf '"external_source_enabled":'; json_bool "$external_enabled"; printf ','
+	printf '"external_source_url":"%s",' "$(json_escape "$external_url")"
+	printf '"external_source_interval":"%s",' "$(json_escape "$external_interval")"
+	printf '"external_source_due":'; json_bool "$external_due"; printf ','
 	printf '"enable_push":'; json_bool "$(enable_push)"; printf ','
 	printf '"source_count":"%s",' "$(json_escape "$source_count")"
 	printf '"domain_count":"%s",' "$(json_escape "$domain_count")"
@@ -1210,6 +1477,12 @@ status_json() {
 	printf '"sync_phase_message":"%s",' "$(json_escape "$sync_phase_message")"
 	printf '"sync_trace":"%s",' "$(json_escape "$sync_trace")"
 	printf '"last_verified_at":"%s",' "$(json_escape "$last_verified_at")"
+	printf '"last_external_run_at":"%s",' "$(json_escape "$last_external_run_at")"
+	printf '"last_external_actor":"%s",' "$(json_escape "$last_external_actor")"
+	printf '"last_external_status":"%s",' "$(json_escape "$last_external_status")"
+	printf '"last_external_message":"%s",' "$(json_escape "$last_external_message")"
+	printf '"last_external_generated_count":"%s",' "$(json_escape "$last_external_generated_count")"
+	printf '"last_external_added_count":"%s",' "$(json_escape "$last_external_added_count")"
 	printf '"rules_checksum":"%s",' "$(json_escape "$rules_checksum")"
 	printf '"last_apply_signature":"%s",' "$(json_escape "$last_apply_signature")"
 	printf '"last_apply_xray":"%s",' "$(json_escape "$last_apply_xray")"
@@ -1273,6 +1546,9 @@ router-rules commands:
   apply-xray
   cutover-xray
   sync-apply-xray
+  background-tick
+  preview-external-source [url]
+  sync-external-source
   save-file <path>
   set-xray-mode <full|selective>
   set-mode-cutover <full|selective>
@@ -1307,6 +1583,16 @@ case "$cmd" in
 		;;
 	sync-apply-xray)
 		with_lock sync_apply_xray_internal
+		;;
+	background-tick)
+		with_lock background_tick_internal
+		;;
+	preview-external-source)
+		shift
+		with_lock preview_external_source_internal "${1:-}"
+		;;
+	sync-external-source)
+		with_lock sync_external_source_internal
 		;;
 	save-sync-apply-xray)
 		shift

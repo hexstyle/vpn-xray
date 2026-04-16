@@ -14,9 +14,9 @@ esac
 [ "$interval" -ge 30 ] 2>/dev/null || interval=300
 while true; do
 	if command -v timeout >/dev/null 2>&1; then
-		ROUTER_RULES_SYNC_ACTOR=background timeout 180 /usr/bin/router-rules sync-apply-xray >/tmp/router-rules-sync.log 2>&1 || true
+		ROUTER_RULES_SYNC_ACTOR=background timeout 180 /usr/bin/router-rules background-tick >/tmp/router-rules-sync.log 2>&1 || true
 	else
-		ROUTER_RULES_SYNC_ACTOR=background /usr/bin/router-rules sync-apply-xray >/tmp/router-rules-sync.log 2>&1 || true
+		ROUTER_RULES_SYNC_ACTOR=background /usr/bin/router-rules background-tick >/tmp/router-rules-sync.log 2>&1 || true
 	fi
 	sleep "$interval"
 done
