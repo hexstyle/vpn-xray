@@ -38,6 +38,8 @@ ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"
 ROUTER_HOST="${ROUTER_HOST:-$(host_from_ssh_target "$ROUTER_SSH")}"
 ROUTER_LAN_IP="${ROUTER_LAN_IP:-$ROUTER_HOST}"
 SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
+ROUTER_RELOAD_WAIT_SECONDS="${ROUTER_RELOAD_WAIT_SECONDS:-45}"
+ROUTER_RELOAD_PROBE_TIMEOUT="${ROUTER_RELOAD_PROBE_TIMEOUT:-5}"
 ensure_installer_ssh_state "$ROOT_DIR"
 INSTALLER_KNOWN_HOSTS="$(installer_known_hosts_file "$ROOT_DIR")"
 ROUTER_SSH_OPTS=(
@@ -107,6 +109,27 @@ router_ssh() {
   echo "If the router was factory-reset or replaced, rerun the install. The stale key in ~/.ssh/known_hosts is no longer relevant to this installer." >&2
   rm -f "$err"
   return "$rc"
+}
+
+router_ssh_ready() {
+  ssh \
+    -o ConnectTimeout="$ROUTER_RELOAD_PROBE_TIMEOUT" \
+    -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS" \
+    "$ROUTER_SSH" "true" >/dev/null 2>&1
+}
+
+wait_for_router_after_network_reload() {
+  local deadline
+
+  deadline=$((SECONDS + ROUTER_RELOAD_WAIT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if router_ssh_ready; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
 }
 
 shell_quote() {
@@ -258,6 +281,15 @@ export \
   RULES_EXTERNAL_SOURCE_INTERVAL \
   XRAY_RULES_MODE
 
+if [[ -n "${XRAY_FLOW:-}" ]]; then
+  printf -v XRAY_USER_FLOW_BLOCK ',\n                "flow": "%s"' "$XRAY_FLOW"
+  printf -v XRAY_CLIENT_FLOW_BLOCK ',\n            "flow": "%s"' "$XRAY_FLOW"
+else
+  XRAY_USER_FLOW_BLOCK=""
+  XRAY_CLIENT_FLOW_BLOCK=""
+fi
+export XRAY_USER_FLOW_BLOCK XRAY_CLIENT_FLOW_BLOCK
+
 render_template() {
   local input="$1"
   local output="$2"
@@ -275,7 +307,8 @@ def repl(match):
     except KeyError:
         raise SystemExit(f"Template {template_path} requires env variable {key}, but it is missing")
 
-output_path.write_text(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
+with output_path.open("w", encoding="utf-8", newline="\n") as fh:
+    fh.write(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
 PY
 }
 
@@ -321,6 +354,7 @@ EOF
 router_ssh "rm -rf $remote_source_root && mkdir -p $remote_source_root"
 router_ssh "cat > $remote_source_tar" < "$source_bundle"
 router_ssh "tar -xf $remote_source_tar -C $remote_source_root && rm -f $remote_source_tar"
+router_ssh "sed -i 's/\r$//' $remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh"
 router_ssh "$remote_platform_cmd"
 
 router_ssh 'cat > /etc/xray/codex-xray.json && chmod 600 /etc/xray/codex-xray.json' < "$json_cfg"
@@ -354,6 +388,15 @@ router_ssh "
 if [[ "$NETWORK_RELOAD" == "1" ]]; then
   router_ssh "nohup sh -c 'sleep 1; /etc/init.d/network reload >/tmp/vpn-xray-network-reload.log 2>&1 || true' >/dev/null 2>&1 &" >/dev/null 2>&1 || true
   echo "Queued async network reload on $ROUTER_HOST"
+  echo "Waiting for router SSH to recover after network reload..."
+  sleep 3
+  if wait_for_router_after_network_reload; then
+    echo "Router is reachable again over SSH after network reload"
+  else
+    echo "Router did not come back on $ROUTER_SSH after network reload." >&2
+    echo "Stop here and verify both wired and Wi-Fi management access before making more router changes." >&2
+    exit 1
+  fi
 fi
 
 echo "Deployed to $ROUTER_HOST"

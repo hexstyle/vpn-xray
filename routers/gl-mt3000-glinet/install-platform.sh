@@ -588,6 +588,135 @@ output_path.write_text(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
 PY
 }
 
+normalize_unix_text_file() {
+	local path="$1"
+	[ -f "$path" ] || return 0
+	python3 - "$path" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+data = path.read_bytes()
+normalized = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+if normalized != data:
+    path.write_bytes(normalized)
+PY
+}
+
+normalize_installed_text_files() {
+	local path
+	for path in "$@"; do
+		normalize_unix_text_file "$path"
+	done
+}
+
+lan_device_name() {
+	local value
+
+	value="$(uci -q get network.lan.device 2>/dev/null || true)"
+	[ -n "$value" ] || value="$(uci -q get network.lan.ifname 2>/dev/null || true)"
+	case "$value" in
+		''|*' '*)
+			value='br-lan'
+			;;
+	esac
+	printf '%s\n' "$value"
+}
+
+lan_device_section() {
+	local wanted line section name
+
+	wanted="$(lan_device_name)"
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in
+			network.@device[*].name=*)
+				section="${line#network.}"
+				section="${section%%.name=*}"
+				name="${line#*=}"
+				name="${name#\'}"
+				name="${name%\'}"
+				if [ "$name" = "$wanted" ]; then
+					printf '%s\n' "$section"
+					return 0
+				fi
+				;;
+		esac
+	done <<EOF
+$(uci -q show network 2>/dev/null || true)
+EOF
+	return 1
+}
+
+normalize_lan_bridge_ports() {
+	local section lan_if raw_ports dedup_ports port
+
+	section="${1:-}"
+	lan_if="${2:-$(lan_device_name)}"
+	[ -n "$section" ] || return 0
+
+	raw_ports="$(uci -q get "network.${section}.ports" 2>/dev/null || true)"
+	[ -n "$raw_ports" ] || return 0
+
+	dedup_ports=''
+	for port in $raw_ports; do
+		case " $dedup_ports " in
+			*" $port "*)
+				continue
+				;;
+		esac
+		dedup_ports="${dedup_ports:+$dedup_ports }$port"
+	done
+
+	[ "$dedup_ports" = "$raw_ports" ] && return 0
+
+	info "Normalizing duplicate LAN bridge ports on ${lan_if}: ${raw_ports} -> ${dedup_ports}"
+	uci -q delete "network.${section}.ports" 2>/dev/null || true
+	for port in $dedup_ports; do
+		uci add_list "network.${section}.ports=$port"
+	done
+}
+
+configure_lan_bridge_ports() {
+	local lan_if section
+
+	lan_if="$(lan_device_name)"
+	section="$(lan_device_section || true)"
+	if [ "${ISOLATE_WIFI_LAN_ONLY:-0}" != '1' ]; then
+		info "Preserving existing LAN bridge port topology on ${lan_if}."
+		normalize_lan_bridge_ports "$section" "$lan_if"
+		return 0
+	fi
+
+	if [ -z "$section" ]; then
+		warn "ISOLATE_WIFI_LAN_ONLY=1 was requested, but the LAN bridge section for ${lan_if} could not be resolved. Skipping automatic port removal to protect router reachability."
+		return 0
+	fi
+
+	warn "ISOLATE_WIFI_LAN_ONLY=1 is removing eth1 from ${lan_if} (${section}). Verify both wired and Wi-Fi management access after the next network reload."
+	uci del_list "network.${section}.ports=eth1" 2>/dev/null || true
+	normalize_lan_bridge_ports "$section" "$lan_if"
+}
+
+stabilize_wireless_bssid() {
+	local line section random_bssid
+
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in
+			wireless.*=wifi-device)
+				section="${line#wireless.}"
+				section="${section%%=*}"
+				random_bssid="$(uci -q get "wireless.${section}.random_bssid" 2>/dev/null || true)"
+				[ -n "$random_bssid" ] || continue
+				[ "$random_bssid" = '0' ] && continue
+				info "Disabling random_bssid on wireless device ${section} to keep Wi-Fi management BSSIDs stable across reloads and reboots."
+				uci set "wireless.${section}.random_bssid=0"
+				;;
+		esac
+	done <<EOF
+$(uci -q show wireless 2>/dev/null || true)
+EOF
+}
+
 current_switch_state() {
 	if [ -f /lib/functions/gl_util.sh ]; then
 		# shellcheck disable=SC1091
@@ -757,6 +886,18 @@ EOF
 	cp "$PROFILE_DIR/files/xray-admin.cgi" /www/cgi-bin/xray-admin
 	cp "$PROFILE_DIR/files/xray-vps.cgi" /www/cgi-bin/xray-vps
 	cp "$PROFILE_DIR/files/xray-rules.cgi" /www/cgi-bin/xray-rules
+	normalize_installed_text_files \
+		/etc/init.d/codex-xray \
+		/etc/init.d/codex-transproxy \
+		/etc/init.d/xray-switch-watchdog \
+		/etc/init.d/router-rules-sync \
+		/etc/gl-switch.d/xray.sh \
+		/usr/bin/router-rules \
+		/usr/share/vpn-xray/router-rules-external.py \
+		/www/cgi-bin/xray-admin \
+		/www/cgi-bin/xray-vps \
+		/www/cgi-bin/xray-rules \
+		/www/xray.html
 	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/init.d/xray-switch-watchdog /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
 	chmod 644 /www/xray.html
 
@@ -800,12 +941,10 @@ EOF
 	uci -q delete switch-button.@main[0].sub_func >/dev/null 2>&1 || true
 	uci commit switch-button
 
-	if [ "${ISOLATE_WIFI_LAN_ONLY:-0}" = '1' ]; then
-		uci del_list network.@device[0].ports='eth1' 2>/dev/null || true
-	else
-		uci add_list network.@device[0].ports='eth1' 2>/dev/null || true
-	fi
+	configure_lan_bridge_ports
+	stabilize_wireless_bssid
 	uci commit network
+	uci commit wireless
 
 	write_platform_metadata
 
@@ -824,8 +963,8 @@ EOF
 	/etc/init.d/stubby disable >/dev/null 2>&1 || true
 	/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 	/etc/init.d/odhcpd restart >/dev/null 2>&1 || true
-	/etc/init.d/codex-xray disable >/dev/null 2>&1 || true
-	/etc/init.d/codex-transproxy disable >/dev/null 2>&1 || true
+	/etc/init.d/codex-xray enable >/dev/null 2>&1 || true
+	/etc/init.d/codex-transproxy enable >/dev/null 2>&1 || true
 	/etc/init.d/xray-switch-watchdog enable >/dev/null 2>&1 || true
 	/etc/init.d/router-rules-sync enable >/dev/null 2>&1 || true
 	/etc/init.d/gl_switch_button_check stop >/dev/null 2>&1 || true

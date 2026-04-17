@@ -12,6 +12,8 @@ RULES_MODE_TIMEOUT='150'
 RULES_EXTERNAL_LOCK_WAIT='300'
 RULES_EXTERNAL_PREVIEW_TIMEOUT='360'
 RULES_EXTERNAL_SYNC_TIMEOUT='600'
+RULES_TEXT_PREVIEW_LINES='400'
+UI_JOB_CONSOLE_FILE='/tmp/router-rules.ui-job.console'
 
 emit_header() {
 	printf 'Content-Type: application/json\r\n'
@@ -77,6 +79,199 @@ status_file_value() {
 	sed -n "s/^$1=//p" /tmp/router-rules.status 2>/dev/null | sed -n '1p'
 }
 
+status_file_set() {
+	local key="$1"
+	local value="$2"
+	local file tmp
+
+	file='/tmp/router-rules.status'
+	tmp="$(mktemp)"
+	if [ -f "$file" ]; then
+		grep -v "^${key}=" "$file" > "$tmp" || true
+	fi
+	printf '%s=%s\n' "$key" "$value" >> "$tmp"
+	mv "$tmp" "$file"
+}
+
+status_file_delete() {
+	local key="$1"
+	local file tmp
+
+	file='/tmp/router-rules.status'
+	[ -f "$file" ] || return 0
+	tmp="$(mktemp)"
+	grep -v "^${key}=" "$file" > "$tmp" || true
+	mv "$tmp" "$file"
+}
+
+ui_job_reconcile() {
+	local state pid now
+
+	state="$(status_file_value ui_job_state)"
+	[ "$state" = 'running' ] || return 0
+	pid="$(status_file_value ui_job_pid)"
+	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+		return 0
+	fi
+
+	now="$(date +%s)"
+	status_file_set ui_job_state 'error'
+	status_file_set ui_job_finished_at "$now"
+	status_file_set ui_job_message 'The previous UI operation ended unexpectedly before reporting its final status.'
+	status_file_set ui_job_suggestion 'Inspect the router status and console output from the last failed operation, then retry once the stuck job is cleared.'
+	status_file_delete ui_job_pid
+}
+
+ui_job_running() {
+	ui_job_reconcile
+	[ "$(status_file_value ui_job_state)" = 'running' ]
+}
+
+ui_job_clear_feedback() {
+	status_file_delete ui_job_suggestion
+	status_file_delete ui_job_console_path
+	rm -f "$UI_JOB_CONSOLE_FILE"
+}
+
+ui_job_store_console_output() {
+	local log_file="$1"
+
+	status_file_delete ui_job_console_path
+	rm -f "$UI_JOB_CONSOLE_FILE"
+	[ -f "$log_file" ] || return 0
+	sed 's/\r$//' "$log_file" | sed -n '1,160p' > "$UI_JOB_CONSOLE_FILE"
+	if [ -s "$UI_JOB_CONSOLE_FILE" ]; then
+		status_file_set ui_job_console_path "$UI_JOB_CONSOLE_FILE"
+	else
+		rm -f "$UI_JOB_CONSOLE_FILE"
+	fi
+}
+
+job_suggestion_from_log() {
+	local log_file="$1"
+	local context="${2:-operation}"
+	local text
+
+	text="$(tr '\r\n' '  ' < "$log_file" 2>/dev/null | tr -s ' ')"
+	case "$text" in
+		*Permission\ denied*|*Authentication\ failed*|*publickey*|*Repository\ not\ found*|*could\ not\ read\ Username*|*403\ Forbidden*|*401\ Unauthorized*)
+			case "$context" in
+				push)
+					printf 'Check the push URL and write credentials on the router. HTTPS push needs a valid token/password, and SSH push needs the router public key allowed on the repository.\n'
+					;;
+				pull|sync)
+					printf 'Check the fetch URL and Git credentials. If the router is meant to pull anonymously, the remote rules file must be reachable without write credentials.\n'
+					;;
+				*)
+					printf 'Check the Git URL and credentials on the router, then retry the operation.\n'
+					;;
+			esac
+			return 0
+			;;
+		*non-fast-forward*|*fetch\ first*|*failed\ to\ push\ some\ refs*|*Updates\ were\ rejected*)
+			printf 'Remote Git changed while the router still had local edits. Run Pull first, review the merged file that preserves both unique sides, then push again.\n'
+			return 0
+			;;
+		*Connection\ timed\ out*|*Operation\ timed\ out*|*Failed\ to\ connect*|*Could\ not\ resolve\ host*|*Name\ or\ service\ not\ known*|*No\ route\ to\ host*|*Network\ is\ unreachable*|*Connection\ refused*)
+			printf 'The router cannot reach the Git remote within the timeout. Check WAN connectivity, DNS, proxy routing and firewall, then retry.\n'
+			return 0
+			;;
+		*read-only*)
+			printf 'This router is currently in read-only Git mode. Switch Git auth to HTTPS or SSH write access before using Push.\n'
+			return 0
+			;;
+		*router-rules\ lock\ timeout*)
+			printf 'Another router-side rules job is still holding the lock. Wait for it to finish, or clear the stuck job before retrying.\n'
+			return 0
+			;;
+	esac
+
+	case "$context" in
+		push)
+			printf 'Inspect the console output below, fix the push-side problem on the router, then retry Push.\n'
+			;;
+		pull|sync)
+			printf 'Inspect the console output below, fix the fetch/merge problem on the router, then retry Pull.\n'
+			;;
+		external)
+			printf 'Inspect the parser or network error below, then retry the managed-source refresh.\n'
+			;;
+		mode)
+			printf 'Inspect the router-side cutover error below, then retry the routing mode change.\n'
+			;;
+		*)
+			printf 'Inspect the console output below, fix the router-side error, then retry.\n'
+			;;
+	esac
+}
+
+ui_job_begin() {
+	local kind="$1"
+	local message="$2"
+	local target_mode="${3:-}"
+	local job_id now
+
+	now="$(date +%s)"
+	job_id="${now}-$$"
+	status_file_set ui_job_id "$job_id"
+	status_file_set ui_job_kind "$kind"
+	status_file_set ui_job_state 'running'
+	status_file_set ui_job_message "$message"
+	status_file_set ui_job_started_at "$now"
+	status_file_delete ui_job_finished_at
+	status_file_delete ui_job_pid
+	ui_job_clear_feedback
+	if [ -n "$target_mode" ]; then
+		status_file_set ui_job_target_mode "$target_mode"
+	else
+		status_file_delete ui_job_target_mode
+	fi
+	printf '%s\n' "$job_id"
+}
+
+ui_job_attach_pid() {
+	local job_id="$1"
+	local pid="$2"
+
+	[ "$(status_file_value ui_job_id)" = "$job_id" ] || return 0
+	status_file_set ui_job_pid "$pid"
+}
+
+ui_job_finish() {
+	local job_id="$1"
+	local final_state="$2"
+	local message="$3"
+	local suggestion="${4:-}"
+	local console_log="${5:-}"
+	local now
+
+	[ "$(status_file_value ui_job_id)" = "$job_id" ] || return 0
+	now="$(date +%s)"
+	status_file_set ui_job_state "$final_state"
+	status_file_set ui_job_message "$message"
+	status_file_set ui_job_finished_at "$now"
+	status_file_delete ui_job_pid
+	if [ -n "$suggestion" ]; then
+		status_file_set ui_job_suggestion "$suggestion"
+	else
+		status_file_delete ui_job_suggestion
+	fi
+	ui_job_store_console_output "$console_log"
+}
+
+ui_job_error_from_log() {
+	local log_file="$1"
+	local fallback="$2"
+	local message
+
+	message=''
+	if [ -f "$log_file" ]; then
+		message="$(sed '/^[[:space:]]*$/d' "$log_file" | sed -n '1p')"
+	fi
+	[ -n "$message" ] || message="$fallback"
+	printf '%s\n' "$message"
+}
+
 cfg_set_or_delete() {
 	local key="$1"
 	local value="$2"
@@ -105,6 +300,41 @@ ssh_key_path() {
 	fi
 }
 
+normalize_git_source_input() {
+	local raw="$1"
+	local rest owner repo branch rel
+
+	case "$raw" in
+		https://github.com/*/blob/*)
+			rest="${raw#https://github.com/}"
+			owner="${rest%%/*}"
+			rest="${rest#*/}"
+			repo="${rest%%/*}"
+			rest="${rest#*/}"
+			[ "$rest" = "${rest#blob/}" ] && return 1
+			rest="${rest#blob/}"
+			branch="${rest%%/*}"
+			rel="${rest#*/}"
+			[ -n "$owner" ] && [ -n "$repo" ] && [ -n "$branch" ] && [ -n "$rel" ] || return 1
+			printf '%s\n%s\n%s\n' "https://github.com/${owner}/${repo}.git" "$branch" "$rel"
+			return 0
+			;;
+		https://raw.githubusercontent.com/*)
+			rest="${raw#https://raw.githubusercontent.com/}"
+			owner="${rest%%/*}"
+			rest="${rest#*/}"
+			repo="${rest%%/*}"
+			rest="${rest#*/}"
+			branch="${rest%%/*}"
+			rel="${rest#*/}"
+			[ -n "$owner" ] && [ -n "$repo" ] && [ -n "$branch" ] && [ -n "$rel" ] || return 1
+			printf '%s\n%s\n%s\n' "https://github.com/${owner}/${repo}.git" "$branch" "$rel"
+			return 0
+			;;
+	esac
+	return 1
+}
+
 external_source_ids() {
 	cat <<'EOF'
 microsoft_service_tags
@@ -131,6 +361,7 @@ source_ids_csv_contains() {
 status_action() {
 	local include_rules_text
 
+	ui_job_reconcile
 	include_rules_text='0'
 	if request_has_key include_rules_text; then
 		include_rules_text="$(request_value include_rules_text)"
@@ -193,6 +424,11 @@ sync_error_message() {
 	if [ -z "$message" ] && [ "$current_sync_phase_at" != "$prev_sync_phase_at" ]; then
 		message="$(status_file_value sync_phase_message)"
 	fi
+	case "$message" in
+		'router-rules lock timeout')
+			message='Another router-rules operation is still running; sync timed out waiting for the lock.'
+			;;
+	esac
 	if [ -z "$message" ] && [ "$rc" -eq 124 ]; then
 		message='Rules sync/apply timed out.'
 	fi
@@ -234,7 +470,8 @@ mode_error_message() {
 
 save_config_action() {
 	local fetch_url push_url branch auth_mode username password enable_push sync_interval ssh_private_key key_path
-	local sync_enabled check_error tmp_key external_enabled_ids external_interval source_id
+	local sync_enabled check_error tmp_key external_enabled_ids external_interval source_id normalized_fetch
+	local normalized_branch normalized_rules_relpath
 
 	fetch_url=''
 	push_url=''
@@ -253,6 +490,13 @@ save_config_action() {
 
 	if request_has_key repo_fetch_url; then
 		fetch_url="$(request_value repo_fetch_url)"
+		if normalized_fetch="$(normalize_git_source_input "$fetch_url" 2>/dev/null || true)"; then
+			fetch_url="$(printf '%s\n' "$normalized_fetch" | sed -n '1p')"
+			normalized_branch="$(printf '%s\n' "$normalized_fetch" | sed -n '2p')"
+			normalized_rules_relpath="$(printf '%s\n' "$normalized_fetch" | sed -n '3p')"
+			[ -n "$normalized_branch" ] && cfg_set_or_delete repo_branch "$normalized_branch"
+			[ -n "$normalized_rules_relpath" ] && cfg_set_or_delete rules_relpath "$normalized_rules_relpath"
+		fi
 		cfg_set_or_delete repo_fetch_url "$fetch_url"
 		if [ -z "$fetch_url" ]; then
 			cfg_set_or_delete repo_push_url ''
@@ -410,7 +654,7 @@ EOF
 }
 
 preview_external_source_action() {
-	local source_id preview_file error_file rc message preview_text preview_count
+	local source_id preview_file error_file rc message preview_text preview_count preview_total preview_truncated
 
 	source_id=''
 	preview_file="$(mktemp)"
@@ -434,8 +678,13 @@ preview_external_source_action() {
 		return 0
 	fi
 
-	preview_text="$(cat "$preview_file")"
-	preview_count="$(sed '/^[[:space:]]*$/d' "$preview_file" | wc -l | awk '{print $1}')"
+	preview_total="$(sed '/^[[:space:]]*$/d' "$preview_file" | wc -l | awk '{print $1}')"
+	preview_count="$preview_total"
+	preview_text="$(sed -n "1,${RULES_TEXT_PREVIEW_LINES}p" "$preview_file")"
+	preview_truncated='0'
+	if [ "${preview_total:-0}" -gt "$RULES_TEXT_PREVIEW_LINES" ] 2>/dev/null; then
+		preview_truncated='1'
+	fi
 	rm -f "$preview_file" "$error_file"
 
 	emit_header
@@ -443,12 +692,14 @@ preview_external_source_action() {
 	printf '"ok":true,'
 	printf '"action":"preview_external_source",'
 	printf '"generated_count":"%s",' "$(json_escape "$preview_count")"
+	printf '"generated_total":"%s",' "$(json_escape "$preview_total")"
+	printf '"generated_truncated":'; json_bool "$preview_truncated"; printf ','
 	printf '"generated_text":"%s"' "$(json_escape "$preview_text")"
 	printf '}'
 }
 
 read_external_source_action() {
-	local source_id read_file error_file rc message output_text output_count
+	local source_id read_file error_file rc message output_text output_count output_total output_truncated
 
 	source_id=''
 	read_file="$(mktemp)"
@@ -472,8 +723,13 @@ read_external_source_action() {
 		return 0
 	fi
 
-	output_text="$(cat "$read_file")"
-	output_count="$(sed '/^[[:space:]]*$/d' "$read_file" | wc -l | awk '{print $1}')"
+	output_total="$(sed '/^[[:space:]]*$/d' "$read_file" | wc -l | awk '{print $1}')"
+	output_count="$output_total"
+	output_text="$(sed -n "1,${RULES_TEXT_PREVIEW_LINES}p" "$read_file")"
+	output_truncated='0'
+	if [ "${output_total:-0}" -gt "$RULES_TEXT_PREVIEW_LINES" ] 2>/dev/null; then
+		output_truncated='1'
+	fi
 	rm -f "$read_file" "$error_file"
 
 	emit_header
@@ -481,18 +737,38 @@ read_external_source_action() {
 	printf '"ok":true,'
 	printf '"action":"read_external_source",'
 	printf '"file_count":"%s",' "$(json_escape "$output_count")"
+	printf '"file_total":"%s",' "$(json_escape "$output_total")"
+	printf '"file_truncated":'; json_bool "$output_truncated"; printf ','
 	printf '"file_text":"%s"' "$(json_escape "$output_text")"
 	printf '}'
 }
 
 sync_action() {
-	local tmp run_log rules_text base_repo_head rc error_message prev_last_sync_at prev_sync_phase_at
+	local tmp run_log rules_text base_repo_head job_id bg_pid sync_mode job_kind start_message
+	local error_message error_suggestion
 	tmp="$(mktemp)"
 	run_log="$(mktemp)"
 	base_repo_head=''
-	rc=0
-	prev_last_sync_at="$(status_file_value last_sync_at)"
-	prev_sync_phase_at="$(status_file_value sync_phase_at)"
+	sync_mode='sync'
+
+	if ui_job_running; then
+		rm -f "$tmp" "$run_log"
+		emit_error sync_rules 'Another router rules operation is already running. Wait for it to finish before starting a new sync.'
+		return 0
+	fi
+
+	if request_has_key sync_mode; then
+		sync_mode="$(request_value sync_mode)"
+	fi
+	case "$sync_mode" in
+		sync|pull|push|apply)
+			;;
+		*)
+			rm -f "$tmp" "$run_log"
+			emit_error sync_rules 'Invalid rules sync mode.'
+			return 0
+			;;
+	esac
 
 	if request_has_key rules_text; then
 		rules_text="$(request_value rules_text)"
@@ -502,59 +778,95 @@ sync_action() {
 		base_repo_head="$(request_value base_repo_head)"
 	fi
 
-	/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
-	if command -v timeout >/dev/null 2>&1; then
-		if request_has_key rules_text; then
-			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules save-sync-apply-xray "$tmp" >"$run_log" 2>&1 || rc=$?
-		else
-			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules sync-apply-xray >"$run_log" 2>&1 || rc=$?
-		fi
-	else
-		if request_has_key rules_text; then
-			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules save-sync-apply-xray "$tmp" >"$run_log" 2>&1 || rc=$?
-		else
-			ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules sync-apply-xray >"$run_log" 2>&1 || rc=$?
-		fi
-	fi
+	case "$sync_mode" in
+		pull)
+			job_kind='pull_rules'
+			start_message='Starting Git pull, merge and apply on the router'
+			;;
+		push)
+			job_kind='push_rules'
+			start_message='Starting Git push and apply on the router'
+			;;
+		apply)
+			job_kind='apply_rules'
+			start_message='Saving the local rules file and applying it on the router'
+			;;
+		*)
+			job_kind='sync_rules'
+			start_message='Starting rules sync and apply on the router'
+			;;
+	esac
 
-	if [ "$rc" -ne 0 ]; then
-		error_message="$(sync_error_message "$run_log" "$rc" "$prev_last_sync_at" "$prev_sync_phase_at")"
+	job_id="$(ui_job_begin "$job_kind" "$start_message")"
+	(
+		rc=0
+		prev_last_sync_at="$(status_file_value last_sync_at)"
+		prev_sync_phase_at="$(status_file_value sync_phase_at)"
+		/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
+		if command -v timeout >/dev/null 2>&1; then
+			if [ -s "$tmp" ]; then
+				ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules save-sync-apply-xray "$tmp" >"$run_log" 2>&1 || rc=$?
+			else
+				ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules sync-apply-xray >"$run_log" 2>&1 || rc=$?
+			fi
+		else
+			if [ -s "$tmp" ]; then
+				ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules save-sync-apply-xray "$tmp" >"$run_log" 2>&1 || rc=$?
+			else
+				ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules sync-apply-xray >"$run_log" 2>&1 || rc=$?
+			fi
+		fi
+		if [ "$rc" -eq 0 ]; then
+			ui_job_finish "$job_id" success "$(status_file_value last_sync_message)"
+		else
+			error_message="$(sync_error_message "$run_log" "$rc" "$prev_last_sync_at" "$prev_sync_phase_at")"
+			error_suggestion="$(job_suggestion_from_log "$run_log" "$sync_mode")"
+			ui_job_finish "$job_id" error "$error_message" "$error_suggestion" "$run_log"
+		fi
 		rm -f "$tmp" "$run_log"
-		emit_error sync_rules "$error_message"
-		return 0
-	fi
-
-	rm -f "$tmp" "$run_log"
+	) </dev/null >/dev/null 2>&1 &
+	bg_pid="$!"
+	ui_job_attach_pid "$job_id" "$bg_pid"
 	status_action
 }
 
 sync_external_source_action() {
-	local run_log rc error_message prev_last_sync_at prev_sync_phase_at
+	local run_log job_id bg_pid error_message error_suggestion
 
 	run_log="$(mktemp)"
-	rc=0
-	prev_last_sync_at="$(status_file_value last_sync_at)"
-	prev_sync_phase_at="$(status_file_value sync_phase_at)"
 
-	if command -v timeout >/dev/null 2>&1; then
-		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_EXTERNAL_FORCE=1 ROUTER_RULES_SYNC_ACTOR='ui-external' timeout "$RULES_EXTERNAL_SYNC_TIMEOUT" /usr/bin/router-rules sync-external-source >"$run_log" 2>&1 || rc=$?
-	else
-		ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_EXTERNAL_FORCE=1 ROUTER_RULES_SYNC_ACTOR='ui-external' /usr/bin/router-rules sync-external-source >"$run_log" 2>&1 || rc=$?
-	fi
-
-	if [ "$rc" -ne 0 ]; then
-		error_message="$(sync_error_message "$run_log" "$rc" "$prev_last_sync_at" "$prev_sync_phase_at")"
+	if ui_job_running; then
 		rm -f "$run_log"
-		emit_error sync_external_source "$error_message"
+		emit_error sync_external_source 'Another router rules operation is already running. Wait for it to finish before starting a managed-source refresh.'
 		return 0
 	fi
 
-	rm -f "$run_log"
+	job_id="$(ui_job_begin sync_external_source 'Refreshing managed source files on the router')"
+	(
+		rc=0
+		prev_last_sync_at="$(status_file_value last_sync_at)"
+		prev_sync_phase_at="$(status_file_value sync_phase_at)"
+		if command -v timeout >/dev/null 2>&1; then
+			ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_EXTERNAL_FORCE=1 ROUTER_RULES_SYNC_ACTOR='ui-external' timeout "$RULES_EXTERNAL_SYNC_TIMEOUT" /usr/bin/router-rules sync-external-source >"$run_log" 2>&1 || rc=$?
+		else
+			ROUTER_RULES_LOCK_WAIT="$RULES_EXTERNAL_LOCK_WAIT" ROUTER_RULES_EXTERNAL_FORCE=1 ROUTER_RULES_SYNC_ACTOR='ui-external' /usr/bin/router-rules sync-external-source >"$run_log" 2>&1 || rc=$?
+		fi
+		if [ "$rc" -eq 0 ]; then
+			ui_job_finish "$job_id" success "$(status_file_value last_external_message)"
+		else
+			error_message="$(sync_error_message "$run_log" "$rc" "$prev_last_sync_at" "$prev_sync_phase_at")"
+			error_suggestion="$(job_suggestion_from_log "$run_log" external)"
+			ui_job_finish "$job_id" error "$error_message" "$error_suggestion" "$run_log"
+		fi
+		rm -f "$run_log"
+	) </dev/null >/dev/null 2>&1 &
+	bg_pid="$!"
+	ui_job_attach_pid "$job_id" "$bg_pid"
 	status_action
 }
 
 set_mode_action() {
-	local mode run_log rc error_message prev_last_cutover_at prev_sync_phase_at
+	local mode run_log job_id bg_pid error_message error_suggestion
 
 	mode="$(request_value mode)"
 	case "$mode" in
@@ -567,24 +879,34 @@ set_mode_action() {
 	esac
 
 	run_log="$(mktemp)"
-	rc=0
-	prev_last_cutover_at="$(status_file_value last_cutover_at)"
-	prev_sync_phase_at="$(status_file_value sync_phase_at)"
 
-	if command -v timeout >/dev/null 2>&1; then
-		ROUTER_RULES_LOCK_WAIT="$RULES_MODE_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-mode-toggle' timeout "$RULES_MODE_TIMEOUT" /usr/bin/router-rules set-mode-cutover "$mode" >"$run_log" 2>&1 || rc=$?
-	else
-		ROUTER_RULES_LOCK_WAIT="$RULES_MODE_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-mode-toggle' /usr/bin/router-rules set-mode-cutover "$mode" >"$run_log" 2>&1 || rc=$?
-	fi
-
-	if [ "$rc" -ne 0 ]; then
-		error_message="$(mode_error_message "$run_log" "$rc" "$prev_last_cutover_at" "$prev_sync_phase_at")"
+	if ui_job_running; then
 		rm -f "$run_log"
-		emit_error set_mode "$error_message"
+		emit_error set_mode 'Another router rules operation is already running. Wait for it to finish before changing routing mode.'
 		return 0
 	fi
 
-	rm -f "$run_log"
+	job_id="$(ui_job_begin set_mode "Starting hard cutover to ${mode} routing mode" "$mode")"
+	(
+		rc=0
+		prev_last_cutover_at="$(status_file_value last_cutover_at)"
+		prev_sync_phase_at="$(status_file_value sync_phase_at)"
+		if command -v timeout >/dev/null 2>&1; then
+			ROUTER_RULES_LOCK_WAIT="$RULES_MODE_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-mode-toggle' timeout "$RULES_MODE_TIMEOUT" /usr/bin/router-rules set-mode-cutover "$mode" >"$run_log" 2>&1 || rc=$?
+		else
+			ROUTER_RULES_LOCK_WAIT="$RULES_MODE_LOCK_WAIT" ROUTER_RULES_SYNC_ACTOR='ui-mode-toggle' /usr/bin/router-rules set-mode-cutover "$mode" >"$run_log" 2>&1 || rc=$?
+		fi
+		if [ "$rc" -eq 0 ]; then
+			ui_job_finish "$job_id" success "$(status_file_value last_cutover_message)"
+		else
+			error_message="$(mode_error_message "$run_log" "$rc" "$prev_last_cutover_at" "$prev_sync_phase_at")"
+			error_suggestion="$(job_suggestion_from_log "$run_log" mode)"
+			ui_job_finish "$job_id" error "$error_message" "$error_suggestion" "$run_log"
+		fi
+		rm -f "$run_log"
+	) </dev/null >/dev/null 2>&1 &
+	bg_pid="$!"
+	ui_job_attach_pid "$job_id" "$bg_pid"
 	status_action
 }
 

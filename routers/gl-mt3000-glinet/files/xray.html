@@ -792,7 +792,9 @@
           <div id="rulesSummaryChips" class="chip-row"></div>
         </div>
         <div class="button-wrap" style="margin-top:0;">
-          <button class="warn-btn" id="rulesSyncBtn">Save List + Sync Git</button>
+          <button id="rulesApplyBtn">Apply Local Rules</button>
+          <button class="warn-btn" id="rulesPullBtn">Pull From Git</button>
+          <button class="warn-btn" id="rulesPushBtn">Push To Git</button>
         </div>
       </div>
       <div class="field field-full" style="margin-top:12px;">
@@ -830,8 +832,8 @@
         <div id="rulesGitConfigFields">
         <div class="field field-full" style="margin-top:12px;">
           <label for="rulesRepoFetchUrl">Repository URL</label>
-          <input type="text" id="rulesRepoFetchUrl" placeholder="git@github.com:hexstyle/routerRules.git">
-          <div class="hint">The router pulls <code>lists/shared-targets.txt</code> from this repository when Git sync is enabled.</div>
+          <input type="text" id="rulesRepoFetchUrl" placeholder="git@github.com:hexstyle/routerRules.git or https://github.com/hexstyle/routerRules/blob/main/lists/shared-targets.txt">
+          <div class="hint">The router can accept either a Git repository URL or a direct GitHub blob/raw URL for the tracked rules file. The effective remote file path is shown below after save.</div>
         </div>
         <div class="field field-full" style="margin-top:12px;">
           <label for="rulesRepoPushUrl">Push URL</label>
@@ -854,13 +856,6 @@
               <option value="none">Legacy anonymous / local-only</option>
               <option value="https">HTTPS login / token</option>
               <option value="ssh">SSH key</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="rulesEnablePush">Push Back Local Edits</label>
-            <select id="rulesEnablePush">
-              <option value="0">No</option>
-              <option value="1">Yes</option>
             </select>
           </div>
         </div>
@@ -901,7 +896,7 @@
           </div>
         </div>
         <div class="button-wrap" style="margin-top:12px;">
-          <button id="rulesExternalRunBtn" class="warn-btn">Refresh Enabled Sources Now</button>
+          <button id="rulesExternalRunBtn" class="warn-btn">Refresh Managed Snapshots Now</button>
         </div>
         <div class="readonly-pane" style="margin-top:12px;">
           <div class="label">Managed Sources Summary</div>
@@ -911,7 +906,7 @@
       <div class="field field-full" style="margin-top:12px;">
         <label for="rulesText">Shared Rules List</label>
         <div class="hint" id="rulesEditorHint">
-          Edit the shared operator-facing list here. These addresses take effect only while the GL.iNet VPN switch is ON and Routing Mode is set to <code>selective</code>.
+          Edit the shared operator-facing list here. Comments and manual notes stay part of this file. These addresses take effect only while the GL.iNet VPN switch is ON and Routing Mode is set to <code>selective</code>.
         </div>
         <div class="button-wrap" style="margin-top:12px;">
           <button id="rulesLoadTextBtn">Load Current List</button>
@@ -981,7 +976,8 @@
       rulesBusy: false,
       logsBusy: false,
       foregroundBusy: false,
-      uiReady: false
+      uiReady: false,
+      rulesJobPollTimer: 0
     };
 
     const compareFields = [
@@ -1039,14 +1035,15 @@
         "logsBtn",
         "rulesModeToggle",
         "rulesSaveConfigBtn",
-        "rulesSyncBtn",
+        "rulesApplyBtn",
+        "rulesPullBtn",
+        "rulesPushBtn",
         "rulesGitSyncEnabled",
         "rulesRepoFetchUrl",
         "rulesRepoPushUrl",
         "rulesRepoBranch",
         "rulesSyncInterval",
         "rulesGitAuthMode",
-        "rulesEnablePush",
         "rulesGitHttpUsername",
         "rulesGitHttpPassword",
         "rulesGitSshPrivateKey",
@@ -1075,14 +1072,15 @@
         "smokeBtn",
         "rulesModeToggle",
         "rulesSaveConfigBtn",
-        "rulesSyncBtn",
+        "rulesApplyBtn",
+        "rulesPullBtn",
+        "rulesPushBtn",
         "rulesGitSyncEnabled",
         "rulesRepoFetchUrl",
         "rulesRepoPushUrl",
         "rulesRepoBranch",
         "rulesSyncInterval",
         "rulesGitAuthMode",
-        "rulesEnablePush",
         "rulesGitHttpUsername",
         "rulesGitHttpPassword",
         "rulesGitSshPrivateKey",
@@ -1109,6 +1107,8 @@
     const RULES_STATUS_TIMEOUT_MS = 12000;
     const RULES_TEXT_TIMEOUT_MS = 45000;
     const RULES_TEXT_AUTOLOAD_SOURCE_LIMIT = 2000;
+    const RULES_JOB_STATUS_DELAY_MS = 2000;
+    const RULES_JOB_POLL_MS = 2000;
 
     function beginForegroundTask(message, pauseMs = 15000) {
       setControlsBusy(true);
@@ -1121,6 +1121,10 @@
 
     function parseDiffList(text) {
       return (text || "").split(",").map((item) => item.trim()).filter(Boolean);
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => window.setTimeout(resolve, ms));
     }
 
     function escapeHtml(value) {
@@ -1279,7 +1283,12 @@
         const metaLines = [
           `URL: ${source.url || "(unknown)"}`,
           `Stored file: ${source.file_relpath || "(unknown)"}`,
-          `Stored lines: ${source.file_count || 0}`,
+          `Apply to routing: ${enabled ? "yes" : "no"}`,
+          `Stored targets: ${source.file_count || 0}`,
+          `Stored hash: ${shortSig(source.file_signature || "(missing)")}`,
+          `Last generated targets: ${source.last_generated_count || 0}`,
+          `Last checked: ${source.last_checked_at ? formatUnixTime(source.last_checked_at) : "never"}`,
+          `Last changed: ${source.last_changed_at ? formatUnixTime(source.last_changed_at) : "never"}`,
           `Next refresh: ${source.due ? "due now" : "waiting for interval"}`,
           `Last status: ${status}${source.last_run_at ? ` at ${formatUnixTime(source.last_run_at)}` : ""}`,
           source.last_message ? `Last message: ${source.last_message}` : ""
@@ -1318,8 +1327,146 @@
       container.innerHTML = html || '<div class="readonly-pane">No managed external sources are available on this router.</div>';
     }
 
+    function backendPendingRulesMode(data = state.rules) {
+      if (data?.ui_job_state === "running" && data?.ui_job_kind === "set_mode" && data?.ui_job_target_mode) {
+        return data.ui_job_target_mode;
+      }
+      return "";
+    }
+
+    function rulesJobIsRunning(data = state.rules) {
+      return data?.ui_job_state === "running";
+    }
+
+    function formatRulesJobFailureDetails(data, fallbackMessage) {
+      const lines = [data?.ui_job_message || fallbackMessage || "Router operation failed."];
+      if (data?.ui_job_suggestion) {
+        lines.push("", `Suggestion: ${data.ui_job_suggestion}`);
+      }
+      if (data?.ui_job_console_output) {
+        lines.push("", "Console output:", data.ui_job_console_output);
+      }
+      return lines.join("\n");
+    }
+
+    function buildRulesJobError(label, data) {
+      const error = new Error(data?.ui_job_message || data?.sync_phase_message || `${label} failed on the router.`);
+      error.routerJob = data;
+      return error;
+    }
+
+    function ensureRulesJobPolling(data = state.rules) {
+      if (state.rulesJobPollTimer) {
+        clearTimeout(state.rulesJobPollTimer);
+        state.rulesJobPollTimer = 0;
+      }
+      if (!rulesJobIsRunning(data)) {
+        return;
+      }
+      state.rulesJobPollTimer = window.setTimeout(() => {
+        state.rulesJobPollTimer = 0;
+        refreshRules(false, true).catch(() => {});
+      }, RULES_JOB_POLL_MS);
+    }
+
     function effectiveRulesMode(data = state.rules) {
-      return state.pendingRulesMode || data?.xray_mode || "full";
+      return state.pendingRulesMode || backendPendingRulesMode(data) || data?.xray_mode || "full";
+    }
+
+    function deriveRulesGitHealth(data = state.rules) {
+      const gitSyncEnabled = !!data?.git_sync_enabled;
+      const gitConfigured = !!data?.git_configured;
+      const repoReady = !!data?.repo_ready;
+      const gitReadonly = !!data?.git_readonly;
+      const uiJobRunning = data?.ui_job_state === "running" && ["sync_rules", "pull_rules", "push_rules", "sync_external_source"].includes(data?.ui_job_kind || "");
+      const intervalSeconds = Number(data?.sync_interval || 0) || 30;
+      const probeStatus = data?.last_remote_probe_status || "";
+      const probeMessage = data?.last_remote_probe_message || "";
+      const probeAt = Number(data?.last_remote_probe_at || 0);
+      const probeAgeSeconds = probeAt > 0 ? Math.max(0, Math.floor(Date.now() / 1000) - probeAt) : Number.POSITIVE_INFINITY;
+      const probeStaleAfterSeconds = Math.max(intervalSeconds * 2, 120);
+      const updateAvailable = !!data?.last_remote_probe_update_available;
+      const lastSyncStatus = data?.last_sync_status || "";
+      const lastSyncMessage = data?.last_sync_message || "";
+      const phase = data?.sync_phase || "";
+      const phaseMessage = data?.sync_phase_message || "";
+      const cutoverRequired = !!data?.cutover_required;
+
+      if (!gitSyncEnabled) {
+        return { chipClass: "", label: "local-only", detail: "Git sync is disabled. The router is using only the local rules list." };
+      }
+      if (!gitConfigured || !repoReady || !(data?.repo_fetch_url || "")) {
+        return {
+          chipClass: "bad",
+          label: "not ready",
+          detail: lastSyncMessage || "Git sync is enabled, but the repository URL or local clone is missing."
+        };
+      }
+      if (uiJobRunning) {
+        return {
+          chipClass: "warn",
+          label: "sync running",
+          detail: data?.ui_job_message || "A router-side sync job is still running."
+        };
+      }
+      if (probeStatus === "timeout") {
+        return {
+          chipClass: "bad",
+          label: "probe timeout",
+          detail: probeMessage || "Git remote probe did not finish within 5 seconds. This looks like a network problem."
+        };
+      }
+      if (probeStatus === "error") {
+        return {
+          chipClass: "bad",
+          label: "probe failed",
+          detail: probeMessage || "Git remote probe failed."
+        };
+      }
+      if (!Number.isFinite(probeAgeSeconds) || probeAgeSeconds > probeStaleAfterSeconds) {
+        return {
+          chipClass: "bad",
+          label: "probe stale",
+          detail: probeAt > 0
+            ? `The background Git probe has not reported for ${probeAgeSeconds}s. The scheduler is stuck, blocked, or the router lost network access.`
+            : "The background Git probe has never reported. The scheduler has not completed a first successful check yet."
+        };
+      }
+      if (phase === "error" || lastSyncStatus === "error") {
+        return {
+          chipClass: "bad",
+          label: "sync failed",
+          detail: phaseMessage || lastSyncMessage || "Git sync failed."
+        };
+      }
+      if (cutoverRequired) {
+        return {
+          chipClass: "bad",
+          label: "diverged",
+          detail: phaseMessage || "Config and active runtime ruleset are out of sync."
+        };
+      }
+      if (updateAvailable) {
+        return {
+          chipClass: "warn",
+          label: "update available",
+          detail: probeMessage || "Remote repository has a newer rules commit."
+        };
+      }
+      if (lastSyncStatus === "ok") {
+        return {
+          chipClass: "ok",
+          label: gitReadonly ? "ready (read-only)" : "ready",
+          detail: probeMessage || (gitReadonly
+            ? "Git sync is healthy in read-only mode."
+            : "Git sync is healthy. Pull is ready, and Push can be attempted explicitly from the UI.")
+        };
+      }
+      return {
+        chipClass: "warn",
+        label: "unknown",
+        detail: probeMessage || lastSyncMessage || "Git sync state is not fully known yet."
+      };
     }
 
     function rulesGitReadonlyLive() {
@@ -1359,7 +1506,7 @@
 
     function renderRulesModeUi(data = state.rules) {
       const mode = effectiveRulesMode(data);
-      const pending = !!state.pendingRulesMode;
+      const pending = !!state.pendingRulesMode || (data?.ui_job_state === "running" && data?.ui_job_kind === "set_mode");
       const modeToggle = document.getElementById("rulesModeToggle");
       if (modeToggle) {
         modeToggle.checked = mode === "selective";
@@ -1390,8 +1537,7 @@
         external_source_enabled_ids: selectedExternalSourceIds().join(","),
         external_source_interval: document.getElementById("rulesExternalInterval").value.trim() || "3600",
         git_auth_mode: document.getElementById("rulesGitAuthMode").value,
-        git_http_username: document.getElementById("rulesGitHttpUsername").value.trim(),
-        enable_push: document.getElementById("rulesEnablePush").value
+        git_http_username: document.getElementById("rulesGitHttpUsername").value.trim()
       };
       const httpPassword = document.getElementById("rulesGitHttpPassword").value;
       const sshPrivateKey = document.getElementById("rulesGitSshPrivateKey").value.trim();
@@ -1531,6 +1677,18 @@
           : "The router has a client profile, but the path is not active yet. Check the switch position, runtime state and VPS health.";
       }
 
+      const smokeOutput = document.getElementById("smokeOutput");
+      if (smokeOutput && data.last_smoke_status) {
+        smokeOutput.textContent = [
+          `Last smoke: ${data.last_smoke_status}${data.last_smoke_at ? ` at ${formatUnixTime(data.last_smoke_at)}` : ""}`,
+          `HTTPS probe: ${data.last_smoke_https_ok ? "ok" : "failed"}`,
+          `Egress probe: ${data.last_smoke_egress_ok ? "ok" : "failed"}`,
+          `OpenAI probe: ${data.last_smoke_openai_ok ? "ok" : "failed"}`,
+          "",
+          data.last_smoke_message || "(no summary saved yet)"
+        ].join("\n");
+      }
+
       document.getElementById("setupNotice").style.display = ready ? "none" : "block";
     }
 
@@ -1602,6 +1760,7 @@
         ["Last read", `${remote.status || profile.last_inspect_status || "never"}${profile.last_inspect_at ? ` at ${formatUnixTime(profile.last_inspect_at)}` : ""}`],
         ["Router client", state.runtime?.xray_running ? "running" : "stopped"],
         ["Transparent path", state.runtime?.path_active ? "active" : "inactive"],
+        ["Last smoke", state.runtime?.last_smoke_status ? `${state.runtime.last_smoke_status}${state.runtime.last_smoke_at ? ` at ${formatUnixTime(state.runtime.last_smoke_at)}` : ""}` : "never"],
         ["SSH OK", remote.ssh_ok || "0"],
         ["Public IP", remote.public_ip || "(unknown)"],
         ["Host / FQDN", [remote.hostname, remote.fqdn].filter(Boolean).join(" | ") || "(unknown)"],
@@ -1708,13 +1867,21 @@
       const externalEnabled = !!data.external_source_enabled;
       const externalDue = !!data.external_source_due;
       const mode = effectiveRulesMode(data);
-      const modePending = !!state.pendingRulesMode;
+      const uiJobState = data.ui_job_state || "";
+      const uiJobKind = data.ui_job_kind || "";
+      const uiJobMessage = data.ui_job_message || "";
+      const uiJobStartedAt = data.ui_job_started_at ? ` · ${formatUnixTime(data.ui_job_started_at)}` : "";
+      const uiJobFinishedAt = data.ui_job_finished_at ? ` · ${formatUnixTime(data.ui_job_finished_at)}` : "";
+      const uiJobRunning = uiJobState === "running";
+      const modePending = !!state.pendingRulesMode || (uiJobRunning && uiJobKind === "set_mode");
       const intervalSeconds = Number(data.sync_interval || 0) || 30;
       const externalIntervalSeconds = Number(data.external_source_interval || 0) || 3600;
       const lastSyncStatus = data.last_sync_status || "never";
       const lastSyncAt = data.last_sync_at ? ` · ${formatUnixTime(data.last_sync_at)}` : "";
-      const lastSyncEpoch = Number(data.last_sync_at || 0) || 0;
-      const syncFresh = lastSyncEpoch > 0 && ((Math.floor(Date.now() / 1000) - lastSyncEpoch) <= intervalSeconds * 3);
+      const lastRemoteProbeStatus = data.last_remote_probe_status || "never";
+      const lastRemoteProbeAt = data.last_remote_probe_at ? ` · ${formatUnixTime(data.last_remote_probe_at)}` : "";
+      const gitHealth = deriveRulesGitHealth(data);
+      const gitHealthDetail = gitHealth.detail || "(no detail)";
       const lastExternalStatus = data.last_external_status || "never";
       const lastExternalAt = data.last_external_run_at ? ` · ${formatUnixTime(data.last_external_run_at)}` : "";
       const lastCutoverStatus = data.last_cutover_status || "never";
@@ -1724,7 +1891,7 @@
       const phaseAt = data.sync_phase_at ? ` · ${formatUnixTime(data.sync_phase_at)}` : "";
       const syncActor = data.sync_actor || data.last_sync_actor || "unknown";
       const trace = (data.sync_trace || "").split(" || ").filter(Boolean);
-      const counts = `${data.source_count || 0} manual / ${data.managed_source_count || 0} managed / ${data.effective_source_count || 0} effective / ${data.domain_count || 0} domains / ${data.literal_count || 0} literal / ${data.resolved_count || 0} resolved-snapshot / ${data.xray_ipset_count || 0} live-set`;
+      const counts = `${data.source_count || 0} manual / ${data.managed_source_count || 0} managed-stored / ${data.managed_applied_source_count || 0} managed-applied / ${data.effective_source_count || 0} effective / ${data.domain_count || 0} domains / ${data.literal_count || 0} literal / ${data.resolved_count || 0} resolved-snapshot / ${data.xray_ipset_count || 0} live-set`;
       const phaseLabels = {
         checking_remote: "Checking Git and local state",
         drift_detected: "Changes found, reset is about to start",
@@ -1737,9 +1904,13 @@
         ? "Changes are applied in config, but old connections may still be alive until reset finishes."
         : "Current rules are active on the router.";
       const statusRows = [
-        ["Sync backend", gitConfigured ? "Git repository" : (gitSyncEnabled ? "Git requested, configuration check failed or is incomplete" : "Local-only fallback")],
-        ["Background checks", gitConfigured ? `Every ${intervalSeconds}s · ${syncFresh ? "running normally" : "status is stale"}` : "Idle in local-only mode"],
-        ["Managed source refresh", enabledExternalSources.length ? `Every ${externalIntervalSeconds}s · ${dueExternalSources.length ? "due now" : "scheduled"}${lastExternalAt}` : "All managed files disabled"],
+        ["UI operation", uiJobState ? `${uiJobKind || "operation"}: ${uiJobState}${uiJobRunning ? uiJobStartedAt : uiJobFinishedAt}` : "idle"],
+        ["UI operation detail", uiJobMessage || "(no active UI-triggered router operation)"],
+        ["Git sync state", gitHealth.label],
+        ["Git sync detail", gitHealthDetail],
+        ["Background probe", gitSyncEnabled ? (gitConfigured ? `Every ${intervalSeconds}s · ${lastRemoteProbeStatus}${lastRemoteProbeAt}` : "Enabled, but still not ready for remote probes") : "Idle in local-only mode"],
+        ["Managed source refresh", externalEnabled ? `Every ${externalIntervalSeconds}s · ${externalDue ? "due now" : "scheduled"}${lastExternalAt}` : "Background refresh disabled"],
+        ["Remote rules file", data.remote_rules_ref || "(unknown)"],
         ["External status", externalEnabled ? `${lastExternalStatus}${lastExternalAt} · actor=${data.last_external_actor || "unknown"}` : "Disabled"],
         ["Current phase", `${currentPhase}${phaseAt}`],
         ["Phase detail", data.sync_phase_message || "(no detail)"],
@@ -1754,11 +1925,16 @@
         `Applied signature: ${shortSig(data.last_apply_signature)}`,
         `Cutover signature: ${shortSig(data.last_cutover_signature)}`,
         `Routing mode: ${mode}${modePending ? " (apply in progress)" : ""}`,
+        `Git sync state: ${gitHealth.label}`,
+        `Git sync detail: ${gitHealthDetail}`,
         `Counts: ${counts}`,
+        data.last_remote_probe_message ? `Remote probe: ${data.last_remote_probe_message}` : "",
         data.last_sync_message ? `Sync message: ${data.last_sync_message}` : "",
         data.last_external_message ? `External message: ${data.last_external_message}` : "",
         externalEnabled ? `External generated/additions: ${data.last_external_generated_count || 0}/${data.last_external_added_count || 0}` : "",
         data.last_cutover_message ? `Cutover message: ${data.last_cutover_message}` : "",
+        data.ui_job_suggestion ? `Suggestion: ${data.ui_job_suggestion}` : "",
+        ...(data.ui_job_console_output ? ["", "Console output:", ...String(data.ui_job_console_output).split("\n")] : []),
         "",
         trace.length ? "Recent activity:" : "Recent activity: (none yet)",
         ...trace.map((item) => `- ${item}`)
@@ -1768,13 +1944,16 @@
         `Git configured: ${gitConfigured ? "yes" : "no"}`,
         `Repo path: ${data.repo_path || "(unknown)"}`,
         `Fetch URL: ${data.repo_fetch_url || "(local-only)"}`,
+        `Remote rules ref: ${data.remote_rules_ref || "(unknown)"}`,
+        `Remote browser URL: ${data.repo_browser_rules_url || "(not available)"}`,
         `Push URL: ${data.repo_push_url || "(reuse fetch URL)"}`,
         `Rules file: ${data.rules_relpath || "(unknown)"}`,
         `Repo head: ${data.repo_head || "(none)"}`,
         `Sync interval: ${intervalSeconds}s`,
         `Repo dirty: ${data.repo_dirty ? "yes" : "no"}`,
         `Auth mode: ${data.git_auth_mode || "none"}`,
-        `Read-only sync: ${gitReadonly ? "yes" : "no"}`,
+        `Access mode: ${gitReadonly ? "read-only" : "read-write"}`,
+        `Push path: ${gitReadonly ? "blocked by read-only auth" : "available through the Push button"}`,
         `Managed source files enabled: ${enabledExternalSources.length}/${externalSources.length}`,
         `External interval: ${externalIntervalSeconds}s`,
         `External due now: ${externalDue ? "yes" : "no"}`,
@@ -1782,16 +1961,13 @@
         `HTTPS username: ${data.git_http_username || "(not set)"}`,
         `HTTPS secret stored: ${data.git_http_password_set ? "yes" : "no"}`,
         `SSH key present: ${data.git_ssh_key_present ? "yes" : "no"}`,
-        `Push enabled: ${data.enable_push ? "yes" : "no"}`,
         `Repo ready: ${repoReady ? "yes" : "no"}`
       ].filter(Boolean);
       const chips = [
-        `<span class="chip ${gitConfigured ? (repoReady ? "ok" : "warn") : (gitSyncEnabled ? "warn" : "ok")}">Sync: ${escapeHtml(gitConfigured ? (repoReady ? "git-ready" : "git-pending") : (gitSyncEnabled ? "git-check-failed" : "local-only"))}</span>`,
+        `<span class="chip ${uiJobRunning ? "warn" : uiJobState === "error" ? "bad" : uiJobState === "success" ? "ok" : ""}">UI op: ${escapeHtml(uiJobState ? `${uiJobKind || "operation"} ${uiJobState}` : "idle")}</span>`,
+        `<span class="chip ${gitHealth.chipClass}">Git sync: ${escapeHtml(gitHealth.label)}</span>`,
         `<span class="chip ${modePending ? "warn" : mode === "selective" ? "ok" : ""}">Mode: ${escapeHtml(mode)}${modePending ? " (applying)" : ""}</span>`,
-        `<span class="chip ${gitReadonly ? "warn" : "ok"}">Repo access: ${escapeHtml(gitReadonly ? "read-only" : "read-write")}</span>`,
         `<span class="chip">Rules: ${escapeHtml(counts)}</span>`,
-        `<span class="chip ${gitConfigured ? (syncFresh ? "ok" : "warn") : "ok"}">Loop: ${escapeHtml(gitConfigured ? (syncFresh ? "fresh" : "stale") : "idle")}</span>`,
-        `<span class="chip ${lastSyncStatus === "ok" || lastSyncStatus === "local-only" ? "ok" : "bad"}">Sync status: ${escapeHtml(lastSyncStatus)}</span>`,
         `<span class="chip ${!externalEnabled ? "" : lastExternalStatus === "updated" ? "ok" : lastExternalStatus === "error" ? "bad" : "warn"}">External: ${escapeHtml(!externalEnabled ? "off" : lastExternalStatus)}</span>`,
         `<span class="chip ${cutoverRequired ? "warn" : "ok"}">Runtime: ${escapeHtml(cutoverRequired ? "reset pending" : "current")}</span>`,
         `<span class="chip ${phase === "error" ? "bad" : phase === "verified" ? "ok" : "warn"}">Phase: ${escapeHtml(phase)}</span>`,
@@ -1823,7 +1999,6 @@
         document.getElementById("rulesExternalInterval").value = data.external_source_interval || "3600";
         document.getElementById("rulesGitAuthMode").value = data.git_auth_mode || (gitSyncEnabled ? "auto" : "none");
         document.getElementById("rulesGitHttpUsername").value = data.git_http_username || "";
-        document.getElementById("rulesEnablePush").value = data.enable_push ? "1" : "0";
         document.getElementById("rulesGitHttpPassword").value = "";
         document.getElementById("rulesGitSshPrivateKey").value = "";
         renderExternalSources(externalSources, externalSelection);
@@ -1834,20 +2009,50 @@
       const gitSyncStateText = document.getElementById("rulesGitSyncStateText");
       if (gitSyncStateText) {
         gitSyncStateText.textContent = gitSyncEnabled
-          ? (gitConfigured ? "Git sync is enabled." : "Git sync is enabled, but the remote check has not passed.")
+          ? `Git sync: ${gitHealth.label}. ${gitHealthDetail}`
           : "Git sync is disabled.";
-        gitSyncStateText.className = `toggle-state ${gitConfigured ? "ok" : gitSyncEnabled ? "warn" : ""}`;
+        gitSyncStateText.className = `toggle-state ${gitSyncEnabled ? gitHealth.chipClass : ""}`;
       }
       const externalPreviewOutput = document.getElementById("rulesExternalPreviewOutput");
       if (externalPreviewOutput) {
-        externalPreviewOutput.textContent = [
-          `Last status: ${lastExternalStatus}${lastExternalAt}`,
-          `Enabled managed files: ${enabledExternalSources.length}/${externalSources.length}`,
-          `Generated targets: ${data.last_external_generated_count || 0}`,
-          `Added targets: ${data.last_external_added_count || 0}`,
-          "",
-          data.last_external_message || "No external source output yet."
-        ].join("\n");
+        if (uiJobKind === "sync_external_source" && uiJobRunning) {
+          externalPreviewOutput.textContent = [
+            "Managed source refresh is running on the router.",
+            `Started: ${formatUnixTime(data.ui_job_started_at)}`,
+            `Detail: ${uiJobMessage || data.sync_phase_message || "Waiting for the router to report progress..."}`,
+            "",
+            `Routing-enabled managed files: ${enabledExternalSources.length}/${externalSources.length}`,
+            `Previous result: ${lastExternalStatus}${lastExternalAt}`,
+            data.last_external_message || "No previous external source output yet."
+          ].join("\n");
+        } else if (uiJobKind === "sync_external_source" && uiJobState === "error") {
+          externalPreviewOutput.textContent = [
+            "Last managed source refresh failed.",
+            `Finished: ${formatUnixTime(data.ui_job_finished_at)}`,
+            `Error: ${uiJobMessage || data.last_external_message || "Unknown router-side failure."}`,
+            "",
+            `Routing-enabled managed files: ${enabledExternalSources.length}/${externalSources.length}`,
+            `Stored targets now: ${data.managed_source_count || 0}`
+          ].join("\n");
+        } else if (lastExternalStatus === "running") {
+          externalPreviewOutput.textContent = [
+            "Managed source refresh is running in the background on the router.",
+            `Started: ${lastExternalAt ? lastExternalAt.replace(/^ · /, "") : "unknown"}`,
+            `Detail: ${data.last_external_message || "Waiting for the router to finish the scheduled snapshot refresh..."}`,
+            "",
+            `Routing-enabled managed files: ${enabledExternalSources.length}/${externalSources.length}`,
+            `Stored targets now: ${data.managed_source_count || 0}`
+          ].join("\n");
+        } else {
+          externalPreviewOutput.textContent = [
+            `Last status: ${lastExternalStatus}${lastExternalAt}`,
+            `Routing-enabled managed files: ${enabledExternalSources.length}/${externalSources.length}`,
+            `Generated targets: ${data.last_external_generated_count || 0}`,
+            `Added targets: ${data.last_external_added_count || 0}`,
+            "",
+            data.last_external_message || "No external source output yet."
+          ].join("\n");
+        }
       }
       if (data.git_readonly && state.rulesDirty) {
         clearRulesDirty();
@@ -1872,23 +2077,44 @@
       document.getElementById("rulesRepoDetails").textContent = repoLines.join("\n");
       updateRulesConfigUi();
       updateRulesActionState();
+      ensureRulesJobPolling(data);
     }
 
     function updateRulesActionState() {
-      const button = document.getElementById("rulesSyncBtn");
+      const applyButton = document.getElementById("rulesApplyBtn");
+      const pullButton = document.getElementById("rulesPullBtn");
+      const pushButton = document.getElementById("rulesPushBtn");
       const hint = document.getElementById("rulesEditorHint");
       const loadButton = document.getElementById("rulesLoadTextBtn");
       const runtimeSwitchOn = state.runtime?.switch_state === "on";
       const selectiveMode = effectiveRulesMode(state.rules) === "selective";
+      const gitSyncEnabled = !!state.rules?.git_sync_enabled;
       const gitConfigured = !!state.rules?.git_configured;
       const gitReadonly = rulesGitReadonlyLive();
+      const backendJobRunning = rulesJobIsRunning(state.rules);
       const editor = document.getElementById("rulesText");
-      if (button) {
-        button.textContent = gitReadonly
-          ? "Pull Read-only Git Rules"
-          : gitConfigured
-          ? (state.rulesDirty ? "Save List + Sync Git" : "Sync Git Rules")
-          : (state.rulesDirty ? "Save List + Apply Local" : "Apply Local Rules");
+      if (applyButton) {
+        applyButton.textContent = state.rulesDirty ? "Save Local + Apply" : "Apply Local Rules";
+        applyButton.disabled = state.foregroundBusy || backendJobRunning || gitReadonly;
+        applyButton.title = gitReadonly
+          ? "This router is in read-only Git mode. Pull from Git instead of editing locally."
+          : "";
+      }
+      if (pullButton) {
+        pullButton.textContent = state.rulesDirty && !gitReadonly ? "Pull + Merge Into Local" : "Pull From Git";
+        pullButton.disabled = state.foregroundBusy || backendJobRunning || !gitConfigured;
+        pullButton.title = gitConfigured
+          ? ""
+          : "Configure and validate Git sync first.";
+      }
+      if (pushButton) {
+        pushButton.textContent = state.rulesDirty ? "Save + Push To Git" : "Push To Git";
+        pushButton.disabled = state.foregroundBusy || backendJobRunning || !gitSyncEnabled || !gitConfigured || gitReadonly;
+        pushButton.title = !gitConfigured
+          ? "Configure and validate Git sync first."
+          : gitReadonly
+          ? "Push is unavailable in read-only Git mode."
+          : "";
       }
       if (editor) {
         editor.readOnly = gitReadonly || !state.rulesTextLoaded;
@@ -1903,7 +2129,7 @@
       }
       if (loadButton) {
         loadButton.textContent = state.rulesTextLoaded ? "Reload Current List" : "Load Current List";
-        loadButton.disabled = state.foregroundBusy || state.rulesBusy;
+        loadButton.disabled = state.foregroundBusy || state.rulesBusy || backendJobRunning;
       }
       if (hint) {
         const applyScope = runtimeSwitchOn && selectiveMode
@@ -1913,14 +2139,14 @@
           hint.textContent = `Live status stays lightweight after large imports, so the full shared list is not auto-loaded into the editor. Click 'Load Current List' before editing or saving text changes. ${applyScope}`;
         } else if (gitReadonly) {
           hint.textContent = `Git sync is active in read-only mode. The upstream repository is the source of truth, so editing on the router is locked. Use sync to pull the latest list from Git. ${applyScope}`;
-        } else if (!gitConfigured) {
+        } else if (!gitSyncEnabled || !gitConfigured) {
           hint.textContent = state.rulesDirty
             ? `You have unsaved local edits. Saving applies the local text list directly on this router without any Git sync. ${applyScope}`
             : `Git sync is disabled. The text area below is the authoritative local rules list for this router. ${applyScope}`;
         } else {
           hint.textContent = state.rulesDirty
-            ? `You have unsaved local edits. If Git did not move since this editor state was loaded, the edited list is saved exactly as-is. If the remote moved, conflict handling keeps Git as the base and appends only truly unique local lines. ${applyScope}`
-            : `No local edits pending. Sync checks Git, applies real ruleset changes, and if drift is found it performs the reset/cutover automatically. If nothing changed, it only refreshes sync status. ${applyScope}`;
+            ? `You have unsaved local edits. Apply saves them only on this router. Pull merges remote changes into the local file while preserving manual notes and keeping both unique versions of changed lines. Push saves the local file, fetches remote changes, preserves both unique versions on conflict, and then pushes to Git. ${applyScope}`
+            : `Pull fetches Git and merges it into the local operator file while keeping manual notes. Push commits the current local operator file after preserving both unique sides of a conflict. Comment-only edits no longer trigger a full runtime reset. ${applyScope}`;
         }
       }
     }
@@ -1933,7 +2159,6 @@
       const syncFieldsWrap = document.getElementById("rulesGitConfigFields");
       const httpsWrap = document.getElementById("rulesGitHttpsFields");
       const sshWrap = document.getElementById("rulesGitSshKeyWrap");
-      const pushSelect = document.getElementById("rulesEnablePush");
       const saveButton = document.getElementById("rulesSaveConfigBtn");
       const gitConfigured = !!state.rules?.git_configured;
       const sshHint = document.getElementById("rulesGitSshHint");
@@ -1945,9 +2170,10 @@
       const externalIntervalInput = document.getElementById("rulesExternalInterval");
       const externalRunButton = document.getElementById("rulesExternalRunBtn");
       const externalHint = document.getElementById("rulesExternalHint");
+      const backendJobRunning = rulesJobIsRunning(state.rules);
       const readonlyAuth = authMode === "readonly" || authMode === "none";
       const projectedReadonly = rulesGitReadonlyProjected();
-      const externalBlocked = syncEnabled && projectedReadonly;
+      const externalJobRunning = backendJobRunning && state.rules?.ui_job_kind === "sync_external_source";
 
       if (syncFieldsWrap) {
         syncFieldsWrap.style.display = syncEnabled ? "" : "none";
@@ -1957,12 +2183,6 @@
       }
       if (sshWrap) {
         sshWrap.style.display = syncEnabled && authMode === "ssh" ? "" : "none";
-      }
-      if (pushSelect) {
-        if (!repoUrl || projectedReadonly) {
-          pushSelect.value = "0";
-        }
-        pushSelect.disabled = !syncEnabled || !repoUrl || projectedReadonly || state.foregroundBusy;
       }
       if (saveButton) {
         saveButton.textContent = !syncEnabled
@@ -1981,8 +2201,8 @@
       if (syncHint) {
         syncHint.textContent = syncEnabled
           ? (projectedReadonly
-            ? "When enabled in read-only mode, the router tries to pull lists/shared-targets.txt anonymously from the configured repository. Local editing and push-back stay locked."
-            : "When enabled, the router checks that lists/shared-targets.txt exists in the selected repository before saving the sync settings.")
+            ? "When enabled in read-only mode, the router tries to pull the configured remote rules file anonymously from the configured repository or GitHub file URL. Local editing and Push stay locked."
+            : "When enabled, the router checks that the configured remote rules file exists before saving the sync settings.")
           : "With Git sync disabled, the router uses only the local text list below and never pulls from Git.";
       }
       if (syncStateText && state.rulesConfigDirty) {
@@ -2005,13 +2225,17 @@
         sshKeyInput.disabled = !syncEnabled || authMode !== "ssh" || state.foregroundBusy;
       }
       if (externalIntervalInput) {
-        externalIntervalInput.disabled = state.foregroundBusy || enabledSourceIds.length === 0;
+        externalIntervalInput.disabled = state.foregroundBusy || backendJobRunning || enabledSourceIds.length === 0;
       }
       if (externalRunButton) {
-        externalRunButton.disabled = enabledSourceIds.length === 0 || externalBlocked || state.foregroundBusy;
+        externalRunButton.textContent = externalJobRunning ? "Refresh Running..." : "Refresh Managed Snapshots Now";
+        externalRunButton.disabled = enabledSourceIds.length === 0 || state.foregroundBusy || backendJobRunning;
+        externalRunButton.title = externalJobRunning
+          ? (state.rules?.ui_job_message || "The router is still refreshing managed source files.")
+          : "";
       }
       document.querySelectorAll(".rules-external-enable-input").forEach((input) => {
-        input.disabled = state.foregroundBusy;
+        input.disabled = state.foregroundBusy || backendJobRunning;
       });
       document.querySelectorAll(".rules-external-preview-btn").forEach((button) => {
         button.disabled = state.foregroundBusy || state.rulesBusy;
@@ -2021,16 +2245,51 @@
         button.disabled = state.foregroundBusy || state.rulesBusy || !source?.file_present;
       });
       if (externalHint) {
-        if (externalBlocked) {
-          externalHint.textContent = "Managed source preview and viewing still work in read-only Git mode, but refreshing those files is blocked because the router would need to write new lines locally.";
+        if (externalJobRunning) {
+          externalHint.textContent = `Managed source refresh is running on the router. Preview and stored-file viewing stay available while the refresh job works in the background. ${state.rules?.ui_job_message || ""}`.trim();
+        } else if (projectedReadonly) {
+          externalHint.textContent = "Managed source preview and viewing stay available in read-only Git mode. Snapshot refresh is still allowed because it only updates the router-local stored files, not the upstream Git rules file.";
         } else if (!enabledSourceIds.length) {
-          externalHint.textContent = "Managed source files stay on disk, but only the checked files join the effective ruleset that selective mode applies.";
+          externalHint.textContent = "Background refresh can keep stored managed snapshots current, but none of them currently join the effective routing ruleset because every Apply toggle is off.";
         } else {
           externalHint.textContent = gitConfigured
-            ? "Enabled managed source files refresh on the router, append only new targets to their own files, and then flow through the same Git/local sync pipeline as the editable shared list."
-            : "Enabled managed source files refresh locally on the router, append only new targets to their own files, and then join the effective ruleset without inflating the editable shared list.";
+            ? "Managed source snapshots refresh in the background on the router no more often than the configured interval. The Apply toggles only decide which stored snapshots join the effective routing ruleset."
+            : "Managed source snapshots refresh locally in the background on the router no more often than the configured interval. The Apply toggles only decide which stored snapshots join the effective routing ruleset.";
         }
       }
+    }
+
+    async function waitForRulesJob(label, timeoutMs, expectedJobId = "") {
+      const startedAt = Date.now();
+      const deadline = startedAt + timeoutMs;
+      let nextDelay = RULES_JOB_STATUS_DELAY_MS;
+
+      while (Date.now() < deadline) {
+        await sleep(nextDelay);
+        nextDelay = RULES_JOB_POLL_MS;
+        const data = await callApi(
+          rulesApi,
+          "status",
+          { include_rules_text: "0" },
+          { timeoutMs: RULES_STATUS_TIMEOUT_MS }
+        );
+        state.rules = data;
+        renderRules(data);
+
+        if (expectedJobId && data.ui_job_id && data.ui_job_id !== expectedJobId) {
+          return data;
+        }
+        if (data.ui_job_state === "running") {
+          flashLoading(`${label}... ${data.ui_job_message || data.sync_phase_message || "Still working on the router."}`);
+          continue;
+        }
+        if (data.ui_job_state === "error") {
+          throw buildRulesJobError(label, data);
+        }
+        return data;
+      }
+
+      throw new Error(`${label} is still not finished. Last router status: ${state.rules?.ui_job_message || state.rules?.sync_phase_message || "no final state yet"}`);
     }
 
     async function setRulesMode(mode, input) {
@@ -2041,14 +2300,19 @@
       beginForegroundTask(`Applying ${mode} routing mode with hard cutover...`, RULES_MODE_TIMEOUT_MS);
       setBusy(input, true);
       try {
-        const data = await callApi(rulesApi, "set_mode", { mode }, { timeoutMs: RULES_MODE_TIMEOUT_MS });
+        const data = await callApi(rulesApi, "set_mode", { mode }, { timeoutMs: RULES_STATUS_TIMEOUT_MS });
         if (data.ok === false) {
           throw new Error(data.error || "backend error");
         }
-        state.pendingRulesMode = "";
-        state.pendingRulesPreviousMode = "";
         state.rules = data;
         renderRules(data);
+        const finalData = data.ui_job_state === "running"
+          ? await waitForRulesJob(`Applying ${mode} routing mode`, RULES_MODE_TIMEOUT_MS, data.ui_job_id || "")
+          : data;
+        state.pendingRulesMode = "";
+        state.pendingRulesPreviousMode = "";
+        state.rules = finalData;
+        renderRules(finalData);
         await refreshAll(false, false, true);
         flash(`Routing mode applied locally with hard cutover: ${mode}.`, "good");
       } catch (err) {
@@ -2210,41 +2474,67 @@
       }
     }
 
-    async function syncRules(button) {
-      const wantsGitSync = !!document.getElementById("rulesGitSyncEnabled").checked;
-      const readOnlyGit = rulesGitReadonlyLive();
-      beginForegroundTask(
-        readOnlyGit
-          ? "Pulling read-only Git rules and applying them..."
-          : wantsGitSync
-          ? "Syncing shared rules with Git and applying them..."
-          : "Applying local rules on this router...",
-        RULES_SYNC_TIMEOUT_MS
-      );
+    function syncModeVerb(mode) {
+      switch (mode) {
+        case "pull":
+          return "Pulling Git rules";
+        case "push":
+          return "Pushing Git rules";
+        case "apply":
+          return "Applying local rules";
+        default:
+          return "Syncing rules";
+      }
+    }
+
+    async function runRulesSync(button, mode) {
+      const verb = syncModeVerb(mode);
+      beginForegroundTask(`${verb} on this router...`, RULES_SYNC_TIMEOUT_MS);
       setBusy(button, true);
       try {
         const payload = {
-          base_repo_head: state.rulesEditorBaseHead || state.rules?.repo_head || ""
+          base_repo_head: state.rulesEditorBaseHead || state.rules?.repo_head || "",
+          sync_mode: mode
         };
-        if (!readOnlyGit && state.rulesTextLoaded) {
+        if (state.rulesDirty && state.rulesTextLoaded && !rulesGitReadonlyLive()) {
           payload.rules_text = document.getElementById("rulesText").value;
         }
-        const data = await callApi(rulesApi, "sync_rules", payload, { timeoutMs: RULES_SYNC_TIMEOUT_MS });
+        const data = await callApi(rulesApi, "sync_rules", payload, { timeoutMs: RULES_STATUS_TIMEOUT_MS });
         if (data.ok === false) {
           throw new Error(data.error || "backend error");
         }
         state.rules = data;
-        clearRulesDirty();
         renderRules(data);
+        const finalData = data.ui_job_state === "running"
+          ? await waitForRulesJob(verb, RULES_SYNC_TIMEOUT_MS, data.ui_job_id || "")
+          : data;
+        state.rules = finalData;
+        clearRulesDirty();
+        renderRules(finalData);
+        if (state.rulesTextLoaded) {
+          await refreshRules(true, true);
+        }
         await refreshAll(false, false, true);
-        flash(data.sync_phase_message || (data.git_configured ? "Rules sync finished." : "Local rules applied."), "good");
+        flash((state.rules?.sync_phase_message || state.rules?.last_sync_message || finalData.sync_phase_message || finalData.last_sync_message || `${verb} finished.`), "good");
       } catch (err) {
-        flash(`Rules sync failed: ${err.message}`, "bad");
-        document.getElementById("rulesTraceOutput").textContent = `Rules sync failed: ${err.message}`;
+        flash(`${verb} failed: ${err.message}`, "bad");
+        document.getElementById("rulesTraceOutput").textContent = formatRulesJobFailureDetails(err.routerJob || state.rules, `${verb} failed: ${err.message}`);
       } finally {
         setBusy(button, false);
         endForegroundTask();
       }
+    }
+
+    async function applyRules(button) {
+      return runRulesSync(button, "apply");
+    }
+
+    async function pullRules(button) {
+      return runRulesSync(button, "pull");
+    }
+
+    async function pushRules(button) {
+      return runRulesSync(button, "push");
     }
 
     async function previewExternalSource(button, sourceId) {
@@ -2262,15 +2552,17 @@
         }
         document.getElementById("rulesExternalPreviewOutput").textContent = [
           `${source.label || source.id}`,
-          `Generated targets: ${data.generated_count || 0}`,
-          `Preview opened in popup from ${source.url || "managed source"}`
+          `Generated targets: ${data.generated_total || data.generated_count || 0}`,
+          `Stored hash: ${shortSig(source.file_signature || "(missing)")}`,
+          data.generated_truncated ? `Showing first ${Math.min(Number(data.generated_total || 0), 400)} targets in the popup.` : "Showing the full parser output in the popup.",
+          `Preview opened from the router snapshot for ${source.url || "managed source"}`
         ].join("\n");
         showRulesTextModal(
           `${source.label || source.id} Preview`,
-          `Live parser output from ${source.url || "managed source"} · ${data.generated_count || 0} targets`,
+          `Current normalized snapshot for ${source.url || "managed source"} · ${data.generated_total || data.generated_count || 0} total targets · hash ${shortSig(source.file_signature || "(missing)")}${data.generated_truncated ? " · preview truncated" : ""}`,
           data.generated_text || "(empty)"
         );
-        flash(`External source preview generated ${data.generated_count || 0} targets for ${source.label || source.id}.`, "good");
+        flash(`External source preview generated ${data.generated_total || data.generated_count || 0} targets for ${source.label || source.id}.`, "good");
       } catch (err) {
         document.getElementById("rulesExternalPreviewOutput").textContent = `${source.label || source.id} preview failed: ${err.message}`;
         flash(`External source preview failed: ${err.message}`, "bad");
@@ -2295,7 +2587,7 @@
         }
         showRulesTextModal(
           `${source.label || source.id} Stored File`,
-          `${source.file_relpath || "managed file"} · ${data.file_count || 0} lines stored on the router`,
+          `${source.file_relpath || "managed file"} · ${data.file_total || data.file_count || 0} total targets stored on the router · hash ${shortSig(source.file_signature || "(missing)")}${data.file_truncated ? " · preview truncated" : ""}`,
           data.file_text || "(empty)"
         );
       } catch (err) {
@@ -2312,19 +2604,24 @@
         document.getElementById("rulesExternalPreviewOutput").textContent = "Save Git and managed-source settings before refreshing external files.";
         return;
       }
-      beginForegroundTask("Refreshing enabled managed source files and applying new targets if needed...", RULES_EXTERNAL_RUN_TIMEOUT_MS);
+      beginForegroundTask("Refreshing managed source snapshots in the background and applying changed routing targets if needed...", RULES_EXTERNAL_RUN_TIMEOUT_MS);
       setBusy(button, true);
       try {
-        const data = await callApi(rulesApi, "sync_external_source", null, { timeoutMs: RULES_EXTERNAL_RUN_TIMEOUT_MS });
+        const data = await callApi(rulesApi, "sync_external_source", null, { timeoutMs: RULES_STATUS_TIMEOUT_MS });
         if (data.ok === false) {
           throw new Error(data.error || "backend error");
         }
         state.rules = data;
         renderRules(data);
+        const finalData = data.ui_job_state === "running"
+          ? await waitForRulesJob("Refreshing managed source files", RULES_EXTERNAL_RUN_TIMEOUT_MS, data.ui_job_id || "")
+          : data;
+        state.rules = finalData;
+        renderRules(finalData);
         await refreshAll(false, false, true);
-        flash(data.last_external_message || data.sync_phase_message || "External source import finished.", "good");
+        flash(finalData.last_external_message || finalData.sync_phase_message || "External source import finished.", "good");
       } catch (err) {
-        document.getElementById("rulesExternalPreviewOutput").textContent = `External source import failed: ${err.message}`;
+        document.getElementById("rulesExternalPreviewOutput").textContent = formatRulesJobFailureDetails(err.routerJob || state.rules, `External source import failed: ${err.message}`);
         flash(`External source import failed: ${err.message}`, "bad");
       } finally {
         setBusy(button, false);
@@ -2333,11 +2630,19 @@
     }
 
     async function runSmoke() {
-      beginForegroundTask("Running live smoke test...", 15000);
+      beginForegroundTask("Running live smoke test...", 45000);
       document.getElementById("smokeOutput").textContent = "Running smoke test...";
       try {
-        const data = await callApi(runtimeApi, "smoke", null, { timeoutMs: 20000 });
+        const data = await callApi(runtimeApi, "smoke", null, { timeoutMs: 45000 });
+        const smokeStatus = data.status || (data.ok ? "ok" : "error");
         const out = [
+          `Smoke status: ${smokeStatus}`,
+          data.message || "",
+          "",
+          `HTTPS probe: ${data.https_ok ? "ok" : "failed"}`,
+          `Egress probe: ${data.egress_ok ? "ok" : "failed"}`,
+          `OpenAI probe: ${data.openai_ok ? "ok" : "failed"}`,
+          "",
           "=== https test (example.com) ===",
           data.https_test || "(empty)",
           "",
@@ -2346,9 +2651,19 @@
           "",
           "=== openai api ===",
           data.openai_api || "(empty)"
-        ].join("\n");
+        ].filter(Boolean).join("\n");
         document.getElementById("smokeOutput").textContent = out;
-        flash("Smoke test finished.", "good");
+        state.runtime = {
+          ...(state.runtime || {}),
+          last_smoke_at: String(Math.floor(Date.now() / 1000)),
+          last_smoke_status: smokeStatus,
+          last_smoke_message: data.message || "",
+          last_smoke_https_ok: !!data.https_ok,
+          last_smoke_egress_ok: !!data.egress_ok,
+          last_smoke_openai_ok: !!data.openai_ok
+        };
+        renderRuntime(state.runtime);
+        flash(data.ok ? "Smoke test finished." : `Smoke test failed: ${data.message || "proxy path check failed."}`, data.ok ? "good" : "bad");
       } catch (err) {
         document.getElementById("smokeOutput").textContent = `Smoke test failed: ${err.message}`;
         flash(`Smoke test failed: ${err.message}`, "bad");
@@ -2466,7 +2781,9 @@
     document.getElementById("logsBtn").addEventListener("click", loadLogs);
     document.getElementById("smokeBtn").addEventListener("click", runSmoke);
     document.getElementById("rulesSaveConfigBtn").addEventListener("click", (event) => saveRulesConfig(event.currentTarget));
-    document.getElementById("rulesSyncBtn").addEventListener("click", (event) => syncRules(event.currentTarget));
+    document.getElementById("rulesApplyBtn").addEventListener("click", (event) => applyRules(event.currentTarget));
+    document.getElementById("rulesPullBtn").addEventListener("click", (event) => pullRules(event.currentTarget));
+    document.getElementById("rulesPushBtn").addEventListener("click", (event) => pushRules(event.currentTarget));
     document.getElementById("rulesLoadTextBtn").addEventListener("click", (event) => loadRulesText(event.currentTarget));
     document.getElementById("rulesExternalRunBtn").addEventListener("click", (event) => runExternalSource(event.currentTarget));
     document.getElementById("rulesExternalSources").addEventListener("click", (event) => {
@@ -2536,8 +2853,7 @@
     });
     [
       "rulesGitSyncEnabled",
-      "rulesGitAuthMode",
-      "rulesEnablePush"
+      "rulesGitAuthMode"
     ].forEach((id) => {
       const el = document.getElementById(id);
       if (el) {

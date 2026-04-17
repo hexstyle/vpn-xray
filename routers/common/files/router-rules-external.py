@@ -174,13 +174,20 @@ def collapse_targets(values: Sequence[str]) -> List[str]:
             normalized_domains.add(normalized)
 
     collapsed_values: Set[str] = set(normalized_domains)
+    ipv4_prefix16: Set[ipaddress.IPv4Network] = set()
     for network in ipaddress.collapse_addresses(ipv4_networks):
         if network.version != 4:
             continue
-        if network.prefixlen == 32:
-            collapsed_values.add(str(network.network_address))
-        else:
-            collapsed_values.add(str(network))
+        start = int(network.network_address)
+        end = int(network.broadcast_address)
+        current = start & 0xFFFF0000
+        last = end & 0xFFFF0000
+        while current <= last:
+            ipv4_prefix16.add(ipaddress.ip_network((current, 16)))
+            current += 1 << 16
+
+    for network in sorted(ipv4_prefix16, key=lambda item: int(item.network_address)):
+        collapsed_values.add(str(network))
 
     return sort_targets(collapsed_values)
 
@@ -376,6 +383,11 @@ def extract_targets_from_url(url: str, fetch_text: FetchText = default_fetch_tex
 
 
 def main() -> int:
+    try:
+        sys.stdout.reconfigure(newline="\n")
+    except (AttributeError, ValueError):
+        pass
+
     args = parse_args()
     targets: Set[str] = set()
     source_urls = expand_url_inputs(args.url)

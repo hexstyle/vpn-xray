@@ -32,7 +32,7 @@
             "users": [
               {
                 "id": "${XRAY_UUID}",
-                "encryption": "none"
+                "encryption": "none"${XRAY_USER_FLOW_BLOCK}
               }
             ]
           }

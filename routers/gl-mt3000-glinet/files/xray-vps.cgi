@@ -170,6 +170,17 @@ router_config_ready() {
 	[ -f "$ROUTER_READY_FILE" ] && [ -s "$ROUTER_CONFIG" ] && [ -x "$ROUTER_XRAY_BIN" ]
 }
 
+router_path_active() {
+	local xpid rpid
+
+	xpid="$(cat /var/run/codex-xray.pid 2>/dev/null || true)"
+	rpid="$(cat /var/run/redsocks.pid 2>/dev/null || true)"
+	[ -n "$xpid" ] && kill -0 "$xpid" 2>/dev/null || return 1
+	[ -n "$rpid" ] && kill -0 "$rpid" 2>/dev/null || return 1
+	iptables -t nat -S PREROUTING 2>/dev/null | grep -q 'CODEX_TRANSPROXY' || return 1
+	return 0
+}
+
 ensure_dirs() {
 	mkdir -p "$PROFILE_DIR" "$KEY_DIR" "$INSPECT_DIR" "$LOCK_ROOT"
 	touch "/etc/config/${PROFILE_PACKAGE}"
@@ -578,7 +589,7 @@ write_cache() {
 render_router_config() {
 	local path="$1"
 	local profile_id="$2"
-	local server_address server_port server_name uuid public_key short_id
+	local server_address server_port server_name uuid public_key short_id flow user_flow_line
 
 	server_address="$(profile_get "$profile_id" server_address)"
 	server_port="$(profile_get "$profile_id" server_port)"
@@ -586,6 +597,11 @@ render_router_config() {
 	uuid="$(profile_get "$profile_id" uuid)"
 	public_key="$(profile_get "$profile_id" public_key)"
 	short_id="$(profile_get "$profile_id" short_id)"
+	flow="$(profile_get "$profile_id" flow)"
+	user_flow_line=''
+	if [ -n "$flow" ]; then
+		user_flow_line="$(printf ',\n                "flow": "%s"' "$flow")"
+	fi
 
 	cat > "$path" <<EOF
 {
@@ -622,7 +638,7 @@ render_router_config() {
             "users": [
               {
                 "id": "${uuid}",
-                "encryption": "none"
+                "encryption": "none"${user_flow_line}
               }
             ]
           }
@@ -665,6 +681,7 @@ render_vps_profile_template() {
 	local output="$3"
 	local vps_profile xray_port xray_flow xray_uuid xray_server_name xray_private_key xray_short_id
 	local vps_xray_binary vps_xray_config_dir vps_xray_config_path vps_xray_log_dir vps_xray_service vps_remote_meta_path
+	local xray_client_flow_block
 
 	vps_profile="$(selected_vps_profile "$profile_id")"
 	xray_port="$(profile_get "$profile_id" server_port)"
@@ -680,10 +697,15 @@ render_vps_profile_template() {
 	vps_xray_log_dir="$(vps_profile_value "$vps_profile" VPS_XRAY_LOG_DIR)"
 	vps_xray_service="$(vps_profile_value "$vps_profile" VPS_XRAY_SERVICE)"
 	vps_remote_meta_path="$(vps_profile_value "$vps_profile" VPS_REMOTE_META_PATH)"
+	xray_client_flow_block=''
+	if [ -n "$xray_flow" ]; then
+		xray_client_flow_block="$(printf ',\n            "flow": "%s"' "$xray_flow")"
+	fi
 
 	sed \
 		-e "s|\${XRAY_PORT}|$(template_escape "$xray_port")|g" \
 		-e "s|\${XRAY_FLOW}|$(template_escape "$xray_flow")|g" \
+		-e "s|\${XRAY_CLIENT_FLOW_BLOCK}|$(template_escape "$xray_client_flow_block")|g" \
 		-e "s|\${XRAY_UUID}|$(template_escape "$xray_uuid")|g" \
 		-e "s|\${XRAY_SERVER_NAME}|$(template_escape "$xray_server_name")|g" \
 		-e "s|\${XRAY_PRIVATE_KEY}|$(template_escape "$xray_private_key")|g" \
@@ -1156,13 +1178,28 @@ EOF
 }
 
 resync_runtime_to_switch() {
-	local switch_state
+	local switch_state tries
 
 	switch_state="$(current_switch_state)"
 	[ "$switch_state" = 'on' ] || switch_state='off'
 	if [ -x /etc/gl-switch.d/xray.sh ]; then
-		/etc/gl-switch.d/xray.sh "$switch_state" >/dev/null 2>&1 || true
+		/etc/gl-switch.d/xray.sh "$switch_state" >/dev/null 2>&1 || return 1
 	fi
+	tries=0
+	while [ "$tries" -lt 8 ]; do
+		if [ "$switch_state" = 'on' ]; then
+			if router_path_active; then
+				return 0
+			fi
+		else
+			if ! router_path_active; then
+				return 0
+			fi
+		fi
+		tries=$((tries + 1))
+		sleep 1
+	done
+	return 1
 }
 
 emit_status_response() {
@@ -1598,7 +1635,7 @@ apply_profile_to_router_internal() {
 	/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
 	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
 	sleep 1
-	resync_runtime_to_switch
+	resync_runtime_to_switch || return 1
 	printf '%s' "$backup"
 }
 

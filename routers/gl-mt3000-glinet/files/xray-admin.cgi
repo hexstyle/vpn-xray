@@ -16,6 +16,7 @@ LOCAL_HTTP_PROXY='http://127.0.0.1:1083'
 LIVE_HTTP_PORT='1083'
 LIVE_SOCKS_PORT='1084'
 CONFIG_READY_FILE='/etc/xray/codex-xray.ready'
+STATUS_FILE='/tmp/xray-admin.status'
 
 REQUEST_DATA=''
 
@@ -63,6 +64,23 @@ request_value() {
 	url_decode "$raw"
 }
 
+status_file_value() {
+	sed -n "s/^$1=//p" "$STATUS_FILE" 2>/dev/null | sed -n '1p'
+}
+
+status_file_set() {
+	local key="$1"
+	local value="$2"
+	local tmp
+
+	tmp="$(mktemp)"
+	if [ -f "$STATUS_FILE" ]; then
+		grep -v "^${key}=" "$STATUS_FILE" > "$tmp" || true
+	fi
+	printf '%s=%s\n' "$key" "$value" >> "$tmp"
+	mv "$tmp" "$STATUS_FILE"
+}
+
 service_running() {
 	local pidfile="$1"
 	local pid=''
@@ -77,6 +95,13 @@ listen_present() {
 
 nat_rule_present() {
 	iptables -t nat -S PREROUTING 2>/dev/null | grep -q 'CODEX_TRANSPROXY'
+}
+
+runtime_path_active() {
+	service_running "$XRAY_PID" || return 1
+	service_running "$REDSOCKS_PID" || return 1
+	nat_rule_present || return 1
+	return 0
 }
 
 config_ready() {
@@ -160,6 +185,12 @@ build_config_file() {
 	local flow="${10}"
 	local access_log="${11}"
 	local error_log="${12}"
+	local user_flow_line
+
+	user_flow_line=''
+	if [ -n "$flow" ]; then
+		user_flow_line="$(printf ',\n                "flow": "%s"' "$flow")"
+	fi
 
 	cat > "$outfile" <<EOF
 {
@@ -196,7 +227,7 @@ build_config_file() {
             "users": [
               {
                 "id": "${uuid}",
-                "encryption": "none"
+                "encryption": "none"${user_flow_line}
               }
             ]
           }
@@ -274,7 +305,26 @@ probe_cleanup() {
 }
 
 sync_to_hardware_switch() {
-	/etc/gl-switch.d/xray.sh "$(current_switch_state)" >/dev/null 2>&1
+	local switch_state tries
+
+	switch_state="$(current_switch_state)"
+	[ "$switch_state" = 'on' ] || switch_state='off'
+	/etc/gl-switch.d/xray.sh "$switch_state" >/dev/null 2>&1 || return 1
+	tries=0
+	while [ "$tries" -lt 8 ]; do
+		if [ "$switch_state" = 'on' ]; then
+			if runtime_path_active; then
+				return 0
+			fi
+		else
+			if ! runtime_path_active; then
+				return 0
+			fi
+		fi
+		tries=$((tries + 1))
+		sleep 1
+	done
+	return 1
 }
 
 restart_runtime_from_saved_config() {
@@ -379,6 +429,7 @@ status_json() {
 	local switch_state switch_func xray_running redsocks_running http_listen socks_listen redsocks_listen transproxy
 	local server_address server_port server_name public_key short_id flow uuid access_log error_log
 	local path_requested path_active ready path_state
+	local last_smoke_at last_smoke_status last_smoke_message last_smoke_https_ok last_smoke_egress_ok last_smoke_openai_ok
 
 	switch_state="$(current_switch_state)"
 	switch_func="$(uci -q get switch-button.@main[0].func 2>/dev/null || true)"
@@ -422,6 +473,12 @@ status_json() {
 	uuid="$(config_value '@.outbounds[0].settings.vnext[0].users[0].id')"
 	access_log="$(config_value '@.log.access')"
 	error_log="$(config_value '@.log.error')"
+	last_smoke_at="$(status_file_value last_smoke_at)"
+	last_smoke_status="$(status_file_value last_smoke_status)"
+	last_smoke_message="$(status_file_value last_smoke_message)"
+	last_smoke_https_ok="$(status_file_value last_smoke_https_ok)"
+	last_smoke_egress_ok="$(status_file_value last_smoke_egress_ok)"
+	last_smoke_openai_ok="$(status_file_value last_smoke_openai_ok)"
 
 	printf '{'
 	printf '"switch_state":"%s",' "$(json_escape "$switch_state")"
@@ -436,6 +493,12 @@ status_json() {
 	printf '"proxy_socks_listen":'; json_bool "$socks_listen"; printf ','
 	printf '"redsocks_listen":'; json_bool "$redsocks_listen"; printf ','
 	printf '"transproxy_rule":'; json_bool "$transproxy"; printf ','
+	printf '"last_smoke_at":"%s",' "$(json_escape "$last_smoke_at")"
+	printf '"last_smoke_status":"%s",' "$(json_escape "$last_smoke_status")"
+	printf '"last_smoke_message":"%s",' "$(json_escape "$last_smoke_message")"
+	printf '"last_smoke_https_ok":'; json_bool "${last_smoke_https_ok:-0}"; printf ','
+	printf '"last_smoke_egress_ok":'; json_bool "${last_smoke_egress_ok:-0}"; printf ','
+	printf '"last_smoke_openai_ok":'; json_bool "${last_smoke_openai_ok:-0}"; printf ','
 	printf '"server_address":"%s",' "$(json_escape "$server_address")"
 	printf '"server_port":"%s",' "$(json_escape "$server_port")"
 	printf '"server_name":"%s",' "$(json_escape "$server_name")"
@@ -461,14 +524,88 @@ logs_json() {
 	printf '}'
 }
 
+smoke_output_has_final_http_status() {
+	local value="$1"
+
+	printf '%s\n' "$value" \
+		| grep -v '^HTTP/[0-9.][0-9.]* 200 Connection established$' \
+		| grep -Eq '^HTTP/[0-9.][0-9.]* [1-5][0-9][0-9]'
+}
+
+smoke_output_has_success_like_http_status() {
+	local value="$1"
+
+	printf '%s\n' "$value" \
+		| grep -v '^HTTP/[0-9.][0-9.]* 200 Connection established$' \
+		| grep -Eq '^HTTP/[0-9.][0-9.]* (200|204|301|302|307|308|401|403)'
+}
+
+smoke_output_has_ip() {
+	local value="$1"
+
+	printf '%s\n' "$value" | grep -Eq '(^|[^0-9])([0-9]{1,3}\.){3}[0-9]{1,3}($|[^0-9])'
+}
+
+record_smoke_status() {
+	local overall="$1"
+	local message="$2"
+	local https_ok="$3"
+	local egress_ok="$4"
+	local openai_ok="$5"
+	local now
+
+	now="$(date +%s)"
+	status_file_set last_smoke_at "$now"
+	status_file_set last_smoke_status "$overall"
+	status_file_set last_smoke_message "$message"
+	status_file_set last_smoke_https_ok "$https_ok"
+	status_file_set last_smoke_egress_ok "$egress_ok"
+	status_file_set last_smoke_openai_ok "$openai_ok"
+}
+
 smoke_json() {
 	local https_test_output egress_output api_output
+	local https_ok egress_ok openai_ok overall_status overall_message
 
 	https_test_output="$(curl -ksS -I -m 12 -x "$LOCAL_HTTP_PROXY" https://example.com 2>&1 | sed -n '1,20p' || true)"
 	egress_output="$(curl -ksS -m 12 -x "$LOCAL_HTTP_PROXY" https://ipinfo.io/ip 2>&1 | sed -n '1,8p' || true)"
 	api_output="$(curl -ksS -I -m 12 -x "$LOCAL_HTTP_PROXY" https://api.openai.com/v1/models 2>&1 | sed -n '1,20p' || true)"
 
+	https_ok=0
+	egress_ok=0
+	openai_ok=0
+	if ! printf '%s' "$https_test_output" | grep -q 'curl:' && smoke_output_has_success_like_http_status "$https_test_output"; then
+		https_ok=1
+	fi
+	if ! printf '%s' "$egress_output" | grep -q 'curl:' && smoke_output_has_ip "$egress_output"; then
+		egress_ok=1
+	fi
+	if ! printf '%s' "$api_output" | grep -q 'curl:' && smoke_output_has_final_http_status "$api_output"; then
+		openai_ok=1
+	fi
+
+	if [ "$https_ok" = '1' ] && [ "$egress_ok" = '1' ] && [ "$openai_ok" = '1' ]; then
+		overall_status='ok'
+		overall_message='Live proxy path is healthy.'
+	else
+		overall_status='error'
+		if [ "$https_ok" != '1' ]; then
+			overall_message='Smoke HTTPS probe failed through the local proxy path.'
+		elif [ "$egress_ok" != '1' ]; then
+			overall_message='Smoke egress IP probe failed through the local proxy path.'
+		else
+			overall_message='Smoke OpenAI API probe failed through the local proxy path.'
+		fi
+	fi
+	record_smoke_status "$overall_status" "$overall_message" "$https_ok" "$egress_ok" "$openai_ok"
+
 	printf '{'
+	printf '"ok":'; json_bool "$([ "$overall_status" = 'ok' ] && printf 1 || printf 0)"; printf ','
+	printf '"status":"%s",' "$(json_escape "$overall_status")"
+	printf '"message":"%s",' "$(json_escape "$overall_message")"
+	printf '"https_ok":'; json_bool "$https_ok"; printf ','
+	printf '"egress_ok":'; json_bool "$egress_ok"; printf ','
+	printf '"openai_ok":'; json_bool "$openai_ok"; printf ','
 	printf '"https_test":"%s",' "$(json_escape "$https_test_output")"
 	printf '"egress":"%s",' "$(json_escape "$egress_output")"
 	printf '"openai_api":"%s"' "$(json_escape "$api_output")"

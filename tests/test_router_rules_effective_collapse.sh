@@ -36,15 +36,15 @@ compose_effective_rules_internal >/dev/null
 
 expected="$TMPDIR/expected.txt"
 cat > "$expected" <<'EOF'
-10.0.0.0/23
+10.0.0.0/16
 example.com
 EOF
 
 cmp -s "$(effective_rules_file)" "$expected" || {
 	printf 'FAIL: effective rules file was not collapsed into the minimal IPv4 set\n' >&2
-	printf '--- expected ---\n' >&2
+	printf -- '--- expected ---\n' >&2
 	cat "$expected" >&2
-	printf '--- actual ---\n' >&2
+	printf -- '--- actual ---\n' >&2
 	cat "$(effective_rules_file)" >&2
 	exit 1
 }

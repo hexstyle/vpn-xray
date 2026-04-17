@@ -10,7 +10,7 @@
       "settings": {
         "clients": [
           {
-            "id": "${XRAY_UUID}"
+            "id": "${XRAY_UUID}"${XRAY_CLIENT_FLOW_BLOCK}
           }
         ],
         "decryption": "none"

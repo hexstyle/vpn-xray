@@ -91,7 +91,53 @@ if [[ "$proxy_ready" != "1" ]]; then
 fi
 
 echo "== remote service status =="
-router_ssh ". /lib/functions/gl_util.sh; echo switch-button=\$(get_switch_button_status 2>/dev/null || echo unknown); pid=\$(cat /var/run/codex-xray.pid 2>/dev/null || true); if [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null; then echo codex-xray running pid=\$pid; else echo codex-xray stopped; fi; redpid=\$(cat /var/run/redsocks.pid 2>/dev/null || true); if [ -n \"\$redpid\" ] && kill -0 \"\$redpid\" 2>/dev/null; then echo redsocks running pid=\$redpid; else echo redsocks stopped; fi; /etc/init.d/codex-xray enabled || true; /etc/init.d/codex-transproxy enabled || true; uci -q get switch-button.@main[0].func || true; sysctl net.mptcp.enabled; netstat -ltnp 2>/dev/null | grep ':$PROXY_PORT' || true; iptables -t nat -S CODEX_TRANSPROXY 2>/dev/null || true; iptables -t nat -S PREROUTING | grep CODEX_TRANSPROXY || true; iptables -S FORWARD | grep 'br-lan.*udp.*REJECT' || true"
+router_ssh "PROXY_PORT='$PROXY_PORT' sh -s" <<'EOF'
+. /lib/functions/gl_util.sh 2>/dev/null || true
+
+lan_dev="$(uci -q get network.lan.device 2>/dev/null || uci -q get network.lan.ifname 2>/dev/null || true)"
+case "$lan_dev" in
+  ''|*' '*)
+    lan_dev='br-lan'
+    ;;
+esac
+
+echo "switch-button=$(get_switch_button_status 2>/dev/null || echo unknown)"
+echo "xray-mode=$(uci -q get router_rules.global.xray_mode 2>/dev/null || echo unknown)"
+echo "lan-device=$lan_dev"
+echo "lan-ipv4=$(ip -4 addr show dev "$lan_dev" 2>/dev/null | awk '/inet / {print $2; exit}')"
+echo "default-route=$(ip -4 route show default 2>/dev/null | awk 'NR==1 {print $0}')"
+
+pid="$(cat /var/run/codex-xray.pid 2>/dev/null || true)"
+if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+  echo "codex-xray running pid=$pid"
+else
+  echo "codex-xray stopped"
+fi
+
+redpid="$(cat /var/run/redsocks.pid 2>/dev/null || true)"
+if [ -n "$redpid" ] && kill -0 "$redpid" 2>/dev/null; then
+  echo "redsocks running pid=$redpid"
+else
+  echo "redsocks stopped"
+fi
+
+/etc/init.d/codex-xray enabled || true
+/etc/init.d/codex-transproxy enabled || true
+uci -q get switch-button.@main[0].func || true
+sysctl net.mptcp.enabled
+netstat -ltnp 2>/dev/null | grep ":$PROXY_PORT" || true
+echo '-- nat chain rules --'
+iptables -t nat -S CODEX_TRANSPROXY 2>/dev/null || true
+echo '-- nat counters --'
+iptables -t nat -vnL CODEX_TRANSPROXY 2>/dev/null || true
+echo '-- local xray mss guard --'
+iptables -t mangle -S CODEX_XRAY_LOCAL 2>/dev/null || true
+iptables -t mangle -vnL CODEX_XRAY_LOCAL 2>/dev/null || true
+echo '-- prerouting counters --'
+iptables -t nat -vnL PREROUTING 2>/dev/null | grep -A2 -B2 'CODEX_TRANSPROXY' || true
+echo '-- forward counters --'
+iptables -vnL FORWARD 2>/dev/null | grep "$lan_dev" || true
+EOF
 
 echo
 echo "== https browsing through proxy =="
@@ -114,6 +160,11 @@ echo
 echo "== secondary egress ip check through proxy =="
 curl -m 25 -x "$proxy" https://ipinfo.io/ip
 echo
+
+echo "== coverage notes =="
+echo "Covered here: router control-plane reachability, router-local proxy smoke, runtime processes, and firewall/NAT counters."
+echo "Not covered automatically here: LAN-client traffic checks for VPN off/full/selective and Wi-Fi-only management reachability after unplugging Ethernet."
+echo "Run those from a device behind the router when validating routing changes."
 
 if [[ "$warning_count" -gt 0 ]]; then
   echo

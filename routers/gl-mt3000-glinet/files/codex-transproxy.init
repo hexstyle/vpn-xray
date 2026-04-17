@@ -12,6 +12,37 @@ TCP_PORT="12345"
 LEGACY_DNS_CHAIN="CODEX_DNS_LOCAL"
 LEGACY_DOT_CHAIN="CODEX_DOT_PROXY"
 
+current_switch_state() {
+	local model gpio status
+
+	if [ ! -f /proc/gl-hw-info/switch-button ] || [ ! -f /proc/gl-hw-info/model ]; then
+		echo off
+		return
+	fi
+
+	model="$(cat /proc/gl-hw-info/model 2>/dev/null || true)"
+	gpio="$(cat /proc/gl-hw-info/switch-button 2>/dev/null || true)"
+
+	if [ "$model" = "mt3000" ]; then
+		status="$(grep "switch" /sys/kernel/debug/gpio 2>/dev/null | grep "hi" || true)"
+	elif [ "$model" = "axt1800" ] || [ "$model" = "be3600" ]; then
+		status="$(grep "$gpio" /sys/kernel/debug/gpio 2>/dev/null | grep "hi" || true)"
+	elif [ "$model" = "a1300" ]; then
+		status="$(grep "gpio0" /sys/kernel/debug/gpio 2>/dev/null | grep "lo" || true)"
+	else
+		status="$(grep "switch" /sys/kernel/debug/gpio 2>/dev/null | grep "lo" || true)"
+	fi
+
+	[ -n "$status" ] && echo on || echo off
+}
+
+path_requested() {
+	[ "$(current_switch_state)" = 'on' ] || return 1
+	[ -f "$CONFIG_READY_FILE" ] || return 1
+	[ -s "$XRAY_CONFIG" ] || return 1
+	return 0
+}
+
 xray_rule_mode() {
 	uci -q get router_rules.global.xray_mode 2>/dev/null || echo full
 }
@@ -32,6 +63,19 @@ xray_domains_file() {
 	printf '%s/domains.txt\n' "$(rules_generated_dir)"
 }
 
+lan_device() {
+	local value
+
+	value="$(uci -q get network.lan.device 2>/dev/null || true)"
+	[ -n "$value" ] || value="$(uci -q get network.lan.ifname 2>/dev/null || true)"
+	case "$value" in
+		''|*' '*)
+			value='br-lan'
+			;;
+	esac
+	printf '%s\n' "$value"
+}
+
 xray_dnsmasq_ready() {
 	local conf domains
 
@@ -50,17 +94,20 @@ iptables_del() {
 }
 
 cleanup_legacy_rules() {
-	iptables_del -t nat -D PREROUTING -i br-lan -p tcp --dport 53 -j "$LEGACY_DNS_CHAIN"
-	iptables_del -t nat -D PREROUTING -i br-lan -p udp --dport 53 -j "$LEGACY_DNS_CHAIN"
-	iptables_del -t nat -D PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 5300
-	iptables_del -t nat -D PREROUTING -i br-lan -p tcp --dport 53 -j REDIRECT --to-ports 53
-	iptables_del -t nat -D PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 53
+	local lan_if
+
+	lan_if="$(lan_device)"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j "$LEGACY_DNS_CHAIN"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j "$LEGACY_DNS_CHAIN"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 5300
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
 	iptables_del -t nat -D OUTPUT -p tcp -j "$LEGACY_DOT_CHAIN"
 	iptables_del -t nat -F "$LEGACY_DNS_CHAIN"
 	iptables_del -t nat -X "$LEGACY_DNS_CHAIN"
 	iptables_del -t nat -F "$LEGACY_DOT_CHAIN"
 	iptables_del -t nat -X "$LEGACY_DOT_CHAIN"
-	iptables_del -D FORWARD -i br-lan -p udp -j REJECT
+	iptables_del -D FORWARD -i "$lan_if" -p udp -j REJECT
 }
 
 resolve_vps_bypass() {
@@ -84,7 +131,9 @@ resolve_vps_bypass() {
 }
 
 add_nat_rules() {
-	local bypass_target mode setname
+	local bypass_target mode setname lan_if
+
+	lan_if="$(lan_device)"
 
 	iptables -t nat -N "$TCP_CHAIN" 2>/dev/null || true
 	iptables -t nat -F "$TCP_CHAIN"
@@ -100,45 +149,59 @@ add_nat_rules() {
 
 	if [ "$mode" = "selective" ]; then
 		if ! ipset list "$setname" >/dev/null 2>&1 || ! xray_dnsmasq_ready; then
-			/usr/bin/router-rules build-xray-ipset >/dev/null 2>&1 || true
+			if [ "${ROUTER_RULES_SKIP_BUILD_IPSET:-0}" != '1' ]; then
+				ROUTER_RULES_USE_CACHED_RESOLVED=1 /usr/bin/router-rules build-xray-ipset >/dev/null 2>&1 || true
+			fi
 		fi
-		iptables_del -t nat -D PREROUTING -i br-lan -p tcp --dport 53 -j REDIRECT --to-ports 53
-		iptables_del -t nat -D PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 53
-		iptables -t nat -I PREROUTING 1 -i br-lan -p tcp --dport 53 -j REDIRECT --to-ports 53
-		iptables -t nat -I PREROUTING 1 -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 53
+		iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+		iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
+		iptables -t nat -I PREROUTING 1 -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+		iptables -t nat -I PREROUTING 1 -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
 		if ipset list "$setname" >/dev/null 2>&1; then
 			iptables -t nat -A "$TCP_CHAIN" -p tcp -m set --match-set "$setname" dst -j REDIRECT --to-ports "$TCP_PORT"
 		fi
 	else
-		iptables_del -t nat -D PREROUTING -i br-lan -p tcp --dport 53 -j REDIRECT --to-ports 53
-		iptables_del -t nat -D PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 53
+		iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+		iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
 		iptables -t nat -A "$TCP_CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
 	fi
 
-	iptables_del -t nat -D PREROUTING -i br-lan -p tcp -j "$TCP_CHAIN"
-	iptables -t nat -I PREROUTING 1 -i br-lan -p tcp -j "$TCP_CHAIN"
-	iptables_del -t nat -D PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 5300
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp -j "$TCP_CHAIN"
+	iptables -t nat -I PREROUTING 1 -i "$lan_if" -p tcp -j "$TCP_CHAIN"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 5300
 }
 
 del_nat_rules() {
-	iptables_del -t nat -D PREROUTING -i br-lan -p tcp -j "$TCP_CHAIN"
-	iptables_del -t nat -D PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 5300
-	iptables_del -t nat -D PREROUTING -i br-lan -p tcp --dport 53 -j REDIRECT --to-ports 53
-	iptables_del -t nat -D PREROUTING -i br-lan -p udp --dport 53 -j REDIRECT --to-ports 53
+	local lan_if
+
+	lan_if="$(lan_device)"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp -j "$TCP_CHAIN"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 5300
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
 	iptables_del -t nat -F "$TCP_CHAIN"
 	iptables_del -t nat -X "$TCP_CHAIN"
 }
 
 add_filter_rules() {
-	iptables_del -D FORWARD -i br-lan -p udp ! --dport 53 -j REJECT
-	iptables -I FORWARD 1 -i br-lan -p udp ! --dport 53 -j REJECT
-	ip6tables -D FORWARD -i br-lan -j REJECT 2>/dev/null || true
-	ip6tables -I FORWARD 1 -i br-lan -j REJECT 2>/dev/null || true
+	local lan_if
+
+	lan_if="$(lan_device)"
+	# This stack only supports transparent TCP forwarding.
+	# Reject forwarded non-DNS UDP and IPv6 so client traffic cannot bypass
+	# the Xray path over QUIC/UDP or native IPv6 when the path is enabled.
+	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	iptables -I FORWARD 1 -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	ip6tables -D FORWARD -i "$lan_if" -j REJECT 2>/dev/null || true
+	ip6tables -I FORWARD 1 -i "$lan_if" -j REJECT 2>/dev/null || true
 }
 
 del_filter_rules() {
-	iptables_del -D FORWARD -i br-lan -p udp ! --dport 53 -j REJECT
-	ip6tables -D FORWARD -i br-lan -j REJECT 2>/dev/null || true
+	local lan_if
+
+	lan_if="$(lan_device)"
+	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	ip6tables -D FORWARD -i "$lan_if" -j REJECT 2>/dev/null || true
 }
 
 ensure_codex_xray() {
@@ -151,8 +214,7 @@ ensure_codex_xray() {
 }
 
 start() {
-	[ -f "$CONFIG_READY_FILE" ] || return 1
-	[ -s "$XRAY_CONFIG" ] || return 1
+	path_requested || return 0
 	ensure_codex_xray || return 1
 	[ -f "$REDSOCKS_CONF" ] || return 1
 	/usr/sbin/redsocks -t -c "$REDSOCKS_CONF" || return 1
