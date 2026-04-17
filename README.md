@@ -1,8 +1,14 @@
 # vpn-xray
 
-`vpn-xray` is a router-first wrapper around [Xray-core](https://github.com/XTLS/Xray-core).
+`vpn-xray` is a router-first tunneling and proxy-client toolkit built around [Xray-core](https://github.com/XTLS/Xray-core).
 
-It is meant for one practical job: put a small travel router between your devices and the internet, then move traffic through your own VPS without manually hand-editing Xray configs every time.
+It is meant for one practical job: put a small travel router between your devices and the internet, then move traffic through your own VPS without manually hand-editing Xray configs every time. The repository is positioned as an enthusiast home-lab tool for network-protocol research, tunnel setup experiments, and testing the behavior of router-managed traffic paths on systems you own or are authorized to administer.
+
+## Disclaimer
+
+This project is published exclusively for educational purposes, network-security testing in controlled environments, and research into network protocols and tunneling behavior on infrastructure that you own or are explicitly authorized to administer.
+
+The author does not encourage unlawful use and does not accept responsibility for any use of this software in violation of the laws, regulations, export controls, or service terms that apply in a specific country or jurisdiction.
 
 <img src="./docs/assets/gl-mt3000-router.jpg" alt="GL.iNet GL-MT3000 travel router" width="420">
 
@@ -218,6 +224,10 @@ Good first checks from a device behind the router:
 - `https://ifconfig.me/ip`
 - `https://ipinfo.io/ip`
 - `https://www.google.com`
+
+## License
+
+This repository is distributed under the standard [MIT License](./LICENSE). That license already includes the usual `AS IS` / no-warranty / no-liability language for the software itself.
 
 If the transport is healthy, those IP checks should show the VPS egress IP, not your home provider IP.
 

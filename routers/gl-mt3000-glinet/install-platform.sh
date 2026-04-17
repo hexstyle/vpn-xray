@@ -958,6 +958,9 @@ EOF
 	fi
 
 	info "Restarting router services..."
+	exec </dev/null
+	/etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
+	/etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
 	/etc/init.d/firewall reload >/dev/null 2>&1 || true
 	/etc/init.d/stubby stop >/dev/null 2>&1 || true
 	/etc/init.d/stubby disable >/dev/null 2>&1 || true
@@ -970,13 +973,13 @@ EOF
 	/etc/init.d/gl_switch_button_check stop >/dev/null 2>&1 || true
 	/etc/init.d/gl_switch_button_check disable >/dev/null 2>&1 || true
 	/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
-	/etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
 	if defer_xray_activation; then
 		info "Deferred Xray runtime activation; router path will stay off until a profile is explicitly applied."
 	else
 		/usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
 		/etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
 	fi
+	/etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
 
 	switch_state="$(current_switch_state)"
 	info "Router platform is installed."

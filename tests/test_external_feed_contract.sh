@@ -37,10 +37,34 @@ grep -q "python3_supports_external_fetcher()" "$INSTALL_PLATFORM" \
 	|| fail "install-platform must verify the Python runtime can import the external fetcher modules"
 grep -q "effective_external_source_enabled()" "$INSTALL_PLATFORM" \
 	|| fail "install-platform must preserve existing external source enable state on router updates"
+grep -q "exec </dev/null" "$INSTALL_PLATFORM" \
+	|| fail "install-platform must close remote stdin before starting long-lived services so SSH deploys can finish cleanly"
+awk '
+	/\/usr\/bin\/router-rules sync-apply-xray/ && !apply_line { apply_line = NR }
+	/\/etc\/init\.d\/router-rules-sync start/ && !start_line { start_line = NR }
+	END { exit !(apply_line && start_line && apply_line < start_line) }
+' "$INSTALL_PLATFORM" \
+	|| fail "install-platform must apply the ruleset before starting the background sync loop to avoid lock contention during deploys"
+grep -q "/etc/init.d/router-rules-sync stop" "$INSTALL_PLATFORM" \
+	|| fail "install-platform must stop the existing background sync loop before applying a new ruleset during deploys"
 grep -q "current_router_external_source_config()" "$INSTALL_ROUTER" \
 	|| fail "install-router must preserve the router's current external source config on updates"
+grep -q "current_vps_xray_meta()" "$INSTALL_ROUTER" \
+	|| fail "install-router must be able to sync the live VPS Reality profile during router updates"
+awk '
+	/current_vps_meta="\$\(current_vps_xray_meta 2>\/dev\/null \|\| true\)"/ && !meta_line { meta_line = NR }
+	/^require_vars[[:space:]]*\\/ && !require_line { require_line = NR }
+	END { exit !(meta_line && require_line && meta_line < require_line) }
+' "$INSTALL_ROUTER" \
+	|| fail "install-router must sync live VPS Reality metadata before requiring XRAY variables"
 grep -q "RULES_EXTERNAL_SOURCE_ENABLED" "$INSTALL_ROUTER" \
 	|| fail "install-router must pass external source settings to install-platform"
+grep -q "exec </dev/null" "$INSTALL_ROUTER" \
+	|| fail "install-router must close remote stdin before starting long-lived services so SSH updates can finish cleanly"
+grep -q "nohup sh -c" "$INSTALL_ROUTER" \
+	|| fail "install-router must bring long-lived router services back asynchronously after the blocking rules apply step"
+grep -q "wait_for_router_runtime_ready()" "$INSTALL_ROUTER" \
+	|| fail "install-router must wait for the router runtime to report ready before exiting"
 
 grep -q "external_source_enabled()" "$ROUTER_RULES_FILE" \
 	|| fail "router-rules must expose external_source_enabled()"

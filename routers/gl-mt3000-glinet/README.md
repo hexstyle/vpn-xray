@@ -2,6 +2,8 @@
 
 This is the main supported router profile.
 
+It is documented here as a profile for a router-managed tunneling / proxy-client lab setup, not as a jurisdiction-specific circumvention guide.
+
 If you are installing from scratch, start with [`../../README.md`](../../README.md) and [`../../docs/GETTING-STARTED.md`](../../docs/GETTING-STARTED.md) first.
 
 ## Firmware Family

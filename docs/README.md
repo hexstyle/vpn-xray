@@ -1,5 +1,7 @@
 # Documentation
 
+These documents describe a router-first tunneling and proxy-client toolkit for educational use, controlled network-security testing, and protocol research on systems you own or are authorized to administer. For the repository-level disclaimer and license terms, start with [`../README.md`](../README.md).
+
 Read these in order:
 
 1. [Getting Started](./GETTING-STARTED.md)

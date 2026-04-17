@@ -13,6 +13,8 @@ fi
 ENV_ROUTER_SSH="${ROUTER_SSH:-}"
 ENV_ROUTER_HOST="${ROUTER_HOST:-}"
 ENV_ROUTER_LAN_IP="${ROUTER_LAN_IP:-}"
+ENV_VPS_SSH="${VPS_SSH:-}"
+ENV_VPS_HOST="${VPS_HOST:-}"
 NETWORK_RELOAD="${NETWORK_RELOAD:-1}"
 
 load_env_file "$ENV_FILE" "$(default_install_env_example "$ROOT_DIR")"
@@ -31,18 +33,31 @@ fi
 if [[ -n "$ENV_ROUTER_LAN_IP" ]]; then
   ROUTER_LAN_IP="$ENV_ROUTER_LAN_IP"
 fi
+if [[ -n "$ENV_VPS_SSH" ]]; then
+  VPS_SSH="$ENV_VPS_SSH"
+fi
+if [[ -n "$ENV_VPS_HOST" ]]; then
+  VPS_HOST="$ENV_VPS_HOST"
+fi
 
 require_local_commands bash ssh ssh-keygen tar python3
 
 ROUTER_SSH="${ROUTER_SSH:-root@${ROUTER_HOST:-}}"
 ROUTER_HOST="${ROUTER_HOST:-$(host_from_ssh_target "$ROUTER_SSH")}"
 ROUTER_LAN_IP="${ROUTER_LAN_IP:-$ROUTER_HOST}"
+VPS_HOST="${VPS_HOST:-${XRAY_SERVER:-}}"
+VPS_SSH="${VPS_SSH:-root@${VPS_HOST:-}}"
 SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
 ROUTER_RELOAD_WAIT_SECONDS="${ROUTER_RELOAD_WAIT_SECONDS:-45}"
 ROUTER_RELOAD_PROBE_TIMEOUT="${ROUTER_RELOAD_PROBE_TIMEOUT:-5}"
 ensure_installer_ssh_state "$ROOT_DIR"
 INSTALLER_KNOWN_HOSTS="$(installer_known_hosts_file "$ROOT_DIR")"
 ROUTER_SSH_OPTS=(
+  -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
+  -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
+)
+VPS_SSH_OPTS=(
   -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
   -o StrictHostKeyChecking=accept-new
   -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
@@ -150,6 +165,58 @@ current_router_rules_mode() {
 current_router_external_source_config() {
   router_ssh "printf 'ENABLED=%s\n' \"\$(uci -q get router_rules.global.external_source_enabled 2>/dev/null || true)\"; printf 'URL=%s\n' \"\$(uci -q get router_rules.global.external_source_url 2>/dev/null || true)\"; printf 'INTERVAL=%s\n' \"\$(uci -q get router_rules.global.external_source_interval 2>/dev/null || true)\""
 }
+
+current_vps_xray_meta() {
+  [[ -n "${VPS_SSH:-}" ]] || return 1
+  ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "meta='/usr/local/etc/xray/codex-router-meta.env'; [ -f \"\$meta\" ] || exit 1; sed -n '1,200p' \"\$meta\""
+}
+
+wait_for_router_runtime_ready() {
+  local attempt max_attempts sleep_seconds
+
+  max_attempts="${ROUTER_RUNTIME_READY_ATTEMPTS:-30}"
+  sleep_seconds="${ROUTER_RUNTIME_READY_INTERVAL:-2}"
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if router_ssh "pgrep -af codex-xray-core >/dev/null 2>&1 && pgrep -af redsocks >/dev/null 2>&1"; then
+      return 0
+    fi
+    sleep "$sleep_seconds"
+  done
+
+  return 1
+}
+
+if [[ "${PREFER_LIVE_VPS_META:-1}" == "1" ]]; then
+  current_vps_meta="$(current_vps_xray_meta 2>/dev/null || true)"
+  if [[ -n "$current_vps_meta" ]]; then
+    current_vps_xray_host="$(printf '%s\n' "$current_vps_meta" | sed -n 's/^XRAY_HOST=//p' | sed -n '1p')"
+    current_vps_xray_port="$(printf '%s\n' "$current_vps_meta" | sed -n 's/^XRAY_PORT=//p' | sed -n '1p')"
+    current_vps_xray_uuid="$(printf '%s\n' "$current_vps_meta" | sed -n 's/^XRAY_UUID=//p' | sed -n '1p')"
+    current_vps_xray_server_name="$(printf '%s\n' "$current_vps_meta" | sed -n 's/^XRAY_SERVER_NAME=//p' | sed -n '1p')"
+    current_vps_xray_short_id="$(printf '%s\n' "$current_vps_meta" | sed -n 's/^XRAY_SHORT_ID=//p' | sed -n '1p')"
+    current_vps_xray_public_key="$(printf '%s\n' "$current_vps_meta" | sed -n 's/^XRAY_PUBLIC_KEY=//p' | sed -n '1p')"
+
+    if [[ -n "$current_vps_xray_host" ]]; then
+      XRAY_SERVER="$current_vps_xray_host"
+    fi
+    if [[ "$current_vps_xray_port" =~ ^[0-9]+$ ]]; then
+      XRAY_PORT="$current_vps_xray_port"
+    fi
+    if [[ -n "$current_vps_xray_uuid" ]]; then
+      XRAY_UUID="$current_vps_xray_uuid"
+    fi
+    if [[ -n "$current_vps_xray_server_name" ]]; then
+      XRAY_SERVER_NAME="$current_vps_xray_server_name"
+    fi
+    if [[ -n "$current_vps_xray_short_id" ]]; then
+      XRAY_SHORT_ID="$current_vps_xray_short_id"
+    fi
+    if [[ -n "$current_vps_xray_public_key" ]]; then
+      XRAY_PUBLIC_KEY="$current_vps_xray_public_key"
+    fi
+    echo "Synced router Xray client profile from live VPS meta: $VPS_SSH"
+  fi
+fi
 
 require_vars \
   ROUTER_SSH \
@@ -362,6 +429,7 @@ router_ssh 'cat > /etc/redsocks.conf && chmod 600 /etc/redsocks.conf' < "$redsoc
 router_ssh 'cat > /etc/config/router_rules && chmod 600 /etc/config/router_rules' < "$router_rules_cfg"
 
 router_ssh "
+  exec </dev/null
   /etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
   /etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
   /usr/local/bin/codex-xray-core run -test -config /etc/xray/codex-xray.json >/dev/null 2>&1 || {
@@ -374,16 +442,23 @@ router_ssh "
   /etc/init.d/codex-xray stop >/dev/null 2>&1 || true
   /usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
   /usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
-  /etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
-  /etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
-  switch_state='off'
+  rm -rf $remote_source_root
+"
+
+router_ssh "nohup sh -c '
+  switch_state=off
   if [ -f /lib/functions/gl_util.sh ]; then
     . /lib/functions/gl_util.sh
     switch_state=\$(get_switch_button_status 2>/dev/null || echo off)
   fi
+  /etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
+  /etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
   /etc/gl-switch.d/xray.sh \"\$switch_state\" >/dev/null 2>&1 || true
-  rm -rf $remote_source_root
-"
+' >/dev/null 2>&1 </dev/null &" >/dev/null 2>&1 || true
+
+if ! wait_for_router_runtime_ready; then
+  echo "Warning: router runtime did not report ready before installer exit." >&2
+fi
 
 if [[ "$NETWORK_RELOAD" == "1" ]]; then
   router_ssh "nohup sh -c 'sleep 1; /etc/init.d/network reload >/tmp/vpn-xray-network-reload.log 2>&1 || true' >/dev/null 2>&1 &" >/dev/null 2>&1 || true
