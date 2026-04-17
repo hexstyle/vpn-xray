@@ -17,6 +17,7 @@ Verification rules:
 - When verifying reboot recovery, record when Wi-Fi or HTTP management comes back and when `path_state=active` comes back; eventual recovery alone is not sufficient.
 - If the router is reachable after reboot but `xray_running=true` and `redsocks_running=true` while `transproxy_rule=false`, treat that as a boot regression and keep investigating.
 - When uplink failover or repeater mode is involved, verify that `ip route get <VPS IP>` follows the active uplink instead of a stale dead device before declaring the Xray path healthy.
+- When reinstalling or resyncing from VPS-managed metadata, verify that the live VPS listener/config still matches the advertised client port before trusting it.
 - If you cannot test one of the three states on real traffic, say so explicitly in the final report.
 - If a change risks breaking connectivity, inspect firewall/NAT counters and active runtime processes after the change.
 - If Ethernet unplug / Wi-Fi uplink / Wi-Fi client access could be affected, explicitly verify that the router stays reachable over Wi-Fi with Ethernet absent, or say that you could not test it.

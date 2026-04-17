@@ -23,6 +23,10 @@ require_supported_profile router "$ROOT_DIR" "$ROUTER_PROFILE"
 ROUTER_PROFILE_DIR="$(router_profile_dir "$ROOT_DIR" "$ROUTER_PROFILE")"
 ROUTER_COMMON_DIR="$(router_common_dir "$ROOT_DIR")"
 load_profile_defaults "$ROUTER_PROFILE_DIR/profile.env"
+VPS_PROFILE="${VPS_PROFILE:-debian-13}"
+require_supported_profile vps "$ROOT_DIR" "$VPS_PROFILE"
+VPS_PROFILE_DIR="$(vps_profile_dir "$ROOT_DIR" "$VPS_PROFILE")"
+load_profile_defaults "$VPS_PROFILE_DIR/profile.env"
 
 if [[ -n "$ENV_ROUTER_SSH" ]]; then
   ROUTER_SSH="$ENV_ROUTER_SSH"
@@ -171,6 +175,16 @@ current_vps_xray_meta() {
   ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "meta='/usr/local/etc/xray/codex-router-meta.env'; [ -f \"\$meta\" ] || exit 1; sed -n '1,200p' \"\$meta\""
 }
 
+current_vps_xray_runtime_facts() {
+  [[ -n "${VPS_SSH:-}" ]] || return 1
+  ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "CONFIG_PATH=$(shell_quote "${VPS_XRAY_CONFIG_PATH:-/usr/local/etc/xray/config.json}") sh -s" <<'EOF'
+config_path="${CONFIG_PATH:-/usr/local/etc/xray/config.json}"
+[ -f "$config_path" ] || exit 1
+config_port="$(sed -n 's/^[[:space:]]*"port":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$config_path" | sed -n '1p')"
+[ -n "$config_port" ] && printf 'CONFIG_PORT=%s\n' "$config_port"
+EOF
+}
+
 wait_for_router_runtime_ready() {
   local attempt max_attempts sleep_seconds
 
@@ -188,6 +202,8 @@ wait_for_router_runtime_ready() {
 
 if [[ "${PREFER_LIVE_VPS_META:-1}" == "1" ]]; then
   current_vps_meta="$(current_vps_xray_meta 2>/dev/null || true)"
+  current_vps_runtime_facts="$(current_vps_xray_runtime_facts 2>/dev/null || true)"
+  current_vps_config_port="$(printf '%s\n' "$current_vps_runtime_facts" | sed -n 's/^CONFIG_PORT=//p' | sed -n '1p')"
   if [[ -n "$current_vps_meta" ]]; then
     current_vps_xray_host="$(printf '%s\n' "$current_vps_meta" | sed -n 's/^XRAY_HOST=//p' | sed -n '1p')"
     current_vps_xray_port="$(printf '%s\n' "$current_vps_meta" | sed -n 's/^XRAY_PORT=//p' | sed -n '1p')"
@@ -213,6 +229,12 @@ if [[ "${PREFER_LIVE_VPS_META:-1}" == "1" ]]; then
     fi
     if [[ -n "$current_vps_xray_public_key" ]]; then
       XRAY_PUBLIC_KEY="$current_vps_xray_public_key"
+    fi
+    if [[ "$current_vps_config_port" =~ ^[0-9]+$ ]]; then
+      if [[ "$current_vps_xray_port" =~ ^[0-9]+$ && "$current_vps_xray_port" != "$current_vps_config_port" ]]; then
+        echo "Live VPS meta port ($current_vps_xray_port) differs from active VPS config port ($current_vps_config_port); using active config port."
+      fi
+      XRAY_PORT="$current_vps_config_port"
     fi
     echo "Synced router Xray client profile from live VPS meta: $VPS_SSH"
   fi
