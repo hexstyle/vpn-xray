@@ -49,6 +49,19 @@ restart_xray() {
   systemctl restart "$XRAY_SERVICE"
 }
 
+ensure_xray_firewall_port() {
+  case "$XRAY_PORT" in
+    ''|*[!0-9]*)
+      return 1
+      ;;
+  esac
+
+  if command -v ufw >/dev/null 2>&1; then
+    ufw status 2>/dev/null | grep -q '^Status: active' || return 0
+    ufw allow "${XRAY_PORT}/tcp" >/dev/null 2>&1
+  fi
+}
+
 dump_xray_failure() {
   systemctl status "$XRAY_SERVICE" --no-pager 2>/dev/null || true
   journalctl -u "$XRAY_SERVICE" -n 40 --no-pager 2>/dev/null || true
@@ -77,6 +90,7 @@ chmod 640 "$XRAY_CONFIG_PATH"
 cat /tmp/codex-router-meta.env > "$REMOTE_META_PATH"
 chmod 600 "$REMOTE_META_PATH"
 fix_runtime_permissions "$runtime_user" "$runtime_group"
+ensure_xray_firewall_port
 
 restart_xray || {
   dump_xray_failure

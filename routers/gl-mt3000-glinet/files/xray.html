@@ -640,7 +640,7 @@
           </div>
           <div class="field">
             <label for="sshPort">SSH Port</label>
-            <input id="sshPort" autocomplete="off" spellcheck="false">
+            <input id="sshPort" type="number" min="1" max="65535" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="22">
           </div>
         </div>
         <div class="form-actions">
@@ -664,7 +664,7 @@
           <div class="form-grid" style="margin-top:12px;">
             <div class="field">
               <label for="serverPort">Xray Server Port</label>
-              <input id="serverPort" autocomplete="off" spellcheck="false" readonly>
+              <input id="serverPort" type="number" min="1" max="65535" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="443">
             </div>
             <div class="field">
               <label for="serverName">Reality Server Name / SNI</label>
@@ -1670,6 +1670,10 @@
         pathEl.textContent = "idle";
         pathEl.className = "value warn";
         pathHint.textContent = "The client profile is ready, but the physical switch is OFF, so the path stays down on purpose.";
+      } else if (data.path_state === "degraded") {
+        pathEl.textContent = "degraded";
+        pathEl.className = "value bad";
+        pathHint.textContent = "The local runtime is up, but the latest smoke failed. Selected Xray traffic is likely broken until the VPS path recovers.";
       } else {
         applyState(pathEl, data.path_active, "active", "inactive");
         pathHint.textContent = data.path_active
@@ -1743,6 +1747,8 @@
         remote.install_notes ? `Install notes: ${remote.install_notes}` : "",
         `Remote Xray: ${remote.xray_present === "1" ? "installed" : "not installed"}`,
         remote.xray_version ? `Remote Xray version: ${remote.xray_version}` : "",
+        remote.server_port ? `Remote Xray config port: ${remote.server_port}` : "",
+        `Remote listener on selected port: ${remote.listener_port ? "present" : "not detected"}`,
         remote.public_ip ? `Remote public IP: ${remote.public_ip}` : "",
         remote.pretty_name ? `Remote OS: ${remote.pretty_name}` : "",
         routerDiff.length ? `Router drift vs selected profile: ${routerDiff.join(", ")}` : "Router drift vs selected profile: none",
@@ -1759,7 +1765,7 @@
         ["Router profile ready", state.runtime?.config_ready ? "yes" : "no"],
         ["Last read", `${remote.status || profile.last_inspect_status || "never"}${profile.last_inspect_at ? ` at ${formatUnixTime(profile.last_inspect_at)}` : ""}`],
         ["Router client", state.runtime?.xray_running ? "running" : "stopped"],
-        ["Transparent path", state.runtime?.path_active ? "active" : "inactive"],
+        ["Transparent path", state.runtime?.path_state === "degraded" ? "degraded" : (state.runtime?.path_active ? "active" : "inactive")],
         ["Last smoke", state.runtime?.last_smoke_status ? `${state.runtime.last_smoke_status}${state.runtime.last_smoke_at ? ` at ${formatUnixTime(state.runtime.last_smoke_at)}` : ""}` : "never"],
         ["SSH OK", remote.ssh_ok || "0"],
         ["Public IP", remote.public_ip || "(unknown)"],
@@ -1767,6 +1773,8 @@
         ["OS", remote.pretty_name || "(unknown)"],
         ["Xray", remote.xray_present === "1" ? `present | ${remote.xray_version || "version unknown"}` : "not installed"],
         ["Xray service", remote.xray_service || "(unknown)"],
+        ["Configured Xray port", remote.server_port || "(unknown)"],
+        ["Selected-port listener", remote.listener_port ? "present" : "missing"],
         ["Install support", remote.install_supported === "1" ? `supported: ${remote.install_notes || ""}` : `not supported: ${remote.install_notes || ""}`]
       ];
       document.getElementById("remoteInfoGrid").innerHTML = rows.map(([key, value]) => (

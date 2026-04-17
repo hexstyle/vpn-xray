@@ -428,7 +428,7 @@ probe_json() {
 status_json() {
 	local switch_state switch_func xray_running redsocks_running http_listen socks_listen redsocks_listen transproxy
 	local server_address server_port server_name public_key short_id flow uuid access_log error_log
-	local path_requested path_active ready path_state
+	local path_requested path_active ready path_state path_smoke_checked path_effective path_degraded
 	local last_smoke_at last_smoke_status last_smoke_message last_smoke_https_ok last_smoke_egress_ok last_smoke_openai_ok
 
 	switch_state="$(current_switch_state)"
@@ -454,16 +454,6 @@ status_json() {
 		path_active=0
 	fi
 
-	if [ "$switch_state" != 'on' ]; then
-		path_state='switch_off'
-	elif [ "$ready" != '1' ]; then
-		path_state='needs_vps_profile'
-	elif [ "$path_active" = '1' ]; then
-		path_state='active'
-	else
-		path_state='inactive'
-	fi
-
 	server_address="$(config_value '@.outbounds[0].settings.vnext[0].address')"
 	server_port="$(config_value '@.outbounds[0].settings.vnext[0].port')"
 	server_name="$(config_value '@.outbounds[0].streamSettings.realitySettings.serverName')"
@@ -480,6 +470,43 @@ status_json() {
 	last_smoke_egress_ok="$(status_file_value last_smoke_egress_ok)"
 	last_smoke_openai_ok="$(status_file_value last_smoke_openai_ok)"
 
+	case "$last_smoke_at" in
+		''|*[!0-9]*)
+			path_smoke_checked=0
+			;;
+		*)
+			if [ "$last_smoke_at" -gt 0 ]; then
+				path_smoke_checked=1
+			else
+				path_smoke_checked=0
+			fi
+			;;
+	esac
+
+	if [ "$path_active" = '1' ] && [ "$path_smoke_checked" = '1' ] && [ "$last_smoke_status" != 'ok' ]; then
+		path_degraded=1
+	else
+		path_degraded=0
+	fi
+
+	if [ "$path_active" = '1' ] && [ "$path_smoke_checked" = '1' ] && [ "$last_smoke_status" = 'ok' ]; then
+		path_effective=1
+	else
+		path_effective=0
+	fi
+
+	if [ "$switch_state" != 'on' ]; then
+		path_state='switch_off'
+	elif [ "$ready" != '1' ]; then
+		path_state='needs_vps_profile'
+	elif [ "$path_degraded" = '1' ]; then
+		path_state='degraded'
+	elif [ "$path_active" = '1' ]; then
+		path_state='active'
+	else
+		path_state='inactive'
+	fi
+
 	printf '{'
 	printf '"switch_state":"%s",' "$(json_escape "$switch_state")"
 	printf '"switch_func":"%s",' "$(json_escape "$switch_func")"
@@ -487,6 +514,9 @@ status_json() {
 	printf '"path_state":"%s",' "$(json_escape "$path_state")"
 	printf '"path_requested":'; json_bool "$path_requested"; printf ','
 	printf '"path_active":'; json_bool "$path_active"; printf ','
+	printf '"path_smoke_checked":'; json_bool "$path_smoke_checked"; printf ','
+	printf '"path_effective":'; json_bool "$path_effective"; printf ','
+	printf '"path_degraded":'; json_bool "$path_degraded"; printf ','
 	printf '"xray_running":'; json_bool "$xray_running"; printf ','
 	printf '"redsocks_running":'; json_bool "$redsocks_running"; printf ','
 	printf '"proxy_http_listen":'; json_bool "$http_listen"; printf ','

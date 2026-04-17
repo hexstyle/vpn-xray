@@ -18,6 +18,8 @@ ROUTER_ACCESS_LOG='/var/log/xray/codex-xray-access.log'
 ROUTER_ERROR_LOG='/var/log/xray/codex-xray-error.log'
 VPS_PROFILE_ROOT='/usr/share/vpn-xray/vps'
 LOCK_ROOT='/tmp/xray-vps-locks'
+SAVE_PROFILE_ERROR=''
+SAVE_PROFILE_ID=''
 
 REQUEST_DATA=''
 
@@ -67,6 +69,23 @@ request_value() {
 
 	raw="$(printf '%s' "$REQUEST_DATA" | tr '&' '\n' | sed -n "s/^${key}=//p" | sed -n '1p')"
 	url_decode "$raw"
+}
+
+valid_port() {
+	local value="$1"
+
+	case "$value" in
+		''|*[!0-9]*)
+			return 1
+			;;
+	esac
+
+	[ "$value" -ge 1 ] && [ "$value" -le 65535 ]
+}
+
+save_profile_fail() {
+	SAVE_PROFILE_ERROR="$1"
+	return 1
 }
 
 emit_header() {
@@ -853,6 +872,7 @@ remote_cache_json() {
 	printf '"xray_present":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_XRAY_PRESENT)")"
 	printf '"xray_version":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_XRAY_VERSION)")"
 	printf '"xray_service":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_XRAY_SERVICE)")"
+	printf '"listener_port":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_LISTENER_PORT)")"
 	printf '"listener_443":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_LISTENER_443)")"
 	printf '"managed_meta":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_MANAGED_META)")"
 	printf '"server_port":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_server_port)")"
@@ -981,15 +1001,16 @@ ensure_profile_store() {
 
 remote_inspect_output() {
 	local profile_id="$1"
-	local vps_profile meta_path config_path
+	local vps_profile meta_path config_path expected_server_port
 
 	vps_profile="$(selected_vps_profile "$profile_id")"
 	meta_path="$(vps_profile_value "$vps_profile" VPS_REMOTE_META_PATH)"
 	config_path="$(vps_profile_value "$vps_profile" VPS_XRAY_CONFIG_PATH)"
+	expected_server_port="$(profile_get "$profile_id" server_port)"
 	[ -n "$meta_path" ] || meta_path='/usr/local/etc/xray/codex-router-meta.env'
 	[ -n "$config_path" ] || config_path='/usr/local/etc/xray/config.json'
 
-	ssh_cmd "$profile_id" "REMOTE_META_PATH='$meta_path' REMOTE_CONFIG_PATH='$config_path' sh -s" <<'EOF'
+	ssh_cmd "$profile_id" "REMOTE_META_PATH='$meta_path' REMOTE_CONFIG_PATH='$config_path' EXPECTED_SERVER_PORT='$expected_server_port' sh -s" <<'EOF'
 line() {
 	printf '%s=%s\n' "$1" "$2"
 }
@@ -1036,6 +1057,7 @@ xray_version_v=''
 xray_service_v=''
 command -v systemctl >/dev/null 2>&1 && xray_service_v="$(systemctl is-active xray 2>/dev/null || true)"
 listener_443_v="$(ss -ltnp 2>/dev/null | grep ':443 ' | tr '\n' ';' || true)"
+listener_port_v=''
 managed_meta_v='0'
 remote_server_port=''
 remote_server_name=''
@@ -1115,6 +1137,14 @@ if [ -z "$remote_public_key" ] && [ -n "$remote_private_key" ] && [ -n "$xray_bi
 	remote_public_key="$($xray_bin x25519 -i "$remote_private_key" 2>/dev/null | sed -n 's/^Password (PublicKey): //p' | sed -n '1p')"
 fi
 
+listener_target_port="${remote_server_port:-${EXPECTED_SERVER_PORT:-443}}"
+case "$listener_target_port" in
+	''|*[!0-9]*)
+		listener_target_port='443'
+		;;
+esac
+listener_port_v="$(ss -ltnp 2>/dev/null | grep ":${listener_target_port} " | tr '\n' ';' || true)"
+
 line REMOTE_STATUS ok
 line REMOTE_SSH_OK 1
 line REMOTE_HOSTNAME "$hostname_v"
@@ -1135,6 +1165,7 @@ line REMOTE_IPINFO_JSON "$ipinfo_v"
 line REMOTE_XRAY_PRESENT "$xray_present"
 line REMOTE_XRAY_VERSION "$xray_version_v"
 line REMOTE_XRAY_SERVICE "$xray_service_v"
+line REMOTE_LISTENER_PORT "$listener_port_v"
 line REMOTE_LISTENER_443 "$listener_443_v"
 line REMOTE_MANAGED_META "$managed_meta_v"
 line REMOTE_server_port "$remote_server_port"
@@ -1235,6 +1266,9 @@ drop_profile_store_backup() {
 save_profile_from_request() {
 	local current requested_id profile_id label vps_profile auth_mode ssh_host ssh_port ssh_user server_address server_port server_name existing_server_name uuid public_key private_key short_id flow bootstrap_key
 
+	SAVE_PROFILE_ERROR=''
+	SAVE_PROFILE_ID=''
+
 	current="$(active_profile_id)"
 	requested_id="$(sanitize_id "$(request_value profile_id)")"
 	[ -n "$requested_id" ] || requested_id="$current"
@@ -1263,6 +1297,14 @@ save_profile_from_request() {
 	[ -n "$ssh_port" ] || ssh_port='22'
 	[ -n "$ssh_user" ] || ssh_user='root'
 	[ -n "$server_port" ] || server_port='443'
+	valid_port "$ssh_port" || {
+		save_profile_fail 'SSH port must be in the range 1-65535.'
+		return 1
+	}
+	valid_port "$server_port" || {
+		save_profile_fail 'Xray server port must be in the range 1-65535.'
+		return 1
+	}
 	existing_server_name="$(profile_get "$profile_id" server_name)"
 	[ -n "$server_name" ] || server_name="$existing_server_name"
 	[ -n "$server_name" ] || server_name="$(default_server_name_for_profile "$vps_profile")"
@@ -1298,6 +1340,7 @@ save_profile_from_request() {
 	save_bootstrap_key "$profile_id" "$bootstrap_key"
 	set_active_profile "$profile_id"
 	uci commit "$PROFILE_PACKAGE"
+	SAVE_PROFILE_ID="$profile_id"
 	printf '%s' "$profile_id"
 }
 
@@ -1350,7 +1393,7 @@ create_profile_action() {
 
 save_profile_action() {
 	if ! save_profile_from_request >/dev/null; then
-		emit_error save_profile 'Router could not initialize profile material.'
+		emit_error save_profile "${SAVE_PROFILE_ERROR:-Router could not initialize profile material.}"
 		return 0
 	fi
 	emit_status_response save_profile
@@ -1588,11 +1631,12 @@ check_profile_action() {
 	local profile_id backup
 
 	backup="$(backup_profile_store)"
-	if ! profile_id="$(save_profile_from_request)"; then
+	if ! save_profile_from_request >/dev/null; then
 		restore_profile_store "$backup"
-		emit_error check_profile 'Could not save profile settings before inspection.'
+		emit_error check_profile "${SAVE_PROFILE_ERROR:-Could not save profile settings before inspection.}"
 		return 0
 	fi
+	profile_id="$SAVE_PROFILE_ID"
 	if ! inspect_profile_with_retry "$profile_id" 3 1; then
 		restore_profile_store "$backup"
 		emit_error check_profile 'Router could not establish SSH to the selected VPS with the current auth settings.'
@@ -1722,10 +1766,11 @@ setup_vps_action() {
 apply_everything_action() {
 	local profile_id cache remote_xray_present remote_managed_meta requested_material
 
-	if ! profile_id="$(save_profile_from_request)"; then
-		emit_error apply_profile 'Router could not initialize profile settings.'
+	if ! save_profile_from_request >/dev/null; then
+		emit_error apply_profile "${SAVE_PROFILE_ERROR:-Router could not initialize profile settings.}"
 		return 0
 	fi
+	profile_id="$SAVE_PROFILE_ID"
 	requested_material="$(request_value uuid)$(request_value public_key)$(request_value private_key)$(request_value short_id)"
 
 	if [ -z "$requested_material" ]; then

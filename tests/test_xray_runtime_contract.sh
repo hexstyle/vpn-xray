@@ -8,6 +8,7 @@ VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
 XRAY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.init"
 TRANSPROXY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
+XRAY_UI="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2
@@ -19,6 +20,12 @@ grep -q 'runtime_path_active()' "$ADMIN_CGI" \
 
 grep -q '/etc/gl-switch.d/xray.sh "\$switch_state" >/dev/null 2>&1 || return 1' "$ADMIN_CGI" \
 	|| fail "xray-admin.cgi must not swallow switch-sync failures"
+
+grep -q "path_state='degraded'" "$ADMIN_CGI" \
+	|| fail "xray-admin.cgi must mark runtime as degraded when smoke health says the path is broken"
+
+grep -q '"path_effective":' "$ADMIN_CGI" \
+	|| fail "xray-admin.cgi must expose whether the active runtime is still effective after smoke checks"
 
 grep -q 'router_path_active()' "$VPS_CGI" \
 	|| fail "xray-vps.cgi must expose an explicit router path health check"
@@ -55,5 +62,8 @@ grep -q '/etc/init.d/codex-xray enable' "$INSTALL_PLATFORM" \
 
 grep -q '/etc/init.d/codex-transproxy enable' "$INSTALL_PLATFORM" \
 	|| fail "install-platform must enable codex-transproxy on boot for fast post-reboot restore"
+
+grep -q 'data.path_state === "degraded"' "$XRAY_UI" \
+	|| fail "xray.html must surface degraded runtime state instead of showing it as healthy active path"
 
 printf 'ok\n'
