@@ -14,6 +14,9 @@ fail() {
 grep -q 'normalize_installed_text_files' "$INSTALL_PLATFORM" \
 	|| fail "install-platform must normalize deployed text files to Unix line endings"
 
+grep -q '/etc/hotplug.d/iface/95-codex-xray-uplink' "$INSTALL_PLATFORM" \
+	|| fail "install-platform must normalize the deployed Xray uplink hotplug guard"
+
 grep -q 'newline="\\n"' "$INSTALL_ROUTER" \
 	|| fail "install-router template rendering must force Unix newlines"
 

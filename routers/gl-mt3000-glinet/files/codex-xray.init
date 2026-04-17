@@ -2,8 +2,10 @@
 
 START=95
 STOP=10
-EXTRA_COMMANDS="status"
-EXTRA_HELP="	status	Show runtime status"
+EXTRA_COMMANDS="status refresh_egress_route best_uplink"
+EXTRA_HELP="	status			Show runtime status
+	refresh_egress_route	Refresh VPS egress route for the active uplink
+	best_uplink		Show the preferred uplink interface for Xray egress"
 
 NAME="codex-xray"
 BIN="/usr/local/bin/codex-xray-core"
@@ -13,6 +15,8 @@ PIDFILE="/var/run/${NAME}.pid"
 MPTCP_STATE_FILE="/var/run/${NAME}.mptcp"
 LOG_DIR="/var/log/xray"
 LOCAL_MANGLE_CHAIN="CODEX_XRAY_LOCAL"
+SERVER_ROUTE_STATE_FILE="/var/run/${NAME}.server-routes"
+UPLINK_STATE_FILE="/var/run/${NAME}.uplink"
 
 current_switch_state() {
 	local model gpio status
@@ -78,6 +82,133 @@ resolve_server_ipv4s() {
 	esac
 }
 
+iface_status_value() {
+	local iface="$1"
+	local expr="$2"
+
+	ifstatus "$iface" 2>/dev/null | jsonfilter -e "$expr" 2>/dev/null | sed -n '1p'
+}
+
+iface_is_up() {
+	[ "$(iface_status_value "$1" '@.up')" = 'true' ]
+}
+
+iface_device() {
+	local value
+
+	value="$(iface_status_value "$1" '@.l3_device')"
+	[ -n "$value" ] || value="$(iface_status_value "$1" '@.device')"
+	printf '%s\n' "$value"
+}
+
+iface_gateway() {
+	iface_status_value "$1" '@.route[0].nexthop'
+}
+
+device_carrier_up() {
+	local dev="$1"
+	local carrier_path="/sys/class/net/$dev/carrier"
+
+	[ -n "$dev" ] || return 1
+	[ -f "$carrier_path" ] || return 0
+	[ "$(cat "$carrier_path" 2>/dev/null || true)" = '1' ]
+}
+
+preferred_uplink_iface() {
+	local iface dev
+
+	for iface in wan wwan; do
+		iface_is_up "$iface" || continue
+		dev="$(iface_device "$iface")"
+		[ -n "$dev" ] || continue
+		device_carrier_up "$dev" || continue
+		printf '%s\n' "$iface"
+		return 0
+	done
+
+	for iface in wan wwan; do
+		if iface_is_up "$iface"; then
+			printf '%s\n' "$iface"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+current_uplink_signature() {
+	local iface dev gateway
+
+	iface="$(preferred_uplink_iface || true)"
+	[ -n "$iface" ] || return 1
+	dev="$(iface_device "$iface")"
+	gateway="$(iface_gateway "$iface")"
+	printf '%s|%s|%s\n' "$iface" "$dev" "$gateway"
+}
+
+record_uplink_signature() {
+	local signature="$1"
+
+	if [ -n "$signature" ]; then
+		printf '%s\n' "$signature" > "$UPLINK_STATE_FILE"
+	else
+		rm -f "$UPLINK_STATE_FILE"
+	fi
+}
+
+clear_server_routes() {
+	if [ -f "$SERVER_ROUTE_STATE_FILE" ]; then
+		sed -n 's/^target=//p' "$SERVER_ROUTE_STATE_FILE" | while IFS= read -r target; do
+			[ -n "$target" ] || continue
+			ip -4 route del "$target" >/dev/null 2>&1 || true
+		done
+	fi
+	rm -f "$SERVER_ROUTE_STATE_FILE"
+}
+
+configure_server_routes() {
+	local iface dev gateway tmp addr added=0
+
+	iface="$(preferred_uplink_iface || true)"
+	dev=''
+	gateway=''
+	if [ -n "$iface" ]; then
+		dev="$(iface_device "$iface")"
+		gateway="$(iface_gateway "$iface")"
+	fi
+
+	clear_server_routes
+	[ -n "$dev" ] || return 0
+
+	tmp="$(mktemp)"
+	while IFS= read -r addr; do
+		[ -n "$addr" ] || continue
+		if [ -n "$gateway" ]; then
+			ip -4 route replace "$addr/32" via "$gateway" dev "$dev" >/dev/null 2>&1 \
+				|| ip -4 route replace "$addr/32" dev "$dev" >/dev/null 2>&1 \
+				|| true
+		else
+			ip -4 route replace "$addr/32" dev "$dev" >/dev/null 2>&1 || true
+		fi
+		printf 'target=%s/32\n' "$addr" >> "$tmp"
+		added=1
+	done <<EOF
+$(resolve_server_ipv4s || true)
+EOF
+
+	if [ "$added" = '1' ]; then
+		mv "$tmp" "$SERVER_ROUTE_STATE_FILE"
+	else
+		rm -f "$tmp"
+	fi
+
+	ip -4 route flush cache >/dev/null 2>&1 || true
+}
+
+is_running() {
+	[ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+}
+
 clear_local_tcpmss() {
 	iptables -t mangle -D POSTROUTING -j "$LOCAL_MANGLE_CHAIN" 2>/dev/null || true
 	iptables -t mangle -F "$LOCAL_MANGLE_CHAIN" 2>/dev/null || true
@@ -128,6 +259,44 @@ restore_mptcp_state() {
 	fi
 }
 
+refresh_egress_route() {
+	local old_signature new_signature needs_refresh=0
+
+	old_signature="$(cat "$UPLINK_STATE_FILE" 2>/dev/null || true)"
+
+	if ! path_requested; then
+		clear_server_routes
+		clear_local_tcpmss
+		record_uplink_signature ''
+		return 0
+	fi
+
+	new_signature="$(current_uplink_signature || true)"
+	[ -f "$SERVER_ROUTE_STATE_FILE" ] || needs_refresh=1
+	[ "$old_signature" = "$new_signature" ] || needs_refresh=1
+
+	if [ "$needs_refresh" = '1' ]; then
+		configure_local_tcpmss
+		configure_server_routes
+	fi
+
+	record_uplink_signature "$new_signature"
+
+	if [ "$needs_refresh" = '1' ] && [ -n "$old_signature" ] && [ -n "$new_signature" ] && [ "$old_signature" != "$new_signature" ] && is_running; then
+		restart
+	fi
+}
+
+best_uplink() {
+	local iface dev gateway
+
+	iface="$(preferred_uplink_iface || true)"
+	[ -n "$iface" ] || return 1
+	dev="$(iface_device "$iface")"
+	gateway="$(iface_gateway "$iface")"
+	printf 'iface=%s dev=%s gateway=%s\n' "$iface" "$dev" "$gateway"
+}
+
 start() {
 	path_requested || return 0
 	[ -x "$BIN" ] || {
@@ -142,7 +311,7 @@ start() {
 		return 1
 	}
 
-	configure_local_tcpmss
+	refresh_egress_route
 	save_mptcp_state
 	start-stop-daemon -S -b -m -p "$PIDFILE" -x "$BIN" -- run -config "$CONFIG"
 }
@@ -151,6 +320,8 @@ stop() {
 	start-stop-daemon -K -p "$PIDFILE" -x "$BIN" 2>/dev/null || true
 	rm -f "$PIDFILE"
 	clear_local_tcpmss
+	clear_server_routes
+	record_uplink_signature ''
 	restore_mptcp_state
 }
 

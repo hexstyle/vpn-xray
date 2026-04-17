@@ -101,11 +101,49 @@ case "$lan_dev" in
     ;;
 esac
 
+wwan_dev="$(ifstatus wwan 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null | sed -n '1p')"
+[ -n "$wwan_dev" ] || wwan_dev="$(ifstatus wwan 2>/dev/null | jsonfilter -e '@.device' 2>/dev/null | sed -n '1p')"
+selected_repeater_section="$(uci -q show repeater 2>/dev/null | sed -n "s/^\(repeater\.[^.]*\)\.selected='1'$/\1/p" | sed -n '1p')"
+selected_repeater_ssid=''
+if [ -n "$selected_repeater_section" ]; then
+  selected_repeater_ssid="$(uci -q get "${selected_repeater_section}.ssid" 2>/dev/null || true)"
+fi
+
+same_radio_risk='none-detected'
+case "$wwan_dev" in
+  apcli0)
+    same_radio_risk='2.4GHz uplink shares radio with 2.4GHz AP clients; reassociation can drop management clients'
+    ;;
+  apclix0)
+    same_radio_risk='5GHz uplink shares radio with 5GHz AP clients; reassociation can drop management clients'
+    ;;
+esac
+
+server_addr="$(jsonfilter -i /etc/xray/codex-xray.json -e '@.outbounds[0].settings.vnext[0].address' 2>/dev/null | sed -n '1p')"
+server_target=''
+case "$server_addr" in
+  '')
+    ;;
+  *[!0-9.]*)
+    if command -v nslookup >/dev/null 2>&1; then
+      server_target="$(nslookup "$server_addr" 2>/dev/null | sed -n 's/^Address [0-9]*: //p' | grep -E '^[0-9]+(\.[0-9]+){3}$' | sed -n '1p')"
+    fi
+    ;;
+  *)
+    server_target="$server_addr"
+    ;;
+esac
+
 echo "switch-button=$(get_switch_button_status 2>/dev/null || echo unknown)"
 echo "xray-mode=$(uci -q get router_rules.global.xray_mode 2>/dev/null || echo unknown)"
 echo "lan-device=$lan_dev"
 echo "lan-ipv4=$(ip -4 addr show dev "$lan_dev" 2>/dev/null | awk '/inet / {print $2; exit}')"
 echo "default-route=$(ip -4 route show default 2>/dev/null | awk 'NR==1 {print $0}')"
+echo "wwan-device=${wwan_dev:-none}"
+echo "repeater-selected-ssid=${selected_repeater_ssid:-none}"
+echo "same-radio-uplink-risk=$same_radio_risk"
+[ -n "$server_target" ] && echo "vps-route=$(ip -4 route get "$server_target" 2>/dev/null | sed -n '1p')"
+/etc/init.d/codex-xray best_uplink 2>/dev/null || true
 
 pid="$(cat /var/run/codex-xray.pid 2>/dev/null || true)"
 if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -144,6 +182,15 @@ echo "== https browsing through proxy =="
 curl -I -m 25 -x "$proxy" https://www.google.com
 
 echo
+echo "== router-local transparent socks path =="
+router_ssh "curl -I -m 25 --socks5-hostname 127.0.0.1:1084 https://example.com"
+
+echo
+echo "== router-local transparent socks egress ip =="
+router_ssh "curl -m 25 --socks5-hostname 127.0.0.1:1084 https://ipinfo.io/ip"
+echo
+
+echo
 echo "== egress ip through proxy =="
 curl -m 25 -x "$proxy" https://ifconfig.me/ip
 echo
@@ -162,8 +209,8 @@ curl -m 25 -x "$proxy" https://ipinfo.io/ip
 echo
 
 echo "== coverage notes =="
-echo "Covered here: router control-plane reachability, router-local proxy smoke, runtime processes, and firewall/NAT counters."
-echo "Not covered automatically here: LAN-client traffic checks for VPN off/full/selective and Wi-Fi-only management reachability after unplugging Ethernet."
+echo "Covered here: router control-plane reachability, router-local HTTP proxy smoke, router-local transparent SOCKS smoke, runtime processes, firewall/NAT counters, and the router-local route chosen for the VPS path."
+echo "Not covered automatically here: LAN-client traffic checks for VPN off/full/selective, Wi-Fi-only management reachability after unplugging Ethernet, and same-radio AP/uplink reassociation behavior on the active client band."
 echo "Run those from a device behind the router when validating routing changes."
 
 if [[ "$warning_count" -gt 0 ]]; then

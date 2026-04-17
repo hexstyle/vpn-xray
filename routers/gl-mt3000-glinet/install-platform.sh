@@ -875,8 +875,10 @@ EOF
 		chmod 644 /etc/router-rules/ssh/routerRules_ed25519.pub
 	fi
 
+	mkdir -p /etc/hotplug.d/iface
 	cp "$PROFILE_DIR/files/codex-xray.init" /etc/init.d/codex-xray
 	cp "$PROFILE_DIR/files/codex-transproxy.init" /etc/init.d/codex-transproxy
+	cp "$PROFILE_DIR/files/codex-xray-uplink.hotplug" /etc/hotplug.d/iface/95-codex-xray-uplink
 	cp "$PROFILE_DIR/files/xray-switch-watchdog.init" /etc/init.d/xray-switch-watchdog
 	cp "$COMMON_DIR/files/router-rules-sync.init" /etc/init.d/router-rules-sync
 	cp "$COMMON_DIR/files/router-rules-external.py" /usr/share/vpn-xray/router-rules-external.py
@@ -889,6 +891,7 @@ EOF
 	normalize_installed_text_files \
 		/etc/init.d/codex-xray \
 		/etc/init.d/codex-transproxy \
+		/etc/hotplug.d/iface/95-codex-xray-uplink \
 		/etc/init.d/xray-switch-watchdog \
 		/etc/init.d/router-rules-sync \
 		/etc/gl-switch.d/xray.sh \
@@ -898,7 +901,7 @@ EOF
 		/www/cgi-bin/xray-vps \
 		/www/cgi-bin/xray-rules \
 		/www/xray.html
-	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/init.d/xray-switch-watchdog /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
+	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
 	chmod 644 /www/xray.html
 
 	rm -rf /usr/share/vpn-xray/vps

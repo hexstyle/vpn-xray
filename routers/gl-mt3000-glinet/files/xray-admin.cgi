@@ -204,7 +204,14 @@ build_config_file() {
       "listen": "0.0.0.0",
       "port": ${http_port},
       "protocol": "http",
-      "settings": {}
+      "settings": {},
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
     },
     {
       "listen": "127.0.0.1",
@@ -213,6 +220,13 @@ build_config_file() {
       "settings": {
         "auth": "noauth",
         "udp": false
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
       }
     }
   ],
@@ -429,7 +443,7 @@ status_json() {
 	local switch_state switch_func xray_running redsocks_running http_listen socks_listen redsocks_listen transproxy
 	local server_address server_port server_name public_key short_id flow uuid access_log error_log
 	local path_requested path_active ready path_state path_smoke_checked path_effective path_degraded
-	local last_smoke_at last_smoke_status last_smoke_message last_smoke_https_ok last_smoke_egress_ok last_smoke_openai_ok
+	local last_smoke_at last_smoke_status last_smoke_message last_smoke_http_ok last_smoke_https_ok last_smoke_egress_ok last_smoke_openai_ok
 
 	switch_state="$(current_switch_state)"
 	switch_func="$(uci -q get switch-button.@main[0].func 2>/dev/null || true)"
@@ -466,6 +480,7 @@ status_json() {
 	last_smoke_at="$(status_file_value last_smoke_at)"
 	last_smoke_status="$(status_file_value last_smoke_status)"
 	last_smoke_message="$(status_file_value last_smoke_message)"
+	last_smoke_http_ok="$(status_file_value last_smoke_http_ok)"
 	last_smoke_https_ok="$(status_file_value last_smoke_https_ok)"
 	last_smoke_egress_ok="$(status_file_value last_smoke_egress_ok)"
 	last_smoke_openai_ok="$(status_file_value last_smoke_openai_ok)"
@@ -526,6 +541,7 @@ status_json() {
 	printf '"last_smoke_at":"%s",' "$(json_escape "$last_smoke_at")"
 	printf '"last_smoke_status":"%s",' "$(json_escape "$last_smoke_status")"
 	printf '"last_smoke_message":"%s",' "$(json_escape "$last_smoke_message")"
+	printf '"last_smoke_http_ok":'; json_bool "${last_smoke_http_ok:-0}"; printf ','
 	printf '"last_smoke_https_ok":'; json_bool "${last_smoke_https_ok:-0}"; printf ','
 	printf '"last_smoke_egress_ok":'; json_bool "${last_smoke_egress_ok:-0}"; printf ','
 	printf '"last_smoke_openai_ok":'; json_bool "${last_smoke_openai_ok:-0}"; printf ','
@@ -579,27 +595,35 @@ smoke_output_has_ip() {
 record_smoke_status() {
 	local overall="$1"
 	local message="$2"
-	local https_ok="$3"
-	local egress_ok="$4"
-	local openai_ok="$5"
+	local http_ok="$3"
+	local https_ok="$4"
+	local egress_ok="$5"
+	local openai_ok="$6"
 	local now
 
 	now="$(date +%s)"
 	status_file_set last_smoke_at "$now"
 	status_file_set last_smoke_status "$overall"
 	status_file_set last_smoke_message "$message"
+	status_file_set last_smoke_http_ok "$http_ok"
 	status_file_set last_smoke_https_ok "$https_ok"
 	status_file_set last_smoke_egress_ok "$egress_ok"
 	status_file_set last_smoke_openai_ok "$openai_ok"
 }
 
 smoke_json() {
-	local https_test_output egress_output api_output
-	local https_ok egress_ok openai_ok overall_status overall_message
+	local http_test_output https_test_output egress_output api_output
+	local http_ok https_ok egress_ok openai_ok overall_status overall_message
 
-	https_test_output="$(curl -ksS -I -m 12 -x "$LOCAL_HTTP_PROXY" https://example.com 2>&1 | sed -n '1,20p' || true)"
-	egress_output="$(curl -ksS -m 12 -x "$LOCAL_HTTP_PROXY" https://ipinfo.io/ip 2>&1 | sed -n '1,8p' || true)"
-	api_output="$(curl -ksS -I -m 12 -x "$LOCAL_HTTP_PROXY" https://api.openai.com/v1/models 2>&1 | sed -n '1,20p' || true)"
+	http_test_output="$(curl -ksS -I -m 12 -x "$LOCAL_HTTP_PROXY" https://example.com 2>&1 | sed -n '1,20p' || true)"
+	https_test_output="$(curl -ksS -I -m 12 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://example.com 2>&1 | sed -n '1,20p' || true)"
+	egress_output="$(curl -ksS -m 12 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://ipinfo.io/ip 2>&1 | sed -n '1,8p' || true)"
+	api_output="$(curl -ksS -I -m 12 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://api.openai.com/v1/models 2>&1 | sed -n '1,20p' || true)"
+
+	http_ok=0
+	if ! printf '%s' "$http_test_output" | grep -q 'curl:' && smoke_output_has_success_like_http_status "$http_test_output"; then
+		http_ok=1
+	fi
 
 	https_ok=0
 	egress_ok=0
@@ -616,26 +640,32 @@ smoke_json() {
 
 	if [ "$https_ok" = '1' ] && [ "$egress_ok" = '1' ] && [ "$openai_ok" = '1' ]; then
 		overall_status='ok'
-		overall_message='Live proxy path is healthy.'
+		if [ "$http_ok" = '1' ]; then
+			overall_message='Live transparent proxy path is healthy.'
+		else
+			overall_message='Transparent proxy path is healthy, but the local HTTP proxy probe failed.'
+		fi
 	else
 		overall_status='error'
 		if [ "$https_ok" != '1' ]; then
-			overall_message='Smoke HTTPS probe failed through the local proxy path.'
+			overall_message='Smoke HTTPS probe failed through the local SOCKS/transparent path.'
 		elif [ "$egress_ok" != '1' ]; then
-			overall_message='Smoke egress IP probe failed through the local proxy path.'
+			overall_message='Smoke egress IP probe failed through the local SOCKS/transparent path.'
 		else
-			overall_message='Smoke OpenAI API probe failed through the local proxy path.'
+			overall_message='Smoke OpenAI API probe failed through the local SOCKS/transparent path.'
 		fi
 	fi
-	record_smoke_status "$overall_status" "$overall_message" "$https_ok" "$egress_ok" "$openai_ok"
+	record_smoke_status "$overall_status" "$overall_message" "$http_ok" "$https_ok" "$egress_ok" "$openai_ok"
 
 	printf '{'
 	printf '"ok":'; json_bool "$([ "$overall_status" = 'ok' ] && printf 1 || printf 0)"; printf ','
 	printf '"status":"%s",' "$(json_escape "$overall_status")"
 	printf '"message":"%s",' "$(json_escape "$overall_message")"
+	printf '"http_ok":'; json_bool "$http_ok"; printf ','
 	printf '"https_ok":'; json_bool "$https_ok"; printf ','
 	printf '"egress_ok":'; json_bool "$egress_ok"; printf ','
 	printf '"openai_ok":'; json_bool "$openai_ok"; printf ','
+	printf '"http_test":"%s",' "$(json_escape "$http_test_output")"
 	printf '"https_test":"%s",' "$(json_escape "$https_test_output")"
 	printf '"egress":"%s",' "$(json_escape "$egress_output")"
 	printf '"openai_api":"%s"' "$(json_escape "$api_output")"

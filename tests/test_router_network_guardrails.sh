@@ -6,6 +6,9 @@ ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
 INSTALL_ROUTER="$ROOT/routers/gl-mt3000-glinet/install-router.sh"
 TRANSPROXY="$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init"
+XRAY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.init"
+WATCHDOG="$ROOT/routers/gl-mt3000-glinet/files/xray-switch-watchdog.init"
+UPLINK_HOTPLUG="$ROOT/routers/gl-mt3000-glinet/files/codex-xray-uplink.hotplug"
 ROUTER_RULES="$ROOT/routers/common/files/router-rules"
 AGENTS_FILE="$ROOT/AGENTS.md"
 
@@ -36,6 +39,12 @@ fi
 grep -q 'Router is reachable again over SSH after network reload' "$INSTALL_ROUTER" \
 	|| fail "install-router must confirm the router comes back after a network reload"
 
+grep -q 'codex-xray-uplink.hotplug' "$INSTALL_PLATFORM" \
+	|| fail "install-platform must deploy the Xray uplink hotplug guard"
+
+grep -q '/etc/hotplug.d/iface/95-codex-xray-uplink' "$INSTALL_PLATFORM" \
+	|| fail "install-platform must install the Xray uplink hotplug guard into iface hotplug hooks"
+
 grep -q 'lan_device()' "$TRANSPROXY" \
 	|| fail "codex-transproxy must resolve the LAN device dynamically"
 
@@ -55,6 +64,21 @@ grep -q 'lan_device()' "$ROUTER_RULES" \
 if grep -q 'dev br-lan' "$ROUTER_RULES"; then
 	fail "router-rules must not hardcode br-lan for LAN CIDR detection"
 fi
+
+grep -q 'refresh_egress_route()' "$XRAY_INIT" \
+	|| fail "codex-xray must expose an egress-route refresh hook for uplink failover"
+
+grep -q 'best_uplink()' "$XRAY_INIT" \
+	|| fail "codex-xray must expose the selected uplink for failover verification"
+
+grep -q 'ip -4 route replace "\$addr/32"' "$XRAY_INIT" \
+	|| fail "codex-xray must pin VPS host routes to the preferred uplink"
+
+grep -q '/etc/init.d/codex-xray refresh_egress_route' "$UPLINK_HOTPLUG" \
+	|| fail "iface hotplug must refresh Xray egress routing after uplink changes"
+
+grep -q 'refresh_egress_route' "$WATCHDOG" \
+	|| fail "watchdog must refresh Xray egress routing as a fallback after uplink changes"
 
 grep -q 'Management-plane reachability is part of router verification' "$AGENTS_FILE" \
 	|| fail "AGENTS.md must require management-plane reachability checks"
@@ -76,5 +100,11 @@ grep -q 'Do not disable `codex-xray` or `codex-transproxy` init services as a wo
 
 grep -q 'Prefer restoring from the last resolved snapshot first, then refreshing in the background' "$AGENTS_FILE" \
 	|| fail "AGENTS.md must require cached selective restore before background refresh"
+
+grep -q 'verify that `ip route get <VPS IP>` follows the active uplink' "$AGENTS_FILE" \
+	|| fail "AGENTS.md must require VPS route checks during uplink failover"
+
+grep -q 'Treat same-radio repeater uplink plus client AP service as a management-plane risk' "$AGENTS_FILE" \
+	|| fail "AGENTS.md must call out same-radio repeater/AP instability risk"
 
 printf 'ok\n'

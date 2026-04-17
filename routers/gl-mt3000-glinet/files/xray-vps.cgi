@@ -634,7 +634,14 @@ render_router_config() {
       "listen": "0.0.0.0",
       "port": ${ROUTER_HTTP_PORT},
       "protocol": "http",
-      "settings": {}
+      "settings": {},
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
     },
     {
       "listen": "127.0.0.1",
@@ -643,6 +650,13 @@ render_router_config() {
       "settings": {
         "auth": "noauth",
         "udp": false
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
       }
     }
   ],

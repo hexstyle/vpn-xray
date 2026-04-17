@@ -33,6 +33,9 @@ grep -q 'router_path_active()' "$VPS_CGI" \
 grep -q 'resync_runtime_to_switch || return 1' "$VPS_CGI" \
 	|| fail "xray-vps.cgi must fail apply_profile when runtime does not come back"
 
+grep -q '"sniffing": {' "$VPS_CGI" \
+	|| fail "xray-vps.cgi must preserve inbound sniffing when it renders router configs from saved VPS profiles"
+
 grep -q 'LOCAL_MANGLE_CHAIN="CODEX_XRAY_LOCAL"' "$XRAY_INIT" \
 	|| fail "codex-xray.init must manage a dedicated local mangle chain for Xray server traffic"
 
@@ -44,6 +47,12 @@ grep -q 'path_requested()' "$XRAY_INIT" \
 
 grep -q 'path_requested || return 0' "$XRAY_INIT" \
 	|| fail "codex-xray.init must no-op when boot startup is not requested"
+
+grep -q '"sniffing": {' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
+	|| fail "codex-xray.json template must enable sniffing so transparent traffic can recover hostnames from TLS/HTTP metadata"
+
+grep -q '"destOverride": \[' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
+	|| fail "codex-xray.json template must override HTTP/TLS destinations for transparent traffic"
 
 grep -q 'path_requested()' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must gate boot startup behind switch/config readiness"
@@ -65,5 +74,11 @@ grep -q '/etc/init.d/codex-transproxy enable' "$INSTALL_PLATFORM" \
 
 grep -q 'data.path_state === "degraded"' "$XRAY_UI" \
 	|| fail "xray.html must surface degraded runtime state instead of showing it as healthy active path"
+
+grep -q -- '--socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}"' "$ADMIN_CGI" \
+	|| fail "xray-admin.cgi smoke must verify the local SOCKS path used by transparent traffic"
+
+grep -q '"last_smoke_http_ok":' "$ADMIN_CGI" \
+	|| fail "xray-admin.cgi status must expose whether the local HTTP proxy path also passed smoke checks"
 
 printf 'ok\n'

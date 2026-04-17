@@ -16,6 +16,7 @@ Verification rules:
 - Check both control-plane status and data-plane behavior.
 - When verifying reboot recovery, record when Wi-Fi or HTTP management comes back and when `path_state=active` comes back; eventual recovery alone is not sufficient.
 - If the router is reachable after reboot but `xray_running=true` and `redsocks_running=true` while `transproxy_rule=false`, treat that as a boot regression and keep investigating.
+- When uplink failover or repeater mode is involved, verify that `ip route get <VPS IP>` follows the active uplink instead of a stale dead device before declaring the Xray path healthy.
 - If you cannot test one of the three states on real traffic, say so explicitly in the final report.
 - If a change risks breaking connectivity, inspect firewall/NAT counters and active runtime processes after the change.
 - If Ethernet unplug / Wi-Fi uplink / Wi-Fi client access could be affected, explicitly verify that the router stays reachable over Wi-Fi with Ethernet absent, or say that you could not test it.
@@ -24,6 +25,7 @@ Network topology guardrails:
 - Treat LAN bridge, Wi-Fi, WAN, and firewall zone topology as critical management-plane state.
 - Do not change `network.lan.device`, `network.lan.ifname`, `network.@device[*].ports`, Wi-Fi AP/uplink bindings, or zone attachments by default.
 - Do not enable or re-enable `wireless.*.random_bssid` on management AP radios unless the task explicitly requires unstable AP identities and the user accepts the reconnect risk.
+- Treat same-radio repeater uplink plus client AP service as a management-plane risk. Prefer uplink on the opposite radio from the primary management SSID when the environment allows it, or call out that the active band was not tested under reassociation.
 - Preserve the existing router management path unless the task explicitly requires a topology change.
 - If a topology change is necessary, add a rollback path or post-reload reachability check and verify both wired and Wi-Fi client access when available.
 

@@ -50,6 +50,9 @@ config_ready() {
 while true; do
 	state="$(current_switch_state)"
 	if [ "$state" = on ]; then
+		if config_ready; then
+			/etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true
+		fi
 		if config_ready && ! path_active; then
 			/etc/gl-switch.d/xray.sh on >/dev/null 2>&1 || true
 		fi
