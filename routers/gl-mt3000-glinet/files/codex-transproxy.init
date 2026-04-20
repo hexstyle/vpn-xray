@@ -36,6 +36,30 @@ current_switch_state() {
 	[ -n "$status" ] && echo on || echo off
 }
 
+xray_runtime_ready() {
+	local pid
+
+	pid="$(cat /var/run/codex-xray.pid 2>/dev/null || true)"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+	netstat -ltnp 2>/dev/null | grep -q ':1083 ' || return 1
+	netstat -ltnp 2>/dev/null | grep -q ':1084 ' || return 1
+	return 0
+}
+
+wait_for_xray_runtime() {
+	local tries=0
+
+	while [ "$tries" -lt 8 ]; do
+		if xray_runtime_ready; then
+			return 0
+		fi
+		tries=$((tries + 1))
+		sleep 1
+	done
+
+	return 1
+}
+
 path_requested() {
 	[ "$(current_switch_state)" = 'on' ] || return 1
 	[ -f "$CONFIG_READY_FILE" ] || return 1
@@ -205,12 +229,15 @@ del_filter_rules() {
 }
 
 ensure_codex_xray() {
-	local pid
-	pid="$(cat /var/run/codex-xray.pid 2>/dev/null || true)"
-	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+	if xray_runtime_ready; then
 		return 0
 	fi
-	/etc/init.d/codex-xray start >/dev/null 2>&1
+	/etc/init.d/codex-xray start >/dev/null 2>&1 || return 1
+	if wait_for_xray_runtime; then
+		return 0
+	fi
+	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+	return 1
 }
 
 start() {

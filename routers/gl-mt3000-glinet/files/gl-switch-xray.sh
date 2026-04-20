@@ -3,6 +3,7 @@
 ACTION="$1"
 TAG="gl-switch-xray"
 RUNNER_PID="/var/run/gl-switch-xray-helper.pid"
+RUNNER_ACTION="/var/run/gl-switch-xray-helper.action"
 CONFIG_READY_FILE="/etc/xray/codex-xray.ready"
 ROUTER_CONFIG="/etc/xray/codex-xray.json"
 
@@ -11,8 +12,19 @@ log() {
 }
 
 run_async() {
-	start-stop-daemon -K -p "$RUNNER_PID" -x /bin/sh >/dev/null 2>&1 || true
+	local active_pid active_action
+
+	active_pid="$(cat "$RUNNER_PID" 2>/dev/null || true)"
+	active_action="$(cat "$RUNNER_ACTION" 2>/dev/null || true)"
+	if [ -n "$active_pid" ] && kill -0 "$active_pid" 2>/dev/null; then
+		if [ "$active_action" = "$ACTION" ]; then
+			log "helper already processing action=$ACTION"
+			return 0
+		fi
+		start-stop-daemon -K -p "$RUNNER_PID" -x /bin/sh >/dev/null 2>&1 || true
+	fi
 	rm -f "$RUNNER_PID"
+	printf '%s\n' "$ACTION" > "$RUNNER_ACTION"
 	start-stop-daemon -S -b -m -p "$RUNNER_PID" -x /bin/sh -- -c "$1"
 }
 

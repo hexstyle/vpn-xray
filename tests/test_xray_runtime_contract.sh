@@ -9,6 +9,8 @@ XRAY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.init"
 TRANSPROXY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
 XRAY_UI="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
+ROUTER_RULES="$ROOT/routers/common/files/router-rules"
+SWITCH_HELPER="$ROOT/routers/gl-mt3000-glinet/files/gl-switch-xray.sh"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2
@@ -60,11 +62,32 @@ grep -q 'path_requested()' "$TRANSPROXY_INIT" \
 grep -q 'path_requested || return 0' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must no-op when boot startup is not requested"
 
+grep -q 'wait_for_xray_runtime()' "$TRANSPROXY_INIT" \
+	|| fail "codex-transproxy.init must wait for Xray listeners before keeping transproxy enabled"
+
+grep -q '/etc/init.d/codex-xray stop >/dev/null 2>&1 || true' "$TRANSPROXY_INIT" \
+	|| fail "codex-transproxy.init must roll back codex-xray when the runtime never becomes ready"
+
 grep -q 'ROUTER_RULES_USE_CACHED_RESOLVED=1 /usr/bin/router-rules build-xray-ipset' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must restore selective ipset from cached resolutions before full refresh completes"
 
 grep -q 'ROUTER_RULES_SYNC_ACTOR=boot' "$ROOT/routers/common/files/router-rules-sync.init" \
 	|| fail "router-rules-sync init must run an immediate boot-time apply-xray refresh"
+
+grep -q 'xray_path_requested()' "$ROUTER_RULES" \
+	|| fail "router-rules must gate runtime drift recovery behind the active switch/config state"
+
+grep -q 'xray_runtime_healthy || return 0' "$ROUTER_RULES" \
+	|| fail "router-rules must treat a dead codex-xray runtime as actionable drift"
+
+grep -q 'transproxy_runtime_healthy || return 0' "$ROUTER_RULES" \
+	|| fail "router-rules must treat a dead transparent proxy runtime as actionable drift"
+
+grep -q 'RUNNER_ACTION=' "$SWITCH_HELPER" \
+	|| fail "gl-switch-xray.sh must persist the in-flight action so repeated watchdog retries do not kill the same helper"
+
+grep -q 'helper already processing action=\$ACTION' "$SWITCH_HELPER" \
+	|| fail "gl-switch-xray.sh must ignore duplicate on/off retries while the same helper action is already running"
 
 grep -q '/etc/init.d/codex-xray enable' "$INSTALL_PLATFORM" \
 	|| fail "install-platform must enable codex-xray on boot for fast post-reboot restore"
@@ -77,6 +100,12 @@ grep -q 'data.path_state === "degraded"' "$XRAY_UI" \
 
 grep -q -- '--socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}"' "$ADMIN_CGI" \
 	|| fail "xray-admin.cgi smoke must verify the local SOCKS path used by transparent traffic"
+
+grep -q 'run_https_probe()' "$ADMIN_CGI" \
+	|| fail "xray-admin.cgi smoke must use a reusable HTTPS probe helper instead of a single hard-coded oracle"
+
+grep -q 'https://www.microsoft.com https://example.com' "$ADMIN_CGI" \
+	|| fail "xray-admin.cgi smoke must try a stable HTTPS oracle before falling back to example.com"
 
 grep -q '"last_smoke_http_ok":' "$ADMIN_CGI" \
 	|| fail "xray-admin.cgi status must expose whether the local HTTP proxy path also passed smoke checks"

@@ -200,6 +200,21 @@ wait_for_router_runtime_ready() {
   return 1
 }
 
+wait_for_router_background_services_ready() {
+  local attempt max_attempts sleep_seconds
+
+  max_attempts="${ROUTER_BACKGROUND_READY_ATTEMPTS:-20}"
+  sleep_seconds="${ROUTER_BACKGROUND_READY_INTERVAL:-1}"
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if router_ssh "/etc/init.d/xray-switch-watchdog running >/dev/null 2>&1 && /etc/init.d/router-rules-sync running >/dev/null 2>&1"; then
+      return 0
+    fi
+    sleep "$sleep_seconds"
+  done
+
+  return 1
+}
+
 if [[ "${PREFER_LIVE_VPS_META:-1}" == "1" ]]; then
   current_vps_meta="$(current_vps_xray_meta 2>/dev/null || true)"
   current_vps_runtime_facts="$(current_vps_xray_runtime_facts 2>/dev/null || true)"
@@ -382,7 +397,7 @@ export XRAY_USER_FLOW_BLOCK XRAY_CLIENT_FLOW_BLOCK
 render_template() {
   local input="$1"
   local output="$2"
-  python3 - <<'PY' "$input" "$output"
+  MSYS2_ENV_CONV_EXCL='*' python3 - <<'PY' "$input" "$output"
 import os, pathlib, re, sys
 
 template_path = pathlib.Path(sys.argv[1])
@@ -467,7 +482,7 @@ router_ssh "
   rm -rf $remote_source_root
 "
 
-router_ssh "nohup sh -c '
+router_ssh "
   switch_state=off
   if [ -f /lib/functions/gl_util.sh ]; then
     . /lib/functions/gl_util.sh
@@ -476,7 +491,11 @@ router_ssh "nohup sh -c '
   /etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
   /etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
   /etc/gl-switch.d/xray.sh \"\$switch_state\" >/dev/null 2>&1 || true
-' >/dev/null 2>&1 </dev/null &" >/dev/null 2>&1 || true
+"
+
+if ! wait_for_router_background_services_ready; then
+  echo "Warning: router background supervisors did not report ready before installer exit." >&2
+fi
 
 if ! wait_for_router_runtime_ready; then
   echo "Warning: router runtime did not report ready before installer exit." >&2
