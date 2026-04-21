@@ -18,6 +18,7 @@ ROUTER_ACCESS_LOG='/var/log/xray/codex-xray-access.log'
 ROUTER_ERROR_LOG='/var/log/xray/codex-xray-error.log'
 VPS_PROFILE_ROOT='/usr/share/vpn-xray/vps'
 LOCK_ROOT='/tmp/xray-vps-locks'
+SWITCH_SYNC_WAIT_SECONDS='25'
 SAVE_PROFILE_ERROR=''
 SAVE_PROFILE_ID=''
 
@@ -681,12 +682,17 @@ render_router_config() {
         "network": "raw",
         "security": "reality",
         "realitySettings": {
-          "fingerprint": "chrome",
+          "fingerprint": "edge",
           "serverName": "${server_name}",
           "publicKey": "${public_key}",
           "shortId": "${short_id}",
           "spiderX": "/"
         }
+      },
+      "mux": {
+        "enabled": true,
+        "concurrency": 8,
+        "xudpConcurrency": -1
       }
     }
   ]
@@ -1231,7 +1237,7 @@ resync_runtime_to_switch() {
 		/etc/gl-switch.d/xray.sh "$switch_state" >/dev/null 2>&1 || return 1
 	fi
 	tries=0
-	while [ "$tries" -lt 8 ]; do
+	while [ "$tries" -lt "$SWITCH_SYNC_WAIT_SECONDS" ]; do
 		if [ "$switch_state" = 'on' ]; then
 			if router_path_active; then
 				return 0

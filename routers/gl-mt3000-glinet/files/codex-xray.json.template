@@ -56,12 +56,17 @@
         "network": "raw",
         "security": "reality",
         "realitySettings": {
-          "fingerprint": "chrome",
+          "fingerprint": "edge",
           "serverName": "${XRAY_SERVER_NAME}",
           "publicKey": "${XRAY_PUBLIC_KEY}",
           "shortId": "${XRAY_SHORT_ID}",
           "spiderX": "/"
         }
+      },
+      "mux": {
+        "enabled": true,
+        "concurrency": 8,
+        "xudpConcurrency": -1
       }
     }
   ]

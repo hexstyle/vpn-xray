@@ -17,6 +17,7 @@ LIVE_HTTP_PORT='1083'
 LIVE_SOCKS_PORT='1084'
 CONFIG_READY_FILE='/etc/xray/codex-xray.ready'
 STATUS_FILE='/tmp/xray-admin.status'
+SWITCH_SYNC_WAIT_SECONDS='25'
 
 REQUEST_DATA=''
 
@@ -251,12 +252,17 @@ build_config_file() {
         "network": "raw",
         "security": "reality",
         "realitySettings": {
-          "fingerprint": "chrome",
+          "fingerprint": "edge",
           "serverName": "${server_name}",
           "publicKey": "${public_key}",
           "shortId": "${short_id}",
           "spiderX": "/"
         }
+      },
+      "mux": {
+        "enabled": true,
+        "concurrency": 8,
+        "xudpConcurrency": -1
       }
     }
   ]
@@ -325,7 +331,7 @@ sync_to_hardware_switch() {
 	[ "$switch_state" = 'on' ] || switch_state='off'
 	/etc/gl-switch.d/xray.sh "$switch_state" >/dev/null 2>&1 || return 1
 	tries=0
-	while [ "$tries" -lt 8 ]; do
+	while [ "$tries" -lt "$SWITCH_SYNC_WAIT_SECONDS" ]; do
 		if [ "$switch_state" = 'on' ]; then
 			if runtime_path_active; then
 				return 0

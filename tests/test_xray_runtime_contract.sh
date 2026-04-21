@@ -57,6 +57,24 @@ grep -q '"sniffing": {' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.te
 grep -q '"destOverride": \[' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
 	|| fail "codex-xray.json template must override HTTP/TLS destinations for transparent traffic"
 
+grep -q '"fingerprint": "edge"' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
+	|| fail "router client templates must use an ARM-safe Reality fingerprint"
+
+grep -q '"mux": {' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
+	|| fail "router client templates must enable outbound mux to avoid Reality connection storms under browser load"
+
+grep -q '"fingerprint": "edge"' "$ADMIN_CGI" \
+	|| fail "xray-admin.cgi must render router configs with the ARM-safe Reality fingerprint"
+
+grep -q '"mux": {' "$ADMIN_CGI" \
+	|| fail "xray-admin.cgi must render router configs with outbound mux enabled"
+
+grep -q '"fingerprint": "edge"' "$VPS_CGI" \
+	|| fail "xray-vps.cgi must render router configs with the ARM-safe Reality fingerprint"
+
+grep -q '"mux": {' "$VPS_CGI" \
+	|| fail "xray-vps.cgi must render router configs with outbound mux enabled"
+
 grep -q 'path_requested()' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must gate boot startup behind switch/config readiness"
 
@@ -89,6 +107,24 @@ grep -q 'RUNNER_ACTION=' "$SWITCH_HELPER" \
 
 grep -q 'helper already processing action=\$ACTION' "$SWITCH_HELPER" \
 	|| fail "gl-switch-xray.sh must ignore duplicate on/off retries while the same helper action is already running"
+
+grep -q 'runtime_path_active()' "$SWITCH_HELPER" \
+	|| fail "gl-switch-xray.sh must detect when the runtime is already active before restarting it"
+
+grep -q 'xray_runtime_ready()' "$SWITCH_HELPER" \
+	|| fail "gl-switch-xray.sh must distinguish the Xray core from the transproxy layer during recovery"
+
+grep -q 'transproxy_runtime_ready()' "$SWITCH_HELPER" \
+	|| fail "gl-switch-xray.sh must recover a missing transproxy layer without failing on an already-running Xray core"
+
+grep -q 'wait_for_runtime_state active' "$SWITCH_HELPER" \
+	|| fail "gl-switch-xray.sh must keep its helper alive until the requested active state actually converges"
+
+grep -q "SWITCH_SYNC_WAIT_SECONDS='25'" "$ADMIN_CGI" \
+	|| fail "xray-admin.cgi must wait long enough for async switch resync to converge"
+
+grep -q "SWITCH_SYNC_WAIT_SECONDS='25'" "$VPS_CGI" \
+	|| fail "xray-vps.cgi must wait long enough for async switch resync to converge"
 
 grep -q 'QUERY_STRING=action=smoke' "$WATCHDOG" \
 	|| fail "xray-switch-watchdog must periodically smoke-check an active runtime"
