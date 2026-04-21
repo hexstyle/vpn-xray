@@ -11,6 +11,7 @@ INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
 XRAY_UI="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
 ROUTER_RULES="$ROOT/routers/common/files/router-rules"
 SWITCH_HELPER="$ROOT/routers/gl-mt3000-glinet/files/gl-switch-xray.sh"
+WATCHDOG="$ROOT/routers/gl-mt3000-glinet/files/xray-switch-watchdog.init"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2
@@ -88,6 +89,15 @@ grep -q 'RUNNER_ACTION=' "$SWITCH_HELPER" \
 
 grep -q 'helper already processing action=\$ACTION' "$SWITCH_HELPER" \
 	|| fail "gl-switch-xray.sh must ignore duplicate on/off retries while the same helper action is already running"
+
+grep -q 'QUERY_STRING=action=smoke' "$WATCHDOG" \
+	|| fail "xray-switch-watchdog must periodically smoke-check an active runtime"
+
+grep -q 'QUERY_STRING=action=restart' "$WATCHDOG" \
+	|| fail "xray-switch-watchdog must restart the runtime after repeated smoke failures"
+
+grep -q 'OPENAI_FAILURE_THRESHOLD=' "$WATCHDOG" \
+	|| fail "xray-switch-watchdog must tolerate transient OpenAI-only failures before restarting the runtime"
 
 grep -q '/etc/init.d/codex-xray enable' "$INSTALL_PLATFORM" \
 	|| fail "install-platform must enable codex-xray on boot for fast post-reboot restore"

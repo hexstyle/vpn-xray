@@ -75,6 +75,7 @@ if [ ! -x "$XRAY_BIN" ]; then
   rm -f "$tmp"
 fi
 
+systemctl daemon-reload >/dev/null 2>&1 || true
 runtime_user="$(service_user)"
 runtime_group="$(service_group "$runtime_user")"
 fix_runtime_permissions "$runtime_user" "$runtime_group"

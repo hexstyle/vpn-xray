@@ -19,4 +19,7 @@ grep -q "find \"\\\$XRAY_LOG_DIR\" -maxdepth 1 -type f -name '\\*.log\\*' -exec 
 grep -q "find \"\\\$XRAY_LOG_DIR\" -maxdepth 1 -type f -name '\\*.log\\*' -exec chmod 640" "$REMOTE_INSTALL" \
 	|| fail "install-vps.remote.sh must normalize Xray log permissions before restart"
 
+grep -q 'systemctl daemon-reload >/dev/null 2>&1 || true' "$REMOTE_INSTALL" \
+	|| fail "install-vps.remote.sh must reload systemd before it derives the live Xray runtime user for log ownership"
+
 printf 'ok\n'
