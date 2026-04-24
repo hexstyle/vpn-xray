@@ -15,7 +15,7 @@ VPS_PROFILE="${VPS_PROFILE:-debian-13}"
 VPS_PROFILE_DIR="$(vps_profile_dir "$ROOT_DIR" "$VPS_PROFILE")"
 require_supported_profile vps "$ROOT_DIR" "$VPS_PROFILE"
 load_profile_defaults "$VPS_PROFILE_DIR/profile.env"
-XRAY_PORT="${XRAY_PORT:-443}"
+XRAY_PORT="${XRAY_PORT:-24443}"
 XRAY_FLOW="${XRAY_FLOW:-}"
 
 VPS_SSH="${VPS_SSH:-root@${VPS_HOST:-}}"
@@ -157,7 +157,7 @@ render_template "$VPS_PROFILE_DIR/$VPS_SERVER_CONFIG_TEMPLATE" "$rendered_config
 cat > "$rendered_meta" <<EOF
 PROFILE_ID=${VPS_PROFILE}
 XRAY_HOST=${XRAY_SERVER:-$VPS_HOST}
-XRAY_PORT=${XRAY_PORT:-443}
+XRAY_PORT=${XRAY_PORT:-24443}
 XRAY_UUID=${XRAY_UUID}
 XRAY_SERVER_NAME=${XRAY_SERVER_NAME}
 XRAY_SHORT_ID=${XRAY_SHORT_ID}

@@ -6,35 +6,13 @@ STOP=09
 REDSOCKS_CONF="/etc/redsocks.conf"
 REDSOCKS_PID="/var/run/redsocks.pid"
 XRAY_CONFIG="/etc/xray/codex-xray.json"
-CONFIG_READY_FILE="/etc/xray/codex-xray.ready"
 TCP_CHAIN="CODEX_TRANSPROXY"
 TCP_PORT="12345"
 LEGACY_DNS_CHAIN="CODEX_DNS_LOCAL"
 LEGACY_DOT_CHAIN="CODEX_DOT_PROXY"
 
-current_switch_state() {
-	local model gpio status
-
-	if [ ! -f /proc/gl-hw-info/switch-button ] || [ ! -f /proc/gl-hw-info/model ]; then
-		echo off
-		return
-	fi
-
-	model="$(cat /proc/gl-hw-info/model 2>/dev/null || true)"
-	gpio="$(cat /proc/gl-hw-info/switch-button 2>/dev/null || true)"
-
-	if [ "$model" = "mt3000" ]; then
-		status="$(grep "switch" /sys/kernel/debug/gpio 2>/dev/null | grep "hi" || true)"
-	elif [ "$model" = "axt1800" ] || [ "$model" = "be3600" ]; then
-		status="$(grep "$gpio" /sys/kernel/debug/gpio 2>/dev/null | grep "hi" || true)"
-	elif [ "$model" = "a1300" ]; then
-		status="$(grep "gpio0" /sys/kernel/debug/gpio 2>/dev/null | grep "lo" || true)"
-	else
-		status="$(grep "switch" /sys/kernel/debug/gpio 2>/dev/null | grep "lo" || true)"
-	fi
-
-	[ -n "$status" ] && echo on || echo off
-}
+VX_CONFIG="$XRAY_CONFIG"
+. "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}"
 
 xray_runtime_ready() {
 	local pid
@@ -60,13 +38,6 @@ wait_for_xray_runtime() {
 	return 1
 }
 
-path_requested() {
-	[ "$(current_switch_state)" = 'on' ] || return 1
-	[ -f "$CONFIG_READY_FILE" ] || return 1
-	[ -s "$XRAY_CONFIG" ] || return 1
-	return 0
-}
-
 xray_rule_mode() {
 	uci -q get router_rules.global.xray_mode 2>/dev/null || echo full
 }
@@ -87,17 +58,12 @@ xray_domains_file() {
 	printf '%s/domains.txt\n' "$(rules_generated_dir)"
 }
 
-lan_device() {
-	local value
+xray_source_bypass_file() {
+	uci -q get router_rules.global.xray_source_bypass_file 2>/dev/null || echo /etc/router-rules/generated/source-bypass.txt
+}
 
-	value="$(uci -q get network.lan.device 2>/dev/null || true)"
-	[ -n "$value" ] || value="$(uci -q get network.lan.ifname 2>/dev/null || true)"
-	case "$value" in
-		''|*' '*)
-			value='br-lan'
-			;;
-	esac
-	printf '%s\n' "$value"
+sanitize_source_bypass_entry() {
+	printf '%s' "${1:-}" | tr -d '\r' | sed 's/[[:space:]]*#.*$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
 xray_dnsmasq_ready() {
@@ -154,6 +120,47 @@ resolve_vps_bypass() {
 	[ -n "$resolved" ] && printf '%s/32\n' "$resolved"
 }
 
+add_source_bypass_rules() {
+	local bypass_file source
+
+	bypass_file="$(xray_source_bypass_file)"
+	[ -f "$bypass_file" ] || return 0
+
+	while IFS= read -r source; do
+		source="$(sanitize_source_bypass_entry "$source")"
+		[ -n "$source" ] || continue
+		iptables -t nat -A "$TCP_CHAIN" -s "$source" -j RETURN
+	done < "$bypass_file"
+}
+
+del_source_bypass_filter_rules() {
+	local lan_if bypass_file source
+
+	lan_if="$1"
+	bypass_file="$(xray_source_bypass_file)"
+	[ -f "$bypass_file" ] || return 0
+
+	while IFS= read -r source; do
+		source="$(sanitize_source_bypass_entry "$source")"
+		[ -n "$source" ] || continue
+		iptables_del -D FORWARD -i "$lan_if" -s "$source" -p udp ! --dport 53 -j ACCEPT
+	done < "$bypass_file"
+}
+
+add_source_bypass_filter_rules() {
+	local lan_if bypass_file source
+
+	lan_if="$1"
+	bypass_file="$(xray_source_bypass_file)"
+	[ -f "$bypass_file" ] || return 0
+
+	while IFS= read -r source; do
+		source="$(sanitize_source_bypass_entry "$source")"
+		[ -n "$source" ] || continue
+		iptables -I FORWARD 1 -i "$lan_if" -s "$source" -p udp ! --dport 53 -j ACCEPT
+	done < "$bypass_file"
+}
+
 add_nat_rules() {
 	local bypass_target mode setname lan_if
 
@@ -161,6 +168,7 @@ add_nat_rules() {
 
 	iptables -t nat -N "$TCP_CHAIN" 2>/dev/null || true
 	iptables -t nat -F "$TCP_CHAIN"
+	add_source_bypass_rules
 
 	for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
 		iptables -t nat -A "$TCP_CHAIN" -d "$net" -j RETURN
@@ -216,6 +224,8 @@ add_filter_rules() {
 	# the Xray path over QUIC/UDP or native IPv6 when the path is enabled.
 	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -j REJECT
 	iptables -I FORWARD 1 -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	del_source_bypass_filter_rules "$lan_if"
+	add_source_bypass_filter_rules "$lan_if"
 	ip6tables -D FORWARD -i "$lan_if" -j REJECT 2>/dev/null || true
 	ip6tables -I FORWARD 1 -i "$lan_if" -j REJECT 2>/dev/null || true
 }
@@ -225,6 +235,7 @@ del_filter_rules() {
 
 	lan_if="$(lan_device)"
 	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	del_source_bypass_filter_rules "$lan_if"
 	ip6tables -D FORWARD -i "$lan_if" -j REJECT 2>/dev/null || true
 }
 

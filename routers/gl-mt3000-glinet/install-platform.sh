@@ -881,6 +881,7 @@ EOF
 	cp "$PROFILE_DIR/files/codex-xray-uplink.hotplug" /etc/hotplug.d/iface/95-codex-xray-uplink
 	cp "$PROFILE_DIR/files/xray-switch-watchdog.init" /etc/init.d/xray-switch-watchdog
 	cp "$COMMON_DIR/files/router-rules-sync.init" /etc/init.d/router-rules-sync
+	cp "$COMMON_DIR/files/lib-common.sh" /usr/share/vpn-xray/lib-common.sh
 	cp "$COMMON_DIR/files/router-rules-external.py" /usr/share/vpn-xray/router-rules-external.py
 	cp "$PROFILE_DIR/files/gl-switch-xray.sh" /etc/gl-switch.d/xray.sh
 	cp "$COMMON_DIR/files/router-rules" /usr/bin/router-rules
@@ -896,17 +897,20 @@ EOF
 		/etc/init.d/router-rules-sync \
 		/etc/gl-switch.d/xray.sh \
 		/usr/bin/router-rules \
+		/usr/share/vpn-xray/lib-common.sh \
 		/usr/share/vpn-xray/router-rules-external.py \
 		/www/cgi-bin/xray-admin \
 		/www/cgi-bin/xray-vps \
 		/www/cgi-bin/xray-rules \
 		/www/xray.html
-	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
+	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
 	chmod 644 /www/xray.html
 
 	rm -rf /usr/share/vpn-xray/vps
 	mkdir -p /usr/share/vpn-xray
 	cp -R "$VPS_DIR" /usr/share/vpn-xray/vps
+
+	rm -rf /tmp/router-rules.lock.d /tmp/xray-vps-locks
 
 	info "Applying router integration settings..."
 	uci -q delete firewall.codex_wan_http_proxy_prod >/dev/null 2>&1 || true
@@ -934,6 +938,7 @@ EOF
 	uci set dhcp.lan.ndp='disabled'
 	uci -q delete dhcp.@dnsmasq[0].noresolv >/dev/null 2>&1 || true
 	uci set dhcp.@dnsmasq[0].resolvfile='/tmp/resolv.conf.d/resolv.conf.auto'
+	uci set dhcp.@dnsmasq[0].filter_aaaa='1'
 	uci -q delete dhcp.@dnsmasq[0].server >/dev/null 2>&1 || true
 	uci commit dhcp
 	uci set network.lan.ip6assign='0'

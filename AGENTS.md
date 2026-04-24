@@ -24,6 +24,7 @@ Verification rules:
 
 Network topology guardrails:
 - Treat LAN bridge, Wi-Fi, WAN, and firewall zone topology as critical management-plane state.
+- IPv6 is disabled in this stack and must remain disabled. Do not enable, re-enable, or rely on IPv6 for routing, firewalling, DNS, RA, DHCPv6, management access, or client connectivity.
 - Do not change `network.lan.device`, `network.lan.ifname`, `network.@device[*].ports`, Wi-Fi AP/uplink bindings, or zone attachments by default.
 - Do not enable or re-enable `wireless.*.random_bssid` on management AP radios unless the task explicitly requires unstable AP identities and the user accepts the reconnect risk.
 - Treat same-radio repeater uplink plus client AP service as a management-plane risk. Prefer uplink on the opposite radio from the primary management SSID when the environment allows it, or call out that the active band was not tested under reassociation.

@@ -24,53 +24,9 @@ SAVE_PROFILE_ID=''
 
 REQUEST_DATA=''
 
-json_escape() {
-	local data="${1:-}"
-	data="${data//\\/\\\\}"
-	data="${data//\"/\\\"}"
-	data="${data//	/\\t}"
-	printf '%s' "$data" | tr '\r' ' ' | tr '\n' ' ' | sed 's/  */ /g'
-}
-
-json_bool() {
-	if [ "${1:-0}" = '1' ]; then
-		printf 'true'
-	else
-		printf 'false'
-	fi
-}
-
-url_decode() {
-	local data="${1:-}"
-	data="${data//+/ }"
-	printf '%b' "$(printf '%s' "$data" | sed 's/%/\\x/g')"
-}
-
-load_request_data() {
-	local len
-
-	if [ "${REQUEST_METHOD:-GET}" = 'POST' ]; then
-		len="${CONTENT_LENGTH:-0}"
-		case "$len" in
-			''|*[!0-9]*)
-				len=0
-				;;
-		esac
-		if [ "$len" -gt 0 ]; then
-			dd bs=1 count="$len" 2>/dev/null || true
-		fi
-	else
-		printf '%s' "${QUERY_STRING:-}"
-	fi
-}
-
-request_value() {
-	local key="$1"
-	local raw=''
-
-	raw="$(printf '%s' "$REQUEST_DATA" | tr '&' '\n' | sed -n "s/^${key}=//p" | sed -n '1p')"
-	url_decode "$raw"
-}
+VX_CONFIG="$ROUTER_CONFIG"
+VX_CONFIG_READY="$ROUTER_READY_FILE"
+. "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}"
 
 valid_port() {
 	local value="$1"
@@ -87,24 +43,6 @@ valid_port() {
 save_profile_fail() {
 	SAVE_PROFILE_ERROR="$1"
 	return 1
-}
-
-emit_header() {
-	printf 'Content-Type: application/json\r\n'
-	printf 'Cache-Control: no-store\r\n'
-	printf '\r\n'
-}
-
-emit_error() {
-	local action="$1"
-	local message="$2"
-
-	emit_header
-	printf '{'
-	printf '"ok":false,'
-	printf '"action":"%s",' "$(json_escape "$action")"
-	printf '"error":"%s"' "$(json_escape "$message")"
-	printf '}'
 }
 
 config_value() {
@@ -137,38 +75,6 @@ router_live_value() {
 			config_value '@.outbounds[0].settings.vnext[0].users[0].flow'
 			;;
 	esac
-}
-
-current_switch_state() {
-	local model gpio status
-
-	if [ ! -f /proc/gl-hw-info/switch-button ] || [ ! -f /proc/gl-hw-info/model ]; then
-		echo 'unknown'
-		return
-	fi
-
-	model="$(cat /proc/gl-hw-info/model 2>/dev/null || true)"
-	gpio="$(cat /proc/gl-hw-info/switch-button 2>/dev/null || true)"
-	if [ -z "$model" ] || [ -z "$gpio" ]; then
-		echo 'unknown'
-		return
-	fi
-
-	if [ "$model" = 'mt3000' ]; then
-		status="$(grep 'switch' /sys/kernel/debug/gpio 2>/dev/null | grep 'hi' || true)"
-	elif [ "$model" = 'axt1800' ] || [ "$model" = 'be3600' ]; then
-		status="$(grep "$gpio" /sys/kernel/debug/gpio 2>/dev/null | grep 'hi' || true)"
-	elif [ "$model" = 'a1300' ]; then
-		status="$(grep 'gpio0' /sys/kernel/debug/gpio 2>/dev/null | grep 'lo' || true)"
-	else
-		status="$(grep 'switch' /sys/kernel/debug/gpio 2>/dev/null | grep 'lo' || true)"
-	fi
-
-	if [ -n "$status" ]; then
-		echo 'on'
-	else
-		echo 'off'
-	fi
 }
 
 router_current_json() {
@@ -211,33 +117,8 @@ ensure_dirs() {
 with_lock_dir() {
 	local lock_dir="$1"
 	local cmd="$2"
-	local holder tries rc
-
 	shift 2
-	holder=''
-	tries=0
-
-	while ! mkdir "$lock_dir" 2>/dev/null; do
-		holder=''
-		[ -f "$lock_dir/pid" ] && holder="$(cat "$lock_dir/pid" 2>/dev/null | sed -n '1p')"
-		if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-			rm -rf "$lock_dir"
-			continue
-		fi
-		tries=$((tries + 1))
-		if [ "$tries" -ge 60 ]; then
-			return 1
-		fi
-		sleep 1
-	done
-
-	printf '%s\n' "$$" > "$lock_dir/pid"
-	trap 'rm -rf "$lock_dir"' EXIT INT TERM
-	"$cmd" "$@"
-	rc=$?
-	trap - EXIT INT TERM
-	rm -rf "$lock_dir"
-	return "$rc"
+	with_flock "${lock_dir%.lock.d}.flock" 60 "$cmd" "$@"
 }
 
 sanitize_id() {
@@ -724,7 +605,7 @@ render_vps_profile_template() {
 
 	vps_profile="$(selected_vps_profile "$profile_id")"
 	xray_port="$(profile_get "$profile_id" server_port)"
-	[ -n "$xray_port" ] || xray_port='443'
+	[ -n "$xray_port" ] || xray_port='24443'
 	xray_flow="$(profile_get "$profile_id" flow)"
 	xray_uuid="$(profile_get "$profile_id" uuid)"
 	xray_server_name="$(profile_get "$profile_id" server_name)"
@@ -1316,7 +1197,7 @@ save_profile_from_request() {
 	[ -n "$server_address" ] || server_address="$ssh_host"
 	[ -n "$ssh_port" ] || ssh_port='22'
 	[ -n "$ssh_user" ] || ssh_user='root'
-	[ -n "$server_port" ] || server_port='443'
+	[ -n "$server_port" ] || server_port='24443'
 	valid_port "$ssh_port" || {
 		save_profile_fail 'SSH port must be in the range 1-65535.'
 		return 1
@@ -1383,7 +1264,7 @@ create_profile_action() {
 	profile_set "$profile_id" ssh_port '22'
 	profile_set "$profile_id" ssh_user 'root'
 	profile_set "$profile_id" server_address ''
-	profile_set "$profile_id" server_port '443'
+	profile_set "$profile_id" server_port '24443'
 	profile_set "$profile_id" server_name "$(default_server_name_for_profile "$(default_vps_profile)")"
 	profile_set "$profile_id" flow ''
 	profile_del "$profile_id" ssh_password
@@ -1816,14 +1697,27 @@ apply_everything_action() {
 		fi
 	fi
 
+	local router_backup=''
+	if [ -f "$ROUTER_CONFIG" ]; then
+		router_backup="${ROUTER_CONFIG}.rollback.$$"
+		cp "$ROUTER_CONFIG" "$router_backup"
+	fi
+
 	setup_vps_internal "$profile_id" || {
+		rm -f "$router_backup"
 		emit_error apply_profile 'Failed to sync the selected VPS.'
 		return 0
 	}
-	apply_profile_to_router_internal "$profile_id" >/dev/null || {
-		emit_error apply_profile 'VPS was synced, but applying the profile to the router failed.'
+	if ! apply_profile_to_router_internal "$profile_id" >/dev/null; then
+		if [ -n "$router_backup" ] && [ -f "$router_backup" ]; then
+			cp "$router_backup" "$ROUTER_CONFIG"
+			resync_runtime_to_switch || true
+		fi
+		rm -f "$router_backup"
+		emit_error apply_profile 'VPS was synced, but applying the profile to the router failed. Router config rolled back.'
 		return 0
-	}
+	fi
+	rm -f "$router_backup"
 
 	emit_status_response apply_profile
 }

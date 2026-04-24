@@ -81,6 +81,13 @@ runtime_group="$(service_group "$runtime_user")"
 fix_runtime_permissions "$runtime_user" "$runtime_group"
 "$XRAY_BIN" run -test -config /tmp/codex-router-vps-config.json >/dev/null 2>&1
 
+if command -v ufw >/dev/null 2>&1; then
+  ufw_state="$(ufw status 2>/dev/null | sed -n '1p' || true)"
+  if [ "$ufw_state" = 'Status: active' ]; then
+    ufw allow "${XRAY_PORT}/tcp" >/dev/null 2>&1 || true
+  fi
+fi
+
 if [ -f "$XRAY_CONFIG_PATH" ]; then
   cp "$XRAY_CONFIG_PATH" "$XRAY_CONFIG_PATH.bak.$(date +%Y%m%d%H%M%S)"
 fi

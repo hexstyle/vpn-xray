@@ -10,44 +10,17 @@ EXTRA_HELP="	status			Show runtime status
 NAME="codex-xray"
 BIN="/usr/local/bin/codex-xray-core"
 CONFIG="/etc/xray/codex-xray.json"
-CONFIG_READY_FILE="/etc/xray/codex-xray.ready"
 PIDFILE="/var/run/${NAME}.pid"
 MPTCP_STATE_FILE="/var/run/${NAME}.mptcp"
 LOG_DIR="/var/log/xray"
 LOCAL_MANGLE_CHAIN="CODEX_XRAY_LOCAL"
 SERVER_ROUTE_STATE_FILE="/var/run/${NAME}.server-routes"
 UPLINK_STATE_FILE="/var/run/${NAME}.uplink"
+OFFLOAD_STATE_DIR="/var/run/${NAME}.offload"
+OFFLOAD_WAN_FILE="/var/run/${NAME}.wan"
 
-current_switch_state() {
-	local model gpio status
-
-	if [ ! -f /proc/gl-hw-info/switch-button ] || [ ! -f /proc/gl-hw-info/model ]; then
-		echo off
-		return
-	fi
-
-	model="$(cat /proc/gl-hw-info/model 2>/dev/null || true)"
-	gpio="$(cat /proc/gl-hw-info/switch-button 2>/dev/null || true)"
-
-	if [ "$model" = "mt3000" ]; then
-		status="$(grep "switch" /sys/kernel/debug/gpio 2>/dev/null | grep "hi" || true)"
-	elif [ "$model" = "axt1800" ] || [ "$model" = "be3600" ]; then
-		status="$(grep "$gpio" /sys/kernel/debug/gpio 2>/dev/null | grep "hi" || true)"
-	elif [ "$model" = "a1300" ]; then
-		status="$(grep "gpio0" /sys/kernel/debug/gpio 2>/dev/null | grep "lo" || true)"
-	else
-		status="$(grep "switch" /sys/kernel/debug/gpio 2>/dev/null | grep "lo" || true)"
-	fi
-
-	[ -n "$status" ] && echo on || echo off
-}
-
-path_requested() {
-	[ "$(current_switch_state)" = 'on' ] || return 1
-	[ -f "$CONFIG_READY_FILE" ] || return 1
-	[ -s "$CONFIG" ] || return 1
-	return 0
-}
+VX_CONFIG="$CONFIG"
+. "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}"
 
 config_value() {
 	local expr="$1"
@@ -209,6 +182,85 @@ is_running() {
 	[ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
 }
 
+wan_device() {
+	local probe dev
+
+	probe="$(resolve_server_ipv4s | sed -n '1p')"
+	[ -n "$probe" ] || probe="$(server_address)"
+	[ -n "$probe" ] || return 0
+
+	if command -v ip >/dev/null 2>&1; then
+		dev="$(ip route get "$probe" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | sed -n '1p')"
+		[ -n "$dev" ] || dev="$(ip route 2>/dev/null | sed -n 's/^default .* dev \([^ ]*\).*/\1/p' | sed -n '1p')"
+	else
+		dev="$(route -n 2>/dev/null | awk '$1=="0.0.0.0"{print $8; exit}')"
+	fi
+
+	[ -n "$dev" ] && printf '%s\n' "$dev"
+}
+
+ethtool_feature_state() {
+	local dev="$1"
+	local name="$2"
+
+	ethtool -k "$dev" 2>/dev/null | sed -n "s/^${name}: \(on\|off\).*/\1/p" | sed -n '1p'
+}
+
+save_offload_state() {
+	local dev file state
+
+	command -v ethtool >/dev/null 2>&1 || return 0
+	dev="$(wan_device || true)"
+	[ -n "$dev" ] || return 0
+
+	mkdir -p "$OFFLOAD_STATE_DIR"
+	file="$OFFLOAD_STATE_DIR/$dev"
+
+	if [ ! -s "$file" ]; then
+		{
+			printf 'rx=%s\n' "$(ethtool_feature_state "$dev" 'rx-checksumming')"
+			printf 'tx=%s\n' "$(ethtool_feature_state "$dev" 'tx-checksumming')"
+			printf 'sg=%s\n' "$(ethtool_feature_state "$dev" 'scatter-gather')"
+			printf 'tso=%s\n' "$(ethtool_feature_state "$dev" 'tcp-segmentation-offload')"
+			printf 'gso=%s\n' "$(ethtool_feature_state "$dev" 'generic-segmentation-offload')"
+			printf 'gro=%s\n' "$(ethtool_feature_state "$dev" 'generic-receive-offload')"
+		} > "$file"
+	fi
+
+	printf '%s\n' "$dev" > "$OFFLOAD_WAN_FILE"
+	ethtool -K "$dev" rx off tx off sg off tso off gso off gro off >/dev/null 2>&1 || true
+}
+
+restore_offload_state() {
+	local dev file rx tx sg tso gso gro
+
+	command -v ethtool >/dev/null 2>&1 || return 0
+	[ -f "$OFFLOAD_WAN_FILE" ] || return 0
+
+	dev="$(cat "$OFFLOAD_WAN_FILE" 2>/dev/null || true)"
+	file="$OFFLOAD_STATE_DIR/$dev"
+	rm -f "$OFFLOAD_WAN_FILE"
+	[ -n "$dev" ] || return 0
+	[ -s "$file" ] || return 0
+
+	rx="$(sed -n 's/^rx=//p' "$file" | sed -n '1p')"
+	tx="$(sed -n 's/^tx=//p' "$file" | sed -n '1p')"
+	sg="$(sed -n 's/^sg=//p' "$file" | sed -n '1p')"
+	tso="$(sed -n 's/^tso=//p' "$file" | sed -n '1p')"
+	gso="$(sed -n 's/^gso=//p' "$file" | sed -n '1p')"
+	gro="$(sed -n 's/^gro=//p' "$file" | sed -n '1p')"
+
+	[ -n "$rx" ] && ethtool -K "$dev" rx "$rx" >/dev/null 2>&1 || true
+	[ -n "$tx" ] && ethtool -K "$dev" tx "$tx" >/dev/null 2>&1 || true
+	[ -n "$sg" ] && ethtool -K "$dev" sg "$sg" >/dev/null 2>&1 || true
+	[ -n "$tso" ] && ethtool -K "$dev" tso "$tso" >/dev/null 2>&1 || true
+	[ -n "$gso" ] && ethtool -K "$dev" gso "$gso" >/dev/null 2>&1 || true
+	[ -n "$gro" ] && ethtool -K "$dev" gro "$gro" >/dev/null 2>&1 || true
+
+	rm -f "$file"
+	rmdir "$OFFLOAD_STATE_DIR" 2>/dev/null || true
+}
+
 clear_local_tcpmss() {
 	iptables -t mangle -D POSTROUTING -j "$LOCAL_MANGLE_CHAIN" 2>/dev/null || true
 	iptables -t mangle -F "$LOCAL_MANGLE_CHAIN" 2>/dev/null || true
@@ -313,6 +365,7 @@ start() {
 
 	refresh_egress_route
 	save_mptcp_state
+	save_offload_state
 	start-stop-daemon -S -b -m -p "$PIDFILE" -x "$BIN" -- run -config "$CONFIG"
 }
 
@@ -323,6 +376,7 @@ stop() {
 	clear_server_routes
 	record_uplink_signature ''
 	restore_mptcp_state
+	restore_offload_state
 }
 
 restart() {

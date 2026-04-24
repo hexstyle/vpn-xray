@@ -15,57 +15,7 @@ RULES_EXTERNAL_SYNC_TIMEOUT='600'
 RULES_TEXT_PREVIEW_LINES='400'
 UI_JOB_CONSOLE_FILE='/tmp/router-rules.ui-job.console'
 
-emit_header() {
-	printf 'Content-Type: application/json\r\n'
-	printf 'Cache-Control: no-store\r\n'
-	printf '\r\n'
-}
-
-json_escape() {
-	printf '%s' "${1:-}" | sed ':a;N;$!ba;s/\\/\\\\/g;s/"/\\"/g;s/\r/\\r/g;s/\t/\\t/g;s/\n/\\n/g'
-}
-
-emit_error() {
-	local action="$1"
-	local message="$2"
-
-	emit_header
-	printf '{'
-	printf '"ok":false,'
-	printf '"action":"%s",' "$(json_escape "$action")"
-	printf '"error":"%s"' "$(json_escape "$message")"
-	printf '}'
-}
-
-url_decode() {
-	local data="${1:-}"
-	data="${data//+/ }"
-	printf '%b' "$(printf '%s' "$data" | sed 's/%/\\x/g')"
-}
-
-load_request_data() {
-	local len
-
-	if [ "${REQUEST_METHOD:-GET}" = 'POST' ]; then
-		len="${CONTENT_LENGTH:-0}"
-		case "$len" in
-			''|*[!0-9]*) len=0 ;;
-		esac
-		if [ "$len" -gt 0 ]; then
-			dd bs=1 count="$len" 2>/dev/null || true
-		fi
-	else
-		printf '%s' "${QUERY_STRING:-}"
-	fi
-}
-
-request_value() {
-	local key="$1"
-	local raw=''
-
-	raw="$(printf '%s' "$REQUEST_DATA" | tr '&' '\n' | sed -n "s/^${key}=//p" | sed -n '1p')"
-	url_decode "$raw"
-}
+. "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}"
 
 request_has_key() {
 	printf '%s' "$REQUEST_DATA" | tr '&' '\n' | grep -q "^$1="
@@ -805,15 +755,15 @@ sync_action() {
 		/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
 		if command -v timeout >/dev/null 2>&1; then
 			if [ -s "$tmp" ]; then
-				ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules save-sync-apply-xray "$tmp" >"$run_log" 2>&1 || rc=$?
+				ROUTER_RULES_FORCE_GIT=1 ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules save-sync-apply-xray "$tmp" >"$run_log" 2>&1 || rc=$?
 			else
-				ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules sync-apply-xray >"$run_log" 2>&1 || rc=$?
+				ROUTER_RULES_FORCE_GIT=1 ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' timeout 180 /usr/bin/router-rules sync-apply-xray >"$run_log" 2>&1 || rc=$?
 			fi
 		else
 			if [ -s "$tmp" ]; then
-				ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules save-sync-apply-xray "$tmp" >"$run_log" 2>&1 || rc=$?
+				ROUTER_RULES_FORCE_GIT=1 ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules save-sync-apply-xray "$tmp" >"$run_log" 2>&1 || rc=$?
 			else
-				ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules sync-apply-xray >"$run_log" 2>&1 || rc=$?
+				ROUTER_RULES_FORCE_GIT=1 ROUTER_RULES_SYNC_MODE="$sync_mode" ROUTER_RULES_BASE_HEAD="$base_repo_head" ROUTER_RULES_SYNC_ACTOR='ui-sync' /usr/bin/router-rules sync-apply-xray >"$run_log" 2>&1 || rc=$?
 			fi
 		fi
 		if [ "$rc" -eq 0 ]; then

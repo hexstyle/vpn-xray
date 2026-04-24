@@ -1456,9 +1456,9 @@
       if (lastSyncStatus === "ok") {
         return {
           chipClass: "ok",
-          label: gitReadonly ? "ready (read-only)" : "ready",
+          label: gitReadonly ? "ready (pull-only)" : "ready",
           detail: probeMessage || (gitReadonly
-            ? "Git sync is healthy in read-only mode."
+            ? "Git sync is healthy in pull-only mode. Pull is available, and Push stays disabled until write credentials are configured."
             : "Git sync is healthy. Pull is ready, and Push can be attempted explicitly from the UI.")
         };
       }
@@ -1502,6 +1502,38 @@
         return !(httpUsername || httpPassword);
       }
       return rulesGitReadonlyLive();
+    }
+
+    function rulesSyncStrategyLabel(strategy) {
+      switch (strategy || "") {
+        case "remote":
+          return "matches fetched Git file";
+        case "exact-local":
+          return "exact local working copy";
+        case "merge-preserve-both":
+          return "Git base + local unique rules";
+        case "local-ahead":
+          return "local copy ahead of fetched Git head";
+        case "local-apply":
+          return "local apply only";
+        case "local-only":
+          return "local-only";
+        default:
+          return strategy || "(unknown)";
+      }
+    }
+
+    function rulesWorkingCopyDetail(data = state.rules) {
+      switch (data?.last_sync_strategy || "") {
+        case "remote":
+          return "This editor currently matches the fetched Git file.";
+        case "merge-preserve-both":
+          return "This editor shows the router working copy. The last sync kept the Git file as the base and appended unique router-local rules.";
+        case "local-ahead":
+          return "This editor shows the router working copy, which currently has local edits ahead of the last fetched Git head.";
+        default:
+          return "This editor shows the router working copy of the shared list.";
+      }
     }
 
     function renderRulesModeUi(data = state.rules) {
@@ -1890,6 +1922,7 @@
       const lastRemoteProbeAt = data.last_remote_probe_at ? ` · ${formatUnixTime(data.last_remote_probe_at)}` : "";
       const gitHealth = deriveRulesGitHealth(data);
       const gitHealthDetail = gitHealth.detail || "(no detail)";
+      const syncStrategy = rulesSyncStrategyLabel(data.last_sync_strategy || "");
       const lastExternalStatus = data.last_external_status || "never";
       const lastExternalAt = data.last_external_run_at ? ` · ${formatUnixTime(data.last_external_run_at)}` : "";
       const lastCutoverStatus = data.last_cutover_status || "never";
@@ -1923,6 +1956,7 @@
         ["Current phase", `${currentPhase}${phaseAt}`],
         ["Phase detail", data.sync_phase_message || "(no detail)"],
         ["Sync status", `${lastSyncStatus}${lastSyncAt} · actor=${syncActor}`],
+        ["Working copy strategy", syncStrategy],
         ["Runtime state", runtimeState],
         ["Last reset", `${lastCutoverStatus}${lastCutoverAt}`],
         ["Last verified", formatUnixTime(data.last_verified_at)]
@@ -1935,6 +1969,7 @@
         `Routing mode: ${mode}${modePending ? " (apply in progress)" : ""}`,
         `Git sync state: ${gitHealth.label}`,
         `Git sync detail: ${gitHealthDetail}`,
+        `Working copy strategy: ${syncStrategy}`,
         `Counts: ${counts}`,
         data.last_remote_probe_message ? `Remote probe: ${data.last_remote_probe_message}` : "",
         data.last_sync_message ? `Sync message: ${data.last_sync_message}` : "",
@@ -1960,8 +1995,9 @@
         `Sync interval: ${intervalSeconds}s`,
         `Repo dirty: ${data.repo_dirty ? "yes" : "no"}`,
         `Auth mode: ${data.git_auth_mode || "none"}`,
-        `Access mode: ${gitReadonly ? "read-only" : "read-write"}`,
-        `Push path: ${gitReadonly ? "blocked by read-only auth" : "available through the Push button"}`,
+        `Access mode: ${gitReadonly ? "pull-only" : "read-write"}`,
+        `Push path: ${gitReadonly ? "disabled until write auth is configured" : "available through the Push button"}`,
+        `Working copy strategy: ${syncStrategy}`,
         `Managed source files enabled: ${enabledExternalSources.length}/${externalSources.length}`,
         `External interval: ${externalIntervalSeconds}s`,
         `External due now: ${externalDue ? "yes" : "no"}`,
@@ -2062,9 +2098,6 @@
           ].join("\n");
         }
       }
-      if (data.git_readonly && state.rulesDirty) {
-        clearRulesDirty();
-      }
       renderRulesModeUi(data);
       if (!state.rulesDirty) {
         const editor = document.getElementById("rulesText");
@@ -2100,16 +2133,15 @@
       const gitConfigured = !!state.rules?.git_configured;
       const gitReadonly = rulesGitReadonlyLive();
       const backendJobRunning = rulesJobIsRunning(state.rules);
+      const workingCopyDetail = rulesWorkingCopyDetail(state.rules);
       const editor = document.getElementById("rulesText");
       if (applyButton) {
         applyButton.textContent = state.rulesDirty ? "Save Local + Apply" : "Apply Local Rules";
-        applyButton.disabled = state.foregroundBusy || backendJobRunning || gitReadonly;
-        applyButton.title = gitReadonly
-          ? "This router is in read-only Git mode. Pull from Git instead of editing locally."
-          : "";
+        applyButton.disabled = state.foregroundBusy || backendJobRunning;
+        applyButton.title = "";
       }
       if (pullButton) {
-        pullButton.textContent = state.rulesDirty && !gitReadonly ? "Pull + Merge Into Local" : "Pull From Git";
+        pullButton.textContent = state.rulesDirty ? "Pull + Merge Into Local" : "Pull From Git";
         pullButton.disabled = state.foregroundBusy || backendJobRunning || !gitConfigured;
         pullButton.title = gitConfigured
           ? ""
@@ -2121,19 +2153,17 @@
         pushButton.title = !gitConfigured
           ? "Configure and validate Git sync first."
           : gitReadonly
-          ? "Push is unavailable in read-only Git mode."
+          ? "Push stays unavailable until write credentials are configured."
           : "";
       }
       if (editor) {
-        editor.readOnly = gitReadonly || !state.rulesTextLoaded;
+        editor.readOnly = !state.rulesTextLoaded;
         editor.placeholder = state.rulesTextLoaded
           ? ""
           : "The full shared rules list is not auto-loaded after large imports. Click 'Load Current List' before editing.";
-        editor.title = gitReadonly
-          ? "This repository is synced in read-only mode. Edit the upstream repository instead of editing rules on the router."
-          : !state.rulesTextLoaded
+        editor.title = !state.rulesTextLoaded
           ? "Load the current shared rules list before editing so the UI does not overwrite a large router-side file blindly."
-          : "";
+          : workingCopyDetail;
       }
       if (loadButton) {
         loadButton.textContent = state.rulesTextLoaded ? "Reload Current List" : "Load Current List";
@@ -2146,15 +2176,17 @@
         if (!state.rulesTextLoaded) {
           hint.textContent = `Live status stays lightweight after large imports, so the full shared list is not auto-loaded into the editor. Click 'Load Current List' before editing or saving text changes. ${applyScope}`;
         } else if (gitReadonly) {
-          hint.textContent = `Git sync is active in read-only mode. The upstream repository is the source of truth, so editing on the router is locked. Use sync to pull the latest list from Git. ${applyScope}`;
+          hint.textContent = state.rulesDirty
+            ? `You have unsaved local edits in the router working copy. Pull merges the fetched Git file into it while keeping unique local rules, and Push stays unavailable until write credentials are configured. ${workingCopyDetail} ${applyScope}`
+            : `Git sync is active in pull-only mode. You can still edit and apply the router working copy locally. Pull refreshes it from Git, and Push stays unavailable until write credentials are configured. ${workingCopyDetail} ${applyScope}`;
         } else if (!gitSyncEnabled || !gitConfigured) {
           hint.textContent = state.rulesDirty
             ? `You have unsaved local edits. Saving applies the local text list directly on this router without any Git sync. ${applyScope}`
             : `Git sync is disabled. The text area below is the authoritative local rules list for this router. ${applyScope}`;
         } else {
           hint.textContent = state.rulesDirty
-            ? `You have unsaved local edits. Apply saves them only on this router. Pull merges remote changes into the local file while preserving manual notes and keeping both unique versions of changed lines. Push saves the local file, fetches remote changes, preserves both unique versions on conflict, and then pushes to Git. ${applyScope}`
-            : `Pull fetches Git and merges it into the local operator file while keeping manual notes. Push commits the current local operator file after preserving both unique sides of a conflict. Comment-only edits no longer trigger a full runtime reset. ${applyScope}`;
+            ? `You have unsaved local edits. Apply saves them only on this router. Pull merges the fetched Git file into the router working copy while preserving unique local rules. Push saves the working copy, preserves both unique sides of a conflict, and then pushes to Git. ${workingCopyDetail} ${applyScope}`
+            : `This editor shows the router working copy of the shared list. Pull refreshes it from Git while keeping unique local rules on conflict. Push commits the current working copy after preserving both unique sides of a conflict. Comment-only edits no longer trigger a full runtime reset. ${workingCopyDetail} ${applyScope}`;
         }
       }
     }
@@ -2195,13 +2227,13 @@
       if (saveButton) {
         saveButton.textContent = !syncEnabled
           ? "Save Local-Only Mode"
-          : (projectedReadonly ? "Save Read-only Git Settings" : "Save Git Settings");
+          : (projectedReadonly ? "Save Pull-Only Git Settings" : "Save Git Settings");
       }
       if (sshHint) {
         sshHint.textContent = !syncEnabled
           ? "SSH key settings stay unused until Git sync is enabled."
           : readonlyAuth
-          ? "Read-only Git mode does not use an SSH key on the router."
+          ? "Pull-only Git mode does not use an SSH key on the router."
           : authMode === "ssh"
           ? "Paste a private key only if you want to replace the router's stored git SSH key. Otherwise the existing/generated key stays in place."
           : "SSH key replacement is only used when Git Auth is set to SSH.";
@@ -2209,14 +2241,14 @@
       if (syncHint) {
         syncHint.textContent = syncEnabled
           ? (projectedReadonly
-            ? "When enabled in read-only mode, the router tries to pull the configured remote rules file anonymously from the configured repository or GitHub file URL. Local editing and Push stay locked."
+            ? "When enabled in pull-only mode, the router pulls the configured remote rules file anonymously from the configured repository or GitHub file URL. Local editing on the router stays available, but Push stays disabled."
             : "When enabled, the router checks that the configured remote rules file exists before saving the sync settings.")
           : "With Git sync disabled, the router uses only the local text list below and never pulls from Git.";
       }
       if (syncStateText && state.rulesConfigDirty) {
         syncStateText.textContent = !syncEnabled
           ? "Git sync will stay disabled after save."
-          : (projectedReadonly ? "Read-only Git sync will be enabled after save." : "Git sync will be enabled after save.");
+          : (projectedReadonly ? "Pull-only Git sync will be enabled after save." : "Git sync will be enabled after save.");
         syncStateText.className = `toggle-state ${syncEnabled ? "warn" : ""}`;
       }
       if (usernameInput) {
@@ -2256,7 +2288,7 @@
         if (externalJobRunning) {
           externalHint.textContent = `Managed source refresh is running on the router. Preview and stored-file viewing stay available while the refresh job works in the background. ${state.rules?.ui_job_message || ""}`.trim();
         } else if (projectedReadonly) {
-          externalHint.textContent = "Managed source preview and viewing stay available in read-only Git mode. Snapshot refresh is still allowed because it only updates the router-local stored files, not the upstream Git rules file.";
+          externalHint.textContent = "Managed source preview and viewing stay available in pull-only Git mode. Snapshot refresh is still allowed because it only updates the router-local stored files, not the upstream Git rules file.";
         } else if (!enabledSourceIds.length) {
           externalHint.textContent = "Background refresh can keep stored managed snapshots current, but none of them currently join the effective routing ruleset because every Apply toggle is off.";
         } else {
@@ -2504,7 +2536,7 @@
           base_repo_head: state.rulesEditorBaseHead || state.rules?.repo_head || "",
           sync_mode: mode
         };
-        if (state.rulesDirty && state.rulesTextLoaded && !rulesGitReadonlyLive()) {
+        if (state.rulesDirty && state.rulesTextLoaded) {
           payload.rules_text = document.getElementById("rulesText").value;
         }
         const data = await callApi(rulesApi, "sync_rules", payload, { timeoutMs: RULES_STATUS_TIMEOUT_MS });

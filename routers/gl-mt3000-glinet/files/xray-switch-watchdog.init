@@ -10,29 +10,7 @@ ADMIN_CGI="/www/cgi-bin/xray-admin"
 start_service() {
 	procd_open_instance
 	procd_set_param command /bin/sh -c '
-current_switch_state() {
-	local model gpio status
-
-	if [ ! -f /proc/gl-hw-info/switch-button ] || [ ! -f /proc/gl-hw-info/model ]; then
-		echo off
-		return
-	fi
-
-	model="$(cat /proc/gl-hw-info/model 2>/dev/null || true)"
-	gpio="$(cat /proc/gl-hw-info/switch-button 2>/dev/null || true)"
-
-	if [ "$model" = "mt3000" ]; then
-		status="$(grep "switch" /sys/kernel/debug/gpio 2>/dev/null | grep "hi" || true)"
-	elif [ "$model" = "axt1800" ] || [ "$model" = "be3600" ]; then
-		status="$(grep "$gpio" /sys/kernel/debug/gpio 2>/dev/null | grep "hi" || true)"
-	elif [ "$model" = "a1300" ]; then
-		status="$(grep "gpio0" /sys/kernel/debug/gpio 2>/dev/null | grep "lo" || true)"
-	else
-		status="$(grep "switch" /sys/kernel/debug/gpio 2>/dev/null | grep "lo" || true)"
-	fi
-
-	[ -n "$status" ] && echo on || echo off
-}
+. /usr/share/vpn-xray/lib-common.sh
 
 path_active() {
 	local xpid rpid

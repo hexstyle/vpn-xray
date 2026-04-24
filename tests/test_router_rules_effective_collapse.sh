@@ -9,7 +9,7 @@ PYTHON_GENERATOR="$ROOT/routers/common/files/router-rules-external.py"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT INT TERM
 
-ROUTER_RULES_LIB_ONLY=1 . "$ROUTER_RULES_FILE"
+VX_LIB_COMMON="$ROOT/routers/common/files/lib-common.sh" ROUTER_RULES_LIB_ONLY=1 . "$ROUTER_RULES_FILE"
 
 repo_path() { printf '%s\n' "$TMPDIR/repo"; }
 generated_dir() { printf '%s\n' "$TMPDIR/generated"; }

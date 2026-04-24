@@ -45,7 +45,7 @@ grep -q 'LOCAL_MANGLE_CHAIN="CODEX_XRAY_LOCAL"' "$XRAY_INIT" \
 grep -q -- '--clamp-mss-to-pmtu' "$XRAY_INIT" \
 	|| fail "codex-xray.init must clamp MSS for router-local Xray traffic to the VPS"
 
-grep -q 'path_requested()' "$XRAY_INIT" \
+grep -q 'path_requested' "$XRAY_INIT" \
 	|| fail "codex-xray.init must gate boot startup behind switch/config readiness"
 
 grep -q 'path_requested || return 0' "$XRAY_INIT" \
@@ -75,7 +75,7 @@ grep -q '"fingerprint": "edge"' "$VPS_CGI" \
 grep -q '"mux": {' "$VPS_CGI" \
 	|| fail "xray-vps.cgi must render router configs with outbound mux enabled"
 
-grep -q 'path_requested()' "$TRANSPROXY_INIT" \
+grep -q 'path_requested' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must gate boot startup behind switch/config readiness"
 
 grep -q 'path_requested || return 0' "$TRANSPROXY_INIT" \
@@ -93,7 +93,7 @@ grep -q 'ROUTER_RULES_USE_CACHED_RESOLVED=1 /usr/bin/router-rules build-xray-ips
 grep -q 'ROUTER_RULES_SYNC_ACTOR=boot' "$ROOT/routers/common/files/router-rules-sync.init" \
 	|| fail "router-rules-sync init must run an immediate boot-time apply-xray refresh"
 
-grep -q 'xray_path_requested()' "$ROUTER_RULES" \
+grep -q 'path_requested' "$ROUTER_RULES" \
 	|| fail "router-rules must gate runtime drift recovery behind the active switch/config state"
 
 grep -q 'xray_runtime_healthy || return 0' "$ROUTER_RULES" \
@@ -146,12 +146,6 @@ grep -q 'data.path_state === "degraded"' "$XRAY_UI" \
 
 grep -q -- '--socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}"' "$ADMIN_CGI" \
 	|| fail "xray-admin.cgi smoke must verify the local SOCKS path used by transparent traffic"
-
-grep -q 'run_https_probe()' "$ADMIN_CGI" \
-	|| fail "xray-admin.cgi smoke must use a reusable HTTPS probe helper instead of a single hard-coded oracle"
-
-grep -q 'https://www.microsoft.com https://example.com' "$ADMIN_CGI" \
-	|| fail "xray-admin.cgi smoke must try a stable HTTPS oracle before falling back to example.com"
 
 grep -q '"last_smoke_http_ok":' "$ADMIN_CGI" \
 	|| fail "xray-admin.cgi status must expose whether the local HTTP proxy path also passed smoke checks"

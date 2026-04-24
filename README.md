@@ -207,10 +207,6 @@ The router will:
 - generate or reuse the required client/server values
 - sync the VPS and the router together
 
-Example of the Xray control panel on a `GL.iNet GL-MT3000`:
-
-<img src="./docs/assets/xray-control-panel.png" alt="Xray control panel on GL.iNet router at https://192.168.8.1/xray.html" width="900">
-
 ### 5. Use the Router
 
 After the first successful sync:

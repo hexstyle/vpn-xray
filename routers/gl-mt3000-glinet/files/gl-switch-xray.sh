@@ -9,6 +9,8 @@ ROUTER_CONFIG="/etc/xray/codex-xray.json"
 WAIT_ACTIVE_SECONDS=25
 WAIT_INACTIVE_SECONDS=15
 
+. "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}"
+
 log() {
 	logger -t "$TAG" "$*"
 }
@@ -159,10 +161,6 @@ run_async() {
 	rm -f "$RUNNER_PID"
 	printf '%s\n' "$ACTION" > "$RUNNER_ACTION"
 	start-stop-daemon -S -b -m -p "$RUNNER_PID" -x "$0" -- "$1"
-}
-
-config_ready() {
-	[ -f "$CONFIG_READY_FILE" ] && [ -s "$ROUTER_CONFIG" ]
 }
 
 case "$ACTION" in

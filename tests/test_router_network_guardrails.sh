@@ -32,6 +32,9 @@ grep -q 'stabilize_wireless_bssid()' "$INSTALL_PLATFORM" \
 grep -q 'random_bssid=0' "$INSTALL_PLATFORM" \
 	|| fail "install-platform must disable random_bssid so AP identities stay stable across reloads and reboots"
 
+grep -q "uci set dhcp.@dnsmasq\\[0\\].filter_aaaa='1'" "$INSTALL_PLATFORM" \
+	|| fail "install-platform must suppress AAAA answers because this stack is IPv4-only"
+
 if grep -q "uci add_list network.@device\\[0\\].ports='eth1'" "$INSTALL_PLATFORM"; then
 	fail "install-platform must not unconditionally add eth1 to the LAN bridge"
 fi
@@ -45,7 +48,7 @@ grep -q 'codex-xray-uplink.hotplug' "$INSTALL_PLATFORM" \
 grep -q '/etc/hotplug.d/iface/95-codex-xray-uplink' "$INSTALL_PLATFORM" \
 	|| fail "install-platform must install the Xray uplink hotplug guard into iface hotplug hooks"
 
-grep -q 'lan_device()' "$TRANSPROXY" \
+grep -q 'lan_device' "$TRANSPROXY" \
 	|| fail "codex-transproxy must resolve the LAN device dynamically"
 
 if grep -q '\-i br-lan' "$TRANSPROXY"; then
@@ -58,7 +61,7 @@ grep -q 'iptables -I FORWARD 1 -i "\$lan_if" -p udp ! --dport 53 -j REJECT' "$TR
 grep -q 'ip6tables -I FORWARD 1 -i "\$lan_if" -j REJECT' "$TRANSPROXY" \
 	|| fail "codex-transproxy must still reject forwarded IPv6 while the IPv4-only Xray path is active"
 
-grep -q 'lan_device()' "$ROUTER_RULES" \
+grep -q 'lan_device' "$ROUTER_RULES" \
 	|| fail "router-rules must resolve the LAN device dynamically"
 
 if grep -q 'dev br-lan' "$ROUTER_RULES"; then

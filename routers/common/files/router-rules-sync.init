@@ -12,10 +12,18 @@ case "$interval" in
 	""|*[!0-9]*) interval=300 ;;
 esac
 [ "$interval" -ge 30 ] 2>/dev/null || interval=300
+boot_ok=0
 if command -v timeout >/dev/null 2>&1; then
-	ROUTER_RULES_LOCK_WAIT=1 ROUTER_RULES_SYNC_ACTOR=boot timeout 90 /usr/bin/router-rules apply-xray >/tmp/router-rules-sync.log 2>&1 || true
+	ROUTER_RULES_LOCK_WAIT=1 ROUTER_RULES_SYNC_MODE=apply ROUTER_RULES_SYNC_ACTOR=boot timeout 30 /usr/bin/router-rules apply-xray >/tmp/router-rules-sync.log 2>&1 && boot_ok=1
 else
-	ROUTER_RULES_LOCK_WAIT=1 ROUTER_RULES_SYNC_ACTOR=boot /usr/bin/router-rules apply-xray >/tmp/router-rules-sync.log 2>&1 || true
+	ROUTER_RULES_LOCK_WAIT=1 ROUTER_RULES_SYNC_MODE=apply ROUTER_RULES_SYNC_ACTOR=boot /usr/bin/router-rules apply-xray >/tmp/router-rules-sync.log 2>&1 && boot_ok=1
+fi
+if [ "$boot_ok" = 0 ] && [ -d /etc/router-rules/last-known-good ]; then
+	if command -v timeout >/dev/null 2>&1; then
+		ROUTER_RULES_LOCK_WAIT=1 timeout 15 /usr/bin/router-rules restore-lkg >/tmp/router-rules-sync.log 2>&1 || true
+	else
+		ROUTER_RULES_LOCK_WAIT=1 /usr/bin/router-rules restore-lkg >/tmp/router-rules-sync.log 2>&1 || true
+	fi
 fi
 while true; do
 	if command -v timeout >/dev/null 2>&1; then
