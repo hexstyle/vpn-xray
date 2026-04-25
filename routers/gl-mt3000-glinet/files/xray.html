@@ -351,6 +351,19 @@
       background: #fbfcfd;
     }
 
+    .health-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    .health-dot.ok { background: var(--good); }
+    .health-dot.error { background: var(--bad); }
+    .health-dot.unknown { background: #b0b8c0; }
+
     .external-source-meta {
       margin-top: 10px;
       font-size: 12px;
@@ -878,9 +891,6 @@
           <summary class="label" style="cursor:pointer;">Current Router SSH Public Key</summary>
           <pre id="rulesGitSshPublicKey" style="margin-top:12px;">No router SSH key yet.</pre>
         </details>
-        <div class="button-wrap" style="margin-top:12px;">
-          <button id="rulesSaveConfigBtn">Save Git Settings</button>
-        </div>
         </div>
       </details>
       <details class="readonly-pane" style="margin-top:12px;">
@@ -889,10 +899,14 @@
           External feeds are stored in separate managed files next to the editable shared list. The router applies a merged ruleset, while each managed source file can be enabled or disabled independently and viewed in a popup.
         </div>
         <div id="rulesExternalSources" class="external-source-grid" style="margin-top:12px;"></div>
+        <div class="button-wrap" style="margin-top:12px;">
+          <button id="rulesAddExternalSourceBtn">Add External Source</button>
+          <button id="rulesMigrateExternalCatalogBtn" style="display:none;">Migrate Hardcoded Sources to Scripts</button>
+        </div>
         <div class="button-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:12px;">
           <div class="field">
             <label for="rulesExternalInterval">External Refresh Interval (s)</label>
-            <input type="number" id="rulesExternalInterval" min="3600" step="60" value="3600">
+            <input type="number" id="rulesExternalInterval" min="3600" step="60" value="86400">
           </div>
         </div>
         <div class="button-wrap" style="margin-top:12px;">
@@ -903,6 +917,9 @@
           <pre id="rulesExternalPreviewOutput" style="margin-top:12px;">No external source activity yet.</pre>
         </div>
       </details>
+      <div class="button-wrap" style="margin-top:12px;">
+        <button id="rulesSaveConfigBtn">Save Settings</button>
+      </div>
       <div class="field field-full" style="margin-top:12px;">
         <label for="rulesText">Shared Rules List</label>
         <div class="hint" id="rulesEditorHint">
@@ -953,6 +970,47 @@
         </div>
       </div>
       <pre id="rulesTextModalBody">No output loaded yet.</pre>
+    </div>
+  </div>
+
+  <div id="scriptEditorModal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-panel" style="max-width:860px;">
+      <div class="subhead" style="margin-bottom:0;">
+        <div>
+          <h2 id="scriptEditorTitle" style="margin:0;">Edit External Source Script</h2>
+          <p id="scriptEditorMeta" style="color:var(--muted);font-size:13px;">Define the fetcher script, URL, and metadata for this external source.</p>
+        </div>
+        <div class="button-wrap" style="margin-top:0;">
+          <button id="scriptEditorClose">Close</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px;">
+        <div class="field">
+          <label for="scriptEditorId">Source ID (slug)</label>
+          <input type="text" id="scriptEditorId" placeholder="e.g. cloudflare_ipv4" pattern="[a-z0-9_]+" style="font-family:monospace;">
+        </div>
+        <div class="field">
+          <label for="scriptEditorLabel">Display Label</label>
+          <input type="text" id="scriptEditorLabel" placeholder="e.g. Cloudflare IPv4">
+        </div>
+        <div class="field">
+          <label for="scriptEditorUrl">Source URL</label>
+          <input type="text" id="scriptEditorUrl" placeholder="https://..." style="font-family:monospace;">
+        </div>
+        <div class="field">
+          <label for="scriptEditorMaxTargets">Max Targets</label>
+          <input type="number" id="scriptEditorMaxTargets" min="1" max="50000" value="5000">
+        </div>
+      </div>
+      <div class="field" style="margin-top:12px;">
+        <label for="scriptEditorCode">Python Script</label>
+        <textarea id="scriptEditorCode" class="mono" spellcheck="false" style="min-height:280px;font-size:12px;line-height:1.4;"></textarea>
+      </div>
+      <div class="button-wrap" style="margin-top:12px;">
+        <button id="scriptEditorSaveBtn" class="warn-btn">Validate &amp; Save</button>
+        <button id="scriptEditorDeleteBtn" style="background:#c13838;color:#fff;display:none;">Delete Source</button>
+      </div>
+      <pre id="scriptEditorOutput" style="margin-top:12px;font-size:12px;min-height:40px;max-height:120px;overflow:auto;">Validation results will appear here.</pre>
     </div>
   </div>
 
@@ -1103,6 +1161,7 @@
     const RULES_SAVE_CONFIG_TIMEOUT_MS = 70000;
     const RULES_SYNC_TIMEOUT_MS = 190000;
     const RULES_EXTERNAL_PREVIEW_TIMEOUT_MS = 370000;
+    const RULES_EXTERNAL_VALIDATE_TIMEOUT_MS = 35000;
     const RULES_EXTERNAL_RUN_TIMEOUT_MS = 610000;
     const RULES_STATUS_TIMEOUT_MS = 12000;
     const RULES_TEXT_TIMEOUT_MS = 45000;
@@ -1275,30 +1334,35 @@
       if (!container) {
         return;
       }
-      const html = (Array.isArray(sources) ? sources : []).map((source) => {
+      const sourceList = Array.isArray(sources) ? sources : [];
+      const anyHasScript = sourceList.some((s) => s.has_script);
+      const migrateBtn = document.getElementById("rulesMigrateExternalCatalogBtn");
+      if (migrateBtn) {
+        migrateBtn.style.display = (!anyHasScript && sourceList.length > 0) ? "" : "none";
+      }
+      const html = sourceList.map((source) => {
         const enabled = Object.prototype.hasOwnProperty.call(selectionOverride, source.id)
           ? !!selectionOverride[source.id]
           : !!source.enabled;
+        const health = source.health || "unknown";
+        const healthLabel = health === "ok" ? "OK" : health === "error" ? "Error" : "Unknown";
         const status = source.last_status || (source.file_present ? "stored" : "never");
         const metaLines = [
           `URL: ${source.url || "(unknown)"}`,
-          `Stored file: ${source.file_relpath || "(unknown)"}`,
-          `Apply to routing: ${enabled ? "yes" : "no"}`,
           `Stored targets: ${source.file_count || 0}`,
-          `Stored hash: ${shortSig(source.file_signature || "(missing)")}`,
-          `Last generated targets: ${source.last_generated_count || 0}`,
-          `Last checked: ${source.last_checked_at ? formatUnixTime(source.last_checked_at) : "never"}`,
-          `Last changed: ${source.last_changed_at ? formatUnixTime(source.last_changed_at) : "never"}`,
-          `Next refresh: ${source.due ? "due now" : "waiting for interval"}`,
-          `Last status: ${status}${source.last_run_at ? ` at ${formatUnixTime(source.last_run_at)}` : ""}`,
-          source.last_message ? `Last message: ${source.last_message}` : ""
+          `Last sync: ${source.last_run_at ? formatUnixTime(source.last_run_at) : "never"}`,
+          `Status: ${status}`,
+          source.last_message && health === "error" ? `Error: ${source.last_message}` : ""
         ].filter(Boolean);
         return `
           <div class="external-source-card">
             <div class="subhead" style="align-items:flex-start;margin-bottom:0;">
               <div style="flex:1 1 auto;">
-                <div class="label" style="margin-bottom:6px;">Managed Source</div>
-                <div style="font-weight:700;">${escapeHtml(source.label || source.id)}</div>
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                  <span class="health-dot ${escapeHtml(health)}" title="${escapeHtml(healthLabel)}"></span>
+                  <span style="font-weight:700;">${escapeHtml(source.label || source.id)}</span>
+                </div>
+                <div style="font-size:12px;color:var(--muted);font-family:monospace;">${escapeHtml(source.url || "")}</div>
               </div>
               <div class="toggle-row" style="justify-content:flex-end;">
                 <span class="toggle-label">Apply</span>
@@ -1318,8 +1382,10 @@
             </div>
             <div class="external-source-meta mono">${escapeHtml(metaLines.join("\n"))}</div>
             <div class="external-source-actions">
-              <button class="rules-external-preview-btn" data-source-id="${escapeHtml(source.id)}">Preview Parser Output</button>
-              <button class="rules-external-view-btn" data-source-id="${escapeHtml(source.id)}">View Stored File</button>
+              <button class="rules-external-download-stored-btn" data-source-id="${escapeHtml(source.id)}">Download Stored</button>
+              <button class="rules-external-download-fresh-btn" data-source-id="${escapeHtml(source.id)}">Download Fresh</button>
+              ${source.has_script ? `<button class="rules-external-edit-btn" data-source-id="${escapeHtml(source.id)}">Edit Script</button>` : ""}
+              ${source.has_script ? `<button class="rules-external-delete-btn" data-source-id="${escapeHtml(source.id)}" style="color:var(--bad);">Delete</button>` : ""}
             </div>
           </div>
         `;
@@ -1567,7 +1633,7 @@
         repo_branch: document.getElementById("rulesRepoBranch").value.trim(),
         sync_interval: document.getElementById("rulesSyncInterval").value.trim() || "30",
         external_source_enabled_ids: selectedExternalSourceIds().join(","),
-        external_source_interval: document.getElementById("rulesExternalInterval").value.trim() || "3600",
+        external_source_interval: document.getElementById("rulesExternalInterval").value.trim() || "86400",
         git_auth_mode: document.getElementById("rulesGitAuthMode").value,
         git_http_username: document.getElementById("rulesGitHttpUsername").value.trim()
       };
@@ -2040,7 +2106,7 @@
         document.getElementById("rulesRepoPushUrl").value = data.repo_push_url || "";
         document.getElementById("rulesRepoBranch").value = data.repo_branch || "main";
         document.getElementById("rulesSyncInterval").value = data.sync_interval || "30";
-        document.getElementById("rulesExternalInterval").value = data.external_source_interval || "3600";
+        document.getElementById("rulesExternalInterval").value = data.external_source_interval || "86400";
         document.getElementById("rulesGitAuthMode").value = data.git_auth_mode || (gitSyncEnabled ? "auto" : "none");
         document.getElementById("rulesGitHttpUsername").value = data.git_http_username || "";
         document.getElementById("rulesGitHttpPassword").value = "";
@@ -2277,12 +2343,18 @@
       document.querySelectorAll(".rules-external-enable-input").forEach((input) => {
         input.disabled = state.foregroundBusy || backendJobRunning;
       });
-      document.querySelectorAll(".rules-external-preview-btn").forEach((button) => {
-        button.disabled = state.foregroundBusy || state.rulesBusy;
+      document.querySelectorAll(".rules-external-download-fresh-btn").forEach((button) => {
+        button.disabled = state.foregroundBusy;
       });
-      document.querySelectorAll(".rules-external-view-btn").forEach((button) => {
+      document.querySelectorAll(".rules-external-download-stored-btn").forEach((button) => {
         const source = externalSourceById(button.dataset.sourceId || "");
-        button.disabled = state.foregroundBusy || state.rulesBusy || !source?.file_present;
+        button.disabled = state.foregroundBusy || !source?.file_present;
+      });
+      document.querySelectorAll(".rules-external-edit-btn").forEach((button) => {
+        button.disabled = state.foregroundBusy;
+      });
+      document.querySelectorAll(".rules-external-delete-btn").forEach((button) => {
+        button.disabled = state.foregroundBusy;
       });
       if (externalHint) {
         if (externalJobRunning) {
@@ -2494,7 +2566,7 @@
     }
 
     async function saveRulesConfig(button) {
-      beginForegroundTask("Saving Git sync settings on the router...", RULES_SAVE_CONFIG_TIMEOUT_MS);
+      beginForegroundTask("Saving rules settings on the router...", RULES_SAVE_CONFIG_TIMEOUT_MS);
       setBusy(button, true);
       try {
         const data = await callApi(rulesApi, "save_config", rulesConfigPayload(), { timeoutMs: RULES_SAVE_CONFIG_TIMEOUT_MS });
@@ -2504,10 +2576,10 @@
         state.rules = data;
         clearRulesConfigDirty();
         renderRules(data);
-        flash(data.git_sync_enabled ? "Git and managed-source settings saved." : "Git sync disabled. Router stays in local-only rules mode.", "good");
+        flash(data.git_sync_enabled ? "Rules settings saved." : "Git sync disabled. Router stays in local-only rules mode.", "good");
       } catch (err) {
-        flash(`Failed to save Git or managed-source settings: ${err.message}`, "bad");
-        document.getElementById("rulesTraceOutput").textContent = `Failed to save Git or managed-source settings: ${err.message}`;
+        flash(`Failed to save rules settings: ${err.message}`, "bad");
+        document.getElementById("rulesTraceOutput").textContent = `Failed to save rules settings: ${err.message}`;
       } finally {
         setBusy(button, false);
         endForegroundTask();
@@ -2577,63 +2649,176 @@
       return runRulesSync(button, "push");
     }
 
-    async function previewExternalSource(button, sourceId) {
+    function triggerDownload(text, filename) {
+      const blob = new Blob([text], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    async function downloadExternalFresh(button, sourceId) {
       const source = externalSourceById(sourceId);
-      if (!source) {
-        flash("Managed source metadata is missing.", "bad");
-        return;
-      }
-      beginForegroundTask(`Fetching and normalizing ${source.label || source.id}...`, RULES_EXTERNAL_PREVIEW_TIMEOUT_MS);
+      if (!source) { flash("Source metadata missing.", "bad"); return; }
+      beginForegroundTask(`Generating fresh output for ${source.label || source.id}...`, RULES_EXTERNAL_PREVIEW_TIMEOUT_MS);
       setBusy(button, true);
       try {
-        const data = await callApi(rulesApi, "preview_external_source", { source_id: sourceId }, { timeoutMs: RULES_EXTERNAL_PREVIEW_TIMEOUT_MS });
-        if (data.ok === false) {
+        const resp = await fetch(rulesApi, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `action=download_external_file&source_id=${encodeURIComponent(sourceId)}&type=preview`
+        });
+        const contentType = resp.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          const data = await resp.json();
           throw new Error(data.error || "backend error");
         }
-        document.getElementById("rulesExternalPreviewOutput").textContent = [
-          `${source.label || source.id}`,
-          `Generated targets: ${data.generated_total || data.generated_count || 0}`,
-          `Stored hash: ${shortSig(source.file_signature || "(missing)")}`,
-          data.generated_truncated ? `Showing first ${Math.min(Number(data.generated_total || 0), 400)} targets in the popup.` : "Showing the full parser output in the popup.",
-          `Preview opened from the router snapshot for ${source.url || "managed source"}`
-        ].join("\n");
-        showRulesTextModal(
-          `${source.label || source.id} Preview`,
-          `Current normalized snapshot for ${source.url || "managed source"} · ${data.generated_total || data.generated_count || 0} total targets · hash ${shortSig(source.file_signature || "(missing)")}${data.generated_truncated ? " · preview truncated" : ""}`,
-          data.generated_text || "(empty)"
-        );
-        flash(`External source preview generated ${data.generated_total || data.generated_count || 0} targets for ${source.label || source.id}.`, "good");
+        const text = await resp.text();
+        triggerDownload(text, `${sourceId}_fresh.txt`);
+        flash(`Downloaded fresh output for ${source.label || source.id}.`, "good");
       } catch (err) {
-        document.getElementById("rulesExternalPreviewOutput").textContent = `${source.label || source.id} preview failed: ${err.message}`;
-        flash(`External source preview failed: ${err.message}`, "bad");
+        flash(`Fresh download failed: ${err.message}`, "bad");
       } finally {
         setBusy(button, false);
         endForegroundTask();
       }
     }
 
-    async function viewExternalSource(button, sourceId) {
+    async function downloadExternalStored(button, sourceId) {
       const source = externalSourceById(sourceId);
-      if (!source) {
-        flash("Managed source metadata is missing.", "bad");
-        return;
-      }
-      beginForegroundTask(`Loading stored file for ${source.label || source.id}...`, RULES_TEXT_TIMEOUT_MS);
+      if (!source) { flash("Source metadata missing.", "bad"); return; }
+      beginForegroundTask(`Downloading stored file for ${source.label || source.id}...`, RULES_TEXT_TIMEOUT_MS);
       setBusy(button, true);
       try {
-        const data = await callApi(rulesApi, "read_external_source", { source_id: sourceId }, { timeoutMs: RULES_TEXT_TIMEOUT_MS });
-        if (data.ok === false) {
+        const resp = await fetch(rulesApi, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `action=download_external_file&source_id=${encodeURIComponent(sourceId)}&type=stored`
+        });
+        const contentType = resp.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          const data = await resp.json();
           throw new Error(data.error || "backend error");
         }
-        showRulesTextModal(
-          `${source.label || source.id} Stored File`,
-          `${source.file_relpath || "managed file"} · ${data.file_total || data.file_count || 0} total targets stored on the router · hash ${shortSig(source.file_signature || "(missing)")}${data.file_truncated ? " · preview truncated" : ""}`,
-          data.file_text || "(empty)"
-        );
+        const text = await resp.text();
+        triggerDownload(text, `${sourceId}.txt`);
+        flash(`Downloaded stored file for ${source.label || source.id}.`, "good");
       } catch (err) {
-        flash(`Managed source file load failed: ${err.message}`, "bad");
+        flash(`Stored file download failed: ${err.message}`, "bad");
       } finally {
         setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
+    function openScriptEditor(sourceId) {
+      const isNew = !sourceId;
+      document.getElementById("scriptEditorTitle").textContent = isNew ? "Add External Source" : "Edit External Source Script";
+      document.getElementById("scriptEditorId").value = sourceId || "";
+      document.getElementById("scriptEditorId").disabled = !isNew;
+      document.getElementById("scriptEditorLabel").value = "";
+      document.getElementById("scriptEditorUrl").value = "";
+      document.getElementById("scriptEditorMaxTargets").value = "5000";
+      document.getElementById("scriptEditorCode").value = "";
+      document.getElementById("scriptEditorOutput").textContent = "Validation results will appear here.";
+      document.getElementById("scriptEditorDeleteBtn").style.display = isNew ? "none" : "";
+      document.getElementById("scriptEditorDeleteBtn").dataset.sourceId = sourceId || "";
+      const modal = document.getElementById("scriptEditorModal");
+      modal.classList.add("show");
+      modal.setAttribute("aria-hidden", "false");
+
+      if (!isNew) {
+        loadScriptForEditing(sourceId);
+      }
+    }
+
+    function closeScriptEditor() {
+      const modal = document.getElementById("scriptEditorModal");
+      modal.classList.remove("show");
+      modal.setAttribute("aria-hidden", "true");
+    }
+
+    async function loadScriptForEditing(sourceId) {
+      try {
+        const data = await callApi(rulesApi, "read_external_script", { source_id: sourceId }, { timeoutMs: 30000 });
+        if (data.ok === false) { throw new Error(data.error || "backend error"); }
+        document.getElementById("scriptEditorLabel").value = data.label || "";
+        document.getElementById("scriptEditorUrl").value = data.url || "";
+        document.getElementById("scriptEditorMaxTargets").value = data.max_targets || "5000";
+        document.getElementById("scriptEditorCode").value = data.script_text || "";
+      } catch (err) {
+        document.getElementById("scriptEditorOutput").textContent = `Failed to load script: ${err.message}`;
+      }
+    }
+
+    async function saveExternalScript() {
+      const sourceId = document.getElementById("scriptEditorId").value.trim();
+      const label = document.getElementById("scriptEditorLabel").value.trim();
+      const url = document.getElementById("scriptEditorUrl").value.trim();
+      const maxTargets = document.getElementById("scriptEditorMaxTargets").value.trim();
+      const scriptText = document.getElementById("scriptEditorCode").value;
+      const outputEl = document.getElementById("scriptEditorOutput");
+      const saveBtn = document.getElementById("scriptEditorSaveBtn");
+
+      if (!sourceId) { flash("Source ID is required.", "bad"); return; }
+      if (!/^[a-z0-9_]+$/.test(sourceId)) { flash("Source ID: lowercase letters, digits, underscores only.", "bad"); return; }
+      if (!url) { flash("Source URL is required.", "bad"); return; }
+      if (!scriptText.trim()) { flash("Script text is required.", "bad"); return; }
+
+      outputEl.textContent = "Validating script on the router (15s timeout)...";
+      setBusy(saveBtn, true);
+      beginForegroundTask(`Validating and saving ${label || sourceId}...`, RULES_EXTERNAL_VALIDATE_TIMEOUT_MS);
+      try {
+        const data = await callApi(rulesApi, "save_external_script", {
+          source_id: sourceId, label, url, script_text: scriptText, max_targets: maxTargets
+        }, { timeoutMs: RULES_EXTERNAL_VALIDATE_TIMEOUT_MS });
+        if (data.ok === false) { throw new Error(data.error || "Save failed"); }
+        outputEl.textContent = `Saved. Validation passed: ${data.validated_lines || "?"} lines.`;
+        flash(`Script ${sourceId} saved and validated.`, "good");
+        closeScriptEditor();
+        await refreshRules(false, true);
+      } catch (err) {
+        outputEl.textContent = `Validation/save failed: ${err.message}`;
+        flash(`Script save failed: ${err.message}`, "bad");
+      } finally {
+        setBusy(saveBtn, false);
+        endForegroundTask();
+      }
+    }
+
+    async function deleteExternalScript(sourceId) {
+      if (!confirm(`Delete external source "${sourceId}" and its stored file?`)) return;
+      beginForegroundTask(`Deleting ${sourceId}...`, 30000);
+      try {
+        const data = await callApi(rulesApi, "delete_external_script", { source_id: sourceId }, { timeoutMs: 30000 });
+        if (data.ok === false) { throw new Error(data.error || "Delete failed"); }
+        flash(`Source ${sourceId} deleted.`, "good");
+        closeScriptEditor();
+        await refreshRules(false, true);
+      } catch (err) {
+        flash(`Delete failed: ${err.message}`, "bad");
+      } finally {
+        endForegroundTask();
+      }
+    }
+
+    async function migrateExternalCatalog() {
+      beginForegroundTask("Migrating hardcoded sources to JSON scripts...", 60000);
+      const btn = document.getElementById("rulesMigrateExternalCatalogBtn");
+      if (btn) setBusy(btn, true);
+      try {
+        const data = await callApi(rulesApi, "migrate_external_catalog", null, { timeoutMs: 60000 });
+        if (data.ok === false) { throw new Error(data.error || "Migration failed"); }
+        flash("Migration complete. Sources are now editable scripts.", "good");
+        await refreshRules(false, true);
+      } catch (err) {
+        flash(`Migration failed: ${err.message}`, "bad");
+      } finally {
+        if (btn) setBusy(btn, false);
         endForegroundTask();
       }
     }
@@ -2827,14 +3012,24 @@
     document.getElementById("rulesLoadTextBtn").addEventListener("click", (event) => loadRulesText(event.currentTarget));
     document.getElementById("rulesExternalRunBtn").addEventListener("click", (event) => runExternalSource(event.currentTarget));
     document.getElementById("rulesExternalSources").addEventListener("click", (event) => {
-      const previewButton = event.target.closest(".rules-external-preview-btn");
-      if (previewButton) {
-        previewExternalSource(previewButton, previewButton.dataset.sourceId || "");
+      const downloadFresh = event.target.closest(".rules-external-download-fresh-btn");
+      if (downloadFresh) {
+        downloadExternalFresh(downloadFresh, downloadFresh.dataset.sourceId || "");
         return;
       }
-      const viewButton = event.target.closest(".rules-external-view-btn");
-      if (viewButton) {
-        viewExternalSource(viewButton, viewButton.dataset.sourceId || "");
+      const downloadStored = event.target.closest(".rules-external-download-stored-btn");
+      if (downloadStored) {
+        downloadExternalStored(downloadStored, downloadStored.dataset.sourceId || "");
+        return;
+      }
+      const editBtn = event.target.closest(".rules-external-edit-btn");
+      if (editBtn) {
+        openScriptEditor(editBtn.dataset.sourceId || "");
+        return;
+      }
+      const deleteBtn = event.target.closest(".rules-external-delete-btn");
+      if (deleteBtn) {
+        deleteExternalScript(deleteBtn.dataset.sourceId || "");
       }
     });
     document.getElementById("rulesExternalSources").addEventListener("change", (event) => {
@@ -2842,6 +3037,17 @@
         markRulesConfigDirty();
         updateRulesConfigUi();
       }
+    });
+    document.getElementById("rulesAddExternalSourceBtn").addEventListener("click", () => openScriptEditor(""));
+    document.getElementById("rulesMigrateExternalCatalogBtn").addEventListener("click", migrateExternalCatalog);
+    document.getElementById("scriptEditorClose").addEventListener("click", closeScriptEditor);
+    document.getElementById("scriptEditorModal").addEventListener("click", (event) => {
+      if (event.target.id === "scriptEditorModal") closeScriptEditor();
+    });
+    document.getElementById("scriptEditorSaveBtn").addEventListener("click", saveExternalScript);
+    document.getElementById("scriptEditorDeleteBtn").addEventListener("click", (event) => {
+      const sourceId = event.currentTarget.dataset.sourceId || "";
+      if (sourceId) deleteExternalScript(sourceId);
     });
     document.getElementById("rulesTextModalClose").addEventListener("click", hideRulesTextModal);
     document.getElementById("rulesTextModal").addEventListener("click", (event) => {

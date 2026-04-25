@@ -26,7 +26,7 @@ DEFAULT_XRAY_DNSMASQ_SERVER_CONF='/tmp/dnsmasq.d/router-rules-public-dns.conf'
 DEFAULT_SYNC_INTERVAL='30'
 DEFAULT_EXTERNAL_SOURCE_ENABLED='0'
 DEFAULT_EXTERNAL_SOURCE_URL=''
-DEFAULT_EXTERNAL_SOURCE_INTERVAL='3600'
+DEFAULT_EXTERNAL_SOURCE_INTERVAL='86400'
 EXTERNAL_SOURCE_REPO_LAYOUT_VERSION='2'
 DEFAULT_GIT_AUTH_MODE='auto'
 DEFAULT_GIT_HTTP_USERNAME=''
@@ -34,6 +34,9 @@ DEFAULT_GIT_HTTP_PASSWORD=''
 DEFAULT_GIT_ASKPASS='/tmp/router-rules-git-askpass.sh'
 EXTERNAL_SOURCE_SCRIPT='/usr/share/vpn-xray/router-rules-external.py'
 DEFAULT_EXTERNAL_SOURCE_TIMEOUT='90'
+EXTERNAL_SCRIPT_TIMEOUT='15'
+EXTERNAL_SCRIPT_MAX_TARGETS='5000'
+SCRIPTS_DIR_RELPATH='scripts'
 STATUS_FILE='/tmp/router-rules.status'
 EXTERNAL_SYNC_PID_FILE='/tmp/router-rules-external-sync.pid'
 
@@ -144,7 +147,23 @@ git_http_username() { cfg_get git_http_username "$DEFAULT_GIT_HTTP_USERNAME"; }
 git_http_password() { cfg_get git_http_password "$DEFAULT_GIT_HTTP_PASSWORD"; }
 git_askpass_path() { cfg_get git_askpass_path "$DEFAULT_GIT_ASKPASS"; }
 
+scripts_dir() {
+	printf '%s/%s\n' "$(repo_path)" "$SCRIPTS_DIR_RELPATH"
+}
+
 external_source_catalog() {
+	local sdir f id label url
+	sdir="$(scripts_dir)"
+	if [ -d "$sdir" ] && ls "$sdir"/*.json >/dev/null 2>&1; then
+		for f in "$sdir"/*.json; do
+			[ -f "$f" ] || continue
+			id="$(basename "$f" .json)"
+			label="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('label',sys.argv[2]))" "$f" "$id" 2>/dev/null || echo "$id")"
+			url="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('url',''))" "$f" 2>/dev/null || true)"
+			printf '%s|%s|%s\n' "$id" "$label" "$url"
+		done
+		return 0
+	fi
 	cat <<'EOF'
 microsoft_service_tags|Microsoft Service Tags|https://www.microsoft.com/en-us/download/details.aspx?id=56519
 cloudflare_ipv4|Cloudflare IPv4|https://www.cloudflare.com/ips-v4
@@ -1560,9 +1579,35 @@ maybe_migrate_external_repo_layout_internal() {
 	printf '%s\n' "$removed_count"
 }
 
+external_source_script_for_id() {
+	local id="$1"
+	local json_file tmp_script
+	json_file="$(scripts_dir)/${id}.json"
+	[ -f "$json_file" ] || return 1
+	tmp_script="$(mktemp)"
+	python3 -c "import json,sys; sys.stdout.write(json.load(open(sys.argv[1])).get('script',''))" "$json_file" > "$tmp_script" 2>/dev/null || {
+		rm -f "$tmp_script"
+		return 1
+	}
+	[ -s "$tmp_script" ] || { rm -f "$tmp_script"; return 1; }
+	printf '%s\n' "$tmp_script"
+}
+
+external_source_max_targets() {
+	local id="$1"
+	local json_file val
+	json_file="$(scripts_dir)/${id}.json"
+	[ -f "$json_file" ] || { printf '%s\n' "$EXTERNAL_SCRIPT_MAX_TARGETS"; return 0; }
+	val="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('max_targets',$EXTERNAL_SCRIPT_MAX_TARGETS))" "$json_file" 2>/dev/null || echo "$EXTERNAL_SCRIPT_MAX_TARGETS")"
+	if [ "$val" -gt "$EXTERNAL_SCRIPT_MAX_TARGETS" ] 2>/dev/null; then
+		val="$EXTERNAL_SCRIPT_MAX_TARGETS"
+	fi
+	printf '%s\n' "$val"
+}
+
 generate_external_source_internal() {
 	local id="$1"
-	local url script timeout_seconds python_bin
+	local url script script_file timeout_seconds python_bin max_targets rc
 
 	url="$(external_source_url_by_id "$id" 2>/dev/null || true)"
 	[ -n "$url" ] || {
@@ -1574,30 +1619,47 @@ generate_external_source_internal() {
 		echo 'python3 or python is required for external source imports on this router.' >&2
 		return 1
 	}
+	timeout_seconds="$(external_source_timeout)"
+
+	script_file="$(external_source_script_for_id "$id" 2>/dev/null || true)"
+	if [ -n "$script_file" ] && [ -f "$script_file" ]; then
+		max_targets="$(external_source_max_targets "$id")"
+		local script_timeout tmp_out line_count
+		script_timeout="$EXTERNAL_SCRIPT_TIMEOUT"
+		tmp_out="$(mktemp)"
+		rc=0
+		run_with_timeout "$script_timeout" "$python_bin" "$script_file" --collapse --url "$url" --timeout "$script_timeout" > "$tmp_out" 2>&1 || rc=$?
+		rm -f "$script_file"
+		if [ "$rc" -ne 0 ]; then
+			head -5 "$tmp_out" >&2
+			rm -f "$tmp_out"
+			return $rc
+		fi
+		line_count="$(wc -l < "$tmp_out" | awk '{print $1}')"
+		if [ "$line_count" -gt "$max_targets" ] 2>/dev/null; then
+			echo "Script $id produced $line_count lines (max $max_targets), output truncated" >&2
+		fi
+		head -n "$max_targets" "$tmp_out"
+		rm -f "$tmp_out"
+		return 0
+	fi
+
 	script="$(external_source_script)"
 	[ -f "$script" ] || {
 		echo "External source generator is missing on this router: $script" >&2
 		return 1
 	}
-	timeout_seconds="$(external_source_timeout)"
 	run_with_timeout "$timeout_seconds" "$python_bin" "$script" --collapse --url "$url" --timeout "$timeout_seconds"
 }
 
 preview_external_source_internal() {
 	local id="${1:-}"
-	local path
 
 	external_source_record "$id" >/dev/null 2>&1 || {
 		echo 'Unknown external source.' >&2
 		return 1
 	}
-	path="$(external_source_path "$id")"
-	if [ -f "$path" ]; then
-		cat "$path"
-		return 0
-	fi
-	echo 'No stored managed source snapshot is available yet. Run refresh first.' >&2
-	return 1
+	generate_external_source_internal "$id"
 }
 
 read_external_source_internal() {
@@ -1610,6 +1672,184 @@ read_external_source_internal() {
 	}
 	path="$(external_source_path "$id")"
 	[ -f "$path" ] && cat "$path"
+}
+
+read_external_script_internal() {
+	local id="$1"
+	local json_file
+	json_file="$(scripts_dir)/${id}.json"
+	[ -f "$json_file" ] || { echo "Script not found: $id" >&2; return 1; }
+	cat "$json_file"
+}
+
+validate_external_script_internal() {
+	local json_file="$1" python_bin tmp_script url timeout_seconds output line_count rc max_targets bad_lines real_script
+
+	python_bin="$(python_interpreter || true)"
+	[ -n "$python_bin" ] || { echo 'python3 required' >&2; return 1; }
+
+	tmp_script="$(mktemp)"
+	"$python_bin" -c "
+import json, sys, py_compile, tempfile, os
+data = json.load(open(sys.argv[1]))
+script = data.get('script', '')
+if not script.strip():
+    print('Script is empty', file=sys.stderr); sys.exit(1)
+tf = tempfile.NamedTemporaryFile(suffix='.py', delete=False, mode='w')
+tf.write(script); tf.close()
+try:
+    py_compile.compile(tf.name, doraise=True)
+except py_compile.PyCompileError as e:
+    print('Syntax error: {}'.format(e), file=sys.stderr)
+    os.unlink(tf.name); sys.exit(1)
+print(tf.name)
+" "$json_file" > "$tmp_script" 2>&1
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		cat "$tmp_script" >&2
+		rm -f "$tmp_script"
+		return 1
+	fi
+
+	real_script="$(cat "$tmp_script")"
+	rm -f "$tmp_script"
+
+	url="$("$python_bin" -c "import json,sys; print(json.load(open(sys.argv[1])).get('url',''))" "$json_file")"
+	timeout_seconds="$EXTERNAL_SCRIPT_TIMEOUT"
+	output="$(mktemp)"
+	if ! run_with_timeout "$timeout_seconds" "$python_bin" "$real_script" --collapse --url "$url" --timeout "$timeout_seconds" > "$output" 2>&1; then
+		echo "Script timed out or failed (limit ${timeout_seconds}s)" >&2
+		head -5 "$output" >&2
+		rm -f "$output" "$real_script"
+		return 1
+	fi
+	rm -f "$real_script"
+
+	line_count="$(wc -l < "$output" | awk '{print $1}')"
+	max_targets="$("$python_bin" -c "import json,sys; print(json.load(open(sys.argv[1])).get('max_targets',5000))" "$json_file" 2>/dev/null || echo "$EXTERNAL_SCRIPT_MAX_TARGETS")"
+
+	if [ "$line_count" -eq 0 ]; then
+		echo "Script produced no output" >&2
+		rm -f "$output"; return 1
+	fi
+	if [ "$line_count" -gt "$max_targets" ] 2>/dev/null; then
+		echo "Script produced $line_count lines (max $max_targets)" >&2
+		rm -f "$output"; return 1
+	fi
+
+	bad_lines="$(awk '
+		/^[[:space:]]*$/ { next }
+		/^[0-9]+(\.[0-9]+){3}(\/[0-9]+)?$/ { next }
+		/^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$/ { next }
+		{ print NR": "$0 }
+	' "$output" | head -3)"
+
+	if [ -n "$bad_lines" ]; then
+		printf 'Invalid output lines:\n%s\n' "$bad_lines" >&2
+		rm -f "$output"; return 1
+	fi
+
+	printf 'ok %s lines\n' "$line_count"
+	rm -f "$output"
+}
+
+save_external_script_internal() {
+	local json_file="$1"
+	local sdir id
+
+	sdir="$(scripts_dir)"
+	mkdir -p "$sdir"
+
+	id="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('id',''))" "$json_file" 2>/dev/null || true)"
+	[ -n "$id" ] || { echo 'Missing id in JSON.' >&2; return 1; }
+
+	cp "$json_file" "${sdir}/${id}.json"
+
+	if repo_configured && [ -d "$(repo_path)/.git" ]; then
+		(
+			cd "$(repo_path)"
+			git add "${SCRIPTS_DIR_RELPATH}/${id}.json"
+			git -c user.name="$(git_user_name)" -c user.email="$(git_user_email)" \
+				commit -m "Update external source script: $id" -- "${SCRIPTS_DIR_RELPATH}/${id}.json" 2>/dev/null || true
+		)
+	fi
+	printf 'saved %s\n' "$id"
+}
+
+delete_external_script_internal() {
+	local id="$1"
+	local sdir json_file ext_file
+
+	sdir="$(scripts_dir)"
+	json_file="${sdir}/${id}.json"
+	[ -f "$json_file" ] || { echo "Script not found: $id" >&2; return 1; }
+
+	rm -f "$json_file"
+	ext_file="$(external_source_path "$id")"
+	rm -f "$ext_file"
+
+	if repo_configured && [ -d "$(repo_path)/.git" ]; then
+		(
+			cd "$(repo_path)"
+			git rm -f --quiet "${SCRIPTS_DIR_RELPATH}/${id}.json" 2>/dev/null || true
+			git rm -f --quiet "$(external_source_relpath "$id")" 2>/dev/null || true
+			git -c user.name="$(git_user_name)" -c user.email="$(git_user_email)" \
+				commit -m "Remove external source script: $id" 2>/dev/null || true
+		)
+	fi
+	printf 'deleted %s\n' "$id"
+}
+
+migrate_external_catalog_internal() {
+	local sdir python_bin bundled_script script_text id label url json_file count
+	sdir="$(scripts_dir)"
+
+	if [ -d "$sdir" ] && ls "$sdir"/*.json >/dev/null 2>&1; then
+		echo 'Scripts directory already has JSON files, skipping migration.' >&2
+		return 0
+	fi
+
+	python_bin="$(python_interpreter || true)"
+	[ -n "$python_bin" ] || { echo 'python3 required for migration' >&2; return 1; }
+
+	bundled_script="$(external_source_script)"
+	[ -f "$bundled_script" ] || { echo "Bundled parser not found: $bundled_script" >&2; return 1; }
+
+	script_text="$(cat "$bundled_script")"
+	mkdir -p "$sdir"
+	count=0
+
+	while IFS='|' read -r id label url || [ -n "$id" ]; do
+		[ -n "$id" ] || continue
+		json_file="${sdir}/${id}.json"
+		"$python_bin" -c "
+import json, sys
+data = {
+    'id': sys.argv[1],
+    'label': sys.argv[2],
+    'url': sys.argv[3],
+    'script': sys.argv[4],
+    'max_targets': 5000
+}
+json.dump(data, open(sys.argv[5], 'w'), indent=2, ensure_ascii=False)
+" "$id" "$label" "$url" "$script_text" "$json_file"
+		count=$((count + 1))
+	done <<'EOF'
+microsoft_service_tags|Microsoft Service Tags|https://www.microsoft.com/en-us/download/details.aspx?id=56519
+cloudflare_ipv4|Cloudflare IPv4|https://www.cloudflare.com/ips-v4
+google_ipv4|Google IPv4 Ranges|https://www.gstatic.com/ipranges/goog.json
+aws_ipv4|AWS IPv4 Ranges|https://ip-ranges.amazonaws.com/ip-ranges.json
+EOF
+
+	if repo_configured && [ -d "$(repo_path)/.git" ]; then
+		(
+			cd "$(repo_path)"
+			git add "$SCRIPTS_DIR_RELPATH"
+			git -c user.name="$(git_user_name)" -c user.email="$(git_user_email)" \
+				commit -m "Migrate external source catalog to JSON scripts" -- "$SCRIPTS_DIR_RELPATH" 2>/dev/null || true
+		)
+	fi
+	printf 'migrated %s sources\n' "$count"
 }
 
 prepare_rules_file_for_local_edit_internal() {
@@ -1766,17 +2006,11 @@ refresh_external_sources_internal() {
 		if ! generate_external_source_internal "$id" > "$generated_file" 2> "$error_file"; then
 			message="$(sed '/^[[:space:]]*$/d' "$error_file" | sed -n '1p')"
 			[ -n "$message" ] || message="External source fetch failed for $id."
-			rm -f "$EXTERNAL_SYNC_PID_FILE"
-			status_set last_external_pid ''
 			set_external_source_status "$id" error "$message" '0' '0'
-			set_external_status error "$message" '0' '0'
-			set_status_error "$message"
-			while IFS='|' read -r _ _ stale_file || [ -n "$stale_file" ]; do
-				[ -n "$stale_file" ] || continue
-				rm -f "$stale_file"
-			done < "$source_meta"
-			rm -f "$generated_file" "$source_meta" "$error_file"
-			return 1
+			status_trace_add sync_trace "external $id skipped: $message"
+			rm -f "$generated_file"
+			summary="${summary}${summary:+; }${id}: FAILED"
+			continue
 		fi
 		generated_count="$(rule_count "$generated_file")"
 		[ -n "$generated_count" ] || generated_count='0'
@@ -1845,13 +2079,17 @@ EOF
 }
 
 sync_external_source_internal() {
-	local before_sig after_sig changed_any
-
-	before_sig="$(tracked_rules_signature)"
+	# Phase 1: fetch external sources WITHOUT the global lock.
+	# HTTP fetches can take tens of seconds; holding the lock blocks the UI.
+	local changed_any
 	changed_any="$(refresh_external_sources_internal)" || return 1
-	after_sig="$(tracked_rules_signature)"
-	[ "$before_sig" = "$after_sig" ] && [ "$changed_any" = '0' ] && return 0
-	sync_apply_xray_internal
+
+	# Phase 2: apply under lock only if something changed.
+	if [ "$changed_any" != '0' ]; then
+		with_lock sync_apply_xray_internal
+	else
+		status_set last_verified_at "$(date +%s)"
+	fi
 }
 
 background_tick_internal() {
@@ -2563,7 +2801,7 @@ set_mode_cutover_internal() {
 
 external_sources_json() {
 	local first id label url enabled due path count last_run_at last_status last_message generated_count added_count actor
-	local file_signature_value last_checked_at last_changed_at stored_count
+	local file_signature_value last_checked_at last_changed_at stored_count health has_script max_targets
 
 	first=1
 	printf '['
@@ -2588,6 +2826,14 @@ external_sources_json() {
 		[ -n "$added_count" ] || added_count='0'
 		[ -n "$stored_count" ] || stored_count="$count"
 		[ -n "$file_signature_value" ] || file_signature_value="$(file_signature "$path")"
+		health='unknown'
+		case "$last_status" in
+			updated|no_change) health='ok' ;;
+			error) health='error' ;;
+		esac
+		has_script=0
+		[ -f "$(scripts_dir)/${id}.json" ] && has_script=1
+		max_targets="$(external_source_max_targets "$id")"
 		[ "$first" = '1' ] || printf ','
 		first=0
 		printf '{'
@@ -2596,6 +2842,9 @@ external_sources_json() {
 		printf '"url":"%s",' "$(json_escape "$url")"
 		printf '"enabled":'; json_bool "$enabled"; printf ','
 		printf '"due":'; json_bool "$due"; printf ','
+		printf '"health":"%s",' "$(json_escape "$health")"
+		printf '"has_script":'; json_bool "$has_script"; printf ','
+		printf '"max_targets":"%s",' "$(json_escape "$max_targets")"
 		printf '"file_relpath":"%s",' "$(json_escape "$(external_source_relpath "$id")")"
 		printf '"file_present":'; if [ -f "$path" ]; then json_bool 1; else json_bool 0; fi; printf ','
 		printf '"file_count":"%s",' "$(json_escape "$count")"
@@ -2915,8 +3164,36 @@ case "$cmd" in
 		[ -n "${1:-}" ] || { usage >&2; exit 1; }
 		read_external_source_internal "$1"
 		;;
+	read-external-script)
+		shift
+		[ -n "${1:-}" ] || { usage >&2; exit 1; }
+		read_external_script_internal "$1"
+		;;
+	external-source-ids)
+		external_source_catalog | while IFS='|' read -r _eid _elabel _eurl || [ -n "$_eid" ]; do
+			[ -n "$_eid" ] && printf '%s\n' "$_eid"
+		done
+		;;
 	sync-external-source)
-		with_lock sync_external_source_internal
+		sync_external_source_internal
+		;;
+	validate-external-script)
+		shift
+		[ -n "${1:-}" ] || { usage >&2; exit 1; }
+		validate_external_script_internal "$1"
+		;;
+	save-external-script)
+		shift
+		[ -n "${1:-}" ] || { usage >&2; exit 1; }
+		with_lock save_external_script_internal "$1"
+		;;
+	delete-external-script)
+		shift
+		[ -n "${1:-}" ] || { usage >&2; exit 1; }
+		with_lock delete_external_script_internal "$1"
+		;;
+	migrate-external-catalog)
+		with_lock migrate_external_catalog_internal
 		;;
 	save-sync-apply-xray)
 		shift

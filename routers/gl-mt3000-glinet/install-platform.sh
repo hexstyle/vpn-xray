@@ -469,7 +469,7 @@ effective_external_source_interval() {
 	existing="$(existing_router_rules_value external_source_interval)"
 	case "$existing" in
 		''|*[!0-9]*)
-			printf '%s\n' "${RULES_EXTERNAL_SOURCE_INTERVAL:-3600}"
+			printf '%s\n' "${RULES_EXTERNAL_SOURCE_INTERVAL:-86400}"
 			;;
 		*)
 			printf '%s\n' "$existing"
