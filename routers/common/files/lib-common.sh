@@ -58,7 +58,17 @@ path_requested() {
 # --- JSON helpers ---
 
 json_escape() {
-	printf '%s' "${1:-}" | sed ':a;N;$!ba;s/\\/\\\\/g;s/"/\\"/g;s/\r/\\r/g;s/\t/\\t/g;s/\n/\\n/g'
+	printf '%s' "${1:-}" | awk '
+		BEGIN { ORS="" }
+		{
+			gsub(/\\/, "\\\\")
+			gsub(/"/, "\\\"")
+			gsub(/\t/, "\\t")
+			gsub(/\r/, "\\r")
+			if (NR > 1) printf "\\n"
+			printf "%s", $0
+		}
+	'
 }
 
 json_bool() {

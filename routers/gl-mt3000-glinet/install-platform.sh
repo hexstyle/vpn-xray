@@ -627,7 +627,7 @@ render_router_rules_conf() {
 	RULES_GIT_HTTP_PASSWORD="${RULES_GIT_HTTP_PASSWORD:-}" \
 	RULES_GIT_USER_NAME="${RULES_GIT_USER_NAME:-router-rules}" \
 	RULES_GIT_USER_EMAIL="${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}" \
-	RULES_DNS_RESOLVER="${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}" \
+	RULES_DNS_RESOLVER="${RULES_DNS_RESOLVER:-9.9.9.9 208.67.222.222}" \
 	RULES_DEVICE_ID="${RULES_DEVICE_ID:-gl-router}" \
 	RULES_ENABLE_PUSH="${RULES_ENABLE_PUSH:-0}" \
 	XRAY_RULES_MODE="$(effective_xray_rules_mode)" \
@@ -934,7 +934,7 @@ set router_rules.global.git_http_username='${RULES_GIT_HTTP_USERNAME:-}'
 set router_rules.global.git_http_password='${RULES_GIT_HTTP_PASSWORD:-}'
 set router_rules.global.git_user_name='${RULES_GIT_USER_NAME:-router-rules}'
 set router_rules.global.git_user_email='${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}'
-set router_rules.global.dns_resolver='${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}'
+set router_rules.global.dns_resolver='${RULES_DNS_RESOLVER:-9.9.9.9 208.67.222.222}'
 set router_rules.global.local_device_id='${RULES_DEVICE_ID:-gl-router}'
 set router_rules.global.enable_push='${RULES_ENABLE_PUSH:-0}'
 set router_rules.global.xray_mode='$(effective_xray_rules_mode)'

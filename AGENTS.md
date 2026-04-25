@@ -38,3 +38,19 @@ Boot and restore guardrails:
 Git/push checks:
 - If Git SSH auth is involved, verify the exact key the router uses.
 - Prefer confirming both `ssh -T` auth and the actual Git transport/path the feature uses.
+
+## Fix Scope
+
+When asked to fix, add, or change something on the router — the fix goes into the **codebase** (repo), not just applied live on the device. The live router state must match what a clean install from the repo would produce. Specifically:
+- Every fix must land in the repo source files so that the next `install-platform.sh` / `install-router.sh` deploy carries it.
+- Do not patch files on the router without also updating the corresponding source in the repo.
+- If a config value (UCI, dnsmasq, ipset, rules) needs to change, update the template, profile.env, or install script that sets it — not just the live value.
+- After fixing, verify that a fresh deploy from the repo would produce the correct result without manual intervention.
+
+## Verify Before Reporting
+
+Never report a hypothesis to the user as if it were a conclusion. Before saying "the problem is X" or "try doing Y", verify it yourself first:
+- If you suspect a VPN/network issue on the workstation, test it yourself (disconnect VPN, change DNS, try the request) rather than asking the user to check.
+- If you say "site X works now", actually open it end-to-end from the same device/path the user would use.
+- If you identify a cause, reproduce the fix and confirm the result before reporting.
+- Do not send the user on diagnostic errands you can run yourself.
