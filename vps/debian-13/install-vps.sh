@@ -256,14 +256,52 @@ if [[ -n "$remote_port_check" && "$remote_port_owner" != "xray" ]]; then
   exit 1
 fi
 
+vps_bundled_archive=''
 if [[ "$remote_xray_present" != "1" && "$remote_outbound_https" != "1" ]]; then
-  echo "VPS has IPv4 ($remote_ipv4_addr) but cannot reach GitHub over it. Check firewall or egress rules." >&2
-  exit 1
+  # VPS has no Xray and cannot download from GitHub — try bundled binary
+  case "$remote_arch" in
+    x86_64|amd64)
+      vps_bundled_archive="$VPS_PROFILE_DIR/packages/${VPS_XRAY_ARCHIVE_X64:-Xray-linux-64.zip}"
+      ;;
+    aarch64|arm64)
+      vps_bundled_archive="$VPS_PROFILE_DIR/packages/${VPS_XRAY_ARCHIVE_ARM64:-Xray-linux-arm64-v8a.zip}"
+      [ -f "$vps_bundled_archive" ] || vps_bundled_archive="$ROOT_DIR/routers/gl-mt3000-glinet/packages/${VPS_XRAY_ARCHIVE_ARM64:-Xray-linux-arm64-v8a.zip}"
+      ;;
+  esac
+  if [[ -z "$vps_bundled_archive" || ! -f "$vps_bundled_archive" ]]; then
+    echo "VPS has no Xray and cannot reach GitHub. No bundled binary found for arch ${remote_arch:-unknown}." >&2
+    exit 1
+  fi
+  echo "VPS has no internet; will upload bundled Xray binary."
 fi
 
 if [[ "$PREFLIGHT_ONLY" == "1" ]]; then
   echo "VPS preflight passed for profile $VPS_PROFILE on $VPS_HOST"
   exit 0
+fi
+
+if [[ -n "$vps_bundled_archive" ]]; then
+  # Verify local archive integrity before uploading
+  expected_sha=''
+  case "$remote_arch" in
+    x86_64|amd64) expected_sha="${VPS_XRAY_ARCHIVE_X64_SHA256:-}" ;;
+  esac
+  if [[ -n "$expected_sha" ]]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      local_sha="$(sha256sum "$vps_bundled_archive" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+      local_sha="$(shasum -a 256 "$vps_bundled_archive" | awk '{print $1}')"
+    else
+      echo "WARNING: No sha256sum or shasum available; skipping archive integrity check." >&2
+      local_sha="$expected_sha"
+    fi
+    if [[ "$local_sha" != "$expected_sha" ]]; then
+      echo "Bundled VPS Xray archive SHA-256 mismatch: expected $expected_sha, got $local_sha" >&2
+      exit 1
+    fi
+  fi
+  echo "Uploading bundled Xray binary to VPS..."
+  vps_ssh 'cat > /tmp/xray-bundled.zip' < "$vps_bundled_archive"
 fi
 
 vps_ssh 'cat > /tmp/codex-router-vps-config.json && chmod 600 /tmp/codex-router-vps-config.json' < "$rendered_config"

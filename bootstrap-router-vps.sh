@@ -874,6 +874,11 @@ case "$VPS_AUTH_MODE" in
     ;;
 esac
 
+PLATFORM_RESUME_FLAG=''
+if router_ssh "[ -f /tmp/vpn-xray-install-progress ]" >/dev/null 2>&1; then
+  PLATFORM_RESUME_FLAG=' --resume'
+fi
+
 info "Uploading local source bundle to the router ..."
 router_ssh "rm -rf $remote_source_root && mkdir -p $remote_source_root"
 router_ssh_stdin "cat > $remote_source_tar" "$source_bundle"
@@ -897,7 +902,7 @@ RULES_GIT_USER_EMAIL=$(shell_quote "${RULES_GIT_USER_EMAIL:-router-rules@example
 RULES_DNS_RESOLVER=$(shell_quote "${RULES_DNS_RESOLVER:-1.1.1.1 9.9.9.9}") \
 XRAY_RULES_MODE=$(shell_quote "$BOOTSTRAP_SAFE_XRAY_RULES_MODE") \
 DEFER_XRAY_ACTIVATION='1' \
-sh $(shell_quote "$remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh") --source-dir $(shell_quote "$remote_source_root")"
+sh $(shell_quote "$remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh") --source-dir $(shell_quote "$remote_source_root")${PLATFORM_RESUME_FLAG}"
 router_ssh "test -x /www/cgi-bin/xray-vps" >/dev/null
 wait_for_router_direct_ssh || fail "Router direct SSH did not recover after install-platform.sh."
 

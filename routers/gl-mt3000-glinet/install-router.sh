@@ -426,6 +426,11 @@ render_template "$ROUTER_PROFILE_DIR/files/codex-xray.json.template" "$json_cfg"
 render_template "$ROUTER_PROFILE_DIR/files/redsocks.conf.template" "$redsocks_cfg"
 render_template "$ROUTER_COMMON_DIR/files/router-rules.config.template" "$router_rules_cfg"
 
+PLATFORM_RESUME_FLAG=''
+if router_ssh "[ -f /tmp/vpn-xray-install-progress ]" >/dev/null 2>&1; then
+  PLATFORM_RESUME_FLAG=' --resume'
+fi
+
 remote_source_root='/tmp/vpn-xray-local-src'
 remote_source_tar='/tmp/vpn-xray-local-src.tar'
 remote_platform_cmd=$(
@@ -451,7 +456,7 @@ XRAY_RULES_MODE=$(shell_quote "${XRAY_RULES_MODE:-full}") \
 ISOLATE_WIFI_LAN_ONLY=$(shell_quote "${ISOLATE_WIFI_LAN_ONLY:-0}") \
 VPN_XRAY_REPO_SLUG=$(shell_quote "local-source-bundle") \
 VPN_XRAY_REF=$(shell_quote "local-install") \
-sh $(shell_quote "$remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh") --source-dir $(shell_quote "$remote_source_root")
+sh $(shell_quote "$remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh") --source-dir $(shell_quote "$remote_source_root")${PLATFORM_RESUME_FLAG}
 EOF
 )
 

@@ -1642,6 +1642,20 @@ setup_vps_internal() {
 		return 1
 	}
 
+	if ! ssh_cmd "$profile_id" 'test -x /usr/local/bin/xray' >/dev/null 2>&1; then
+		local vps_arch bundled_xray vps_pkg_dir
+		vps_arch="$(ssh_cmd "$profile_id" 'uname -m' 2>/dev/null || true)"
+		vps_pkg_dir="/usr/share/vpn-xray/vps/${vps_profile}/packages"
+		bundled_xray=''
+		case "$vps_arch" in
+			x86_64|amd64)  bundled_xray="${vps_pkg_dir}/Xray-linux-64.zip" ;;
+			aarch64|arm64) bundled_xray="${vps_pkg_dir}/Xray-linux-arm64-v8a.zip" ;;
+		esac
+		if [ -n "$bundled_xray" ] && [ -f "$bundled_xray" ]; then
+			ssh_stdin_cmd "$profile_id" 'cat > /tmp/xray-bundled.zip' "$bundled_xray" >/dev/null 2>&1 || true
+		fi
+	fi
+
 	ssh_cmd "$profile_id" "VPS_REMOTE_META_PATH='$remote_meta_path' sh /tmp/install-vps.remote.sh" >/dev/null 2>&1 || {
 		rm -f "$rendered" "$meta" "$rendered_install"
 		return 1

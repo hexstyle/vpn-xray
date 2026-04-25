@@ -27,7 +27,7 @@ grep -q "option external_source_url" "$CONFIG_TEMPLATE" \
 grep -q "option external_source_interval" "$CONFIG_TEMPLATE" \
 	|| fail "router-rules config template must expose external_source_interval"
 
-grep -q "cp \"\$COMMON_DIR/files/router-rules-external.py\"" "$INSTALL_PLATFORM" \
+grep -qE '(cp|copy_if_changed) "\$COMMON_DIR/files/router-rules-external.py"' "$INSTALL_PLATFORM" \
 	|| fail "install-platform must copy the external generator to the router"
 grep -q "python3" "$INSTALL_PLATFORM" \
 	|| fail "install-platform must provision python3 for the external generator"

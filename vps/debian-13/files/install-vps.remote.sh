@@ -68,11 +68,62 @@ dump_xray_failure() {
 }
 
 if [ ! -x "$XRAY_BIN" ]; then
-  tmp='/tmp/install-xray.sh'
-  curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh -o "$tmp" || \
-    wget -qO "$tmp" https://github.com/XTLS/Xray-install/raw/main/install-release.sh
-  bash "$tmp" install
-  rm -f "$tmp"
+  bundled='/tmp/xray-bundled.zip'
+  if [ -f "$bundled" ]; then
+    mkdir -p /tmp/xray-extract
+    if command -v unzip >/dev/null 2>&1; then
+      unzip -oq "$bundled" -d /tmp/xray-extract
+    elif command -v python3 >/dev/null 2>&1; then
+      python3 -c 'import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+        "$bundled" /tmp/xray-extract
+    else
+      apt-get update -qq >/dev/null 2>&1 || true
+      apt-get install -y -qq unzip >/dev/null 2>&1 || true
+      command -v unzip >/dev/null 2>&1 || {
+        echo "ERROR: Cannot extract bundled Xray: no unzip, no python3, and apt-get failed." >&2
+        exit 1
+      }
+      unzip -oq "$bundled" -d /tmp/xray-extract
+    fi
+    [ -f /tmp/xray-extract/xray ] || {
+      echo "ERROR: Bundled Xray archive did not contain the expected binary." >&2
+      rm -rf /tmp/xray-extract "$bundled"
+      exit 1
+    }
+    install -m 755 /tmp/xray-extract/xray "$XRAY_BIN"
+    "$XRAY_BIN" version >/dev/null 2>&1 || {
+      echo "ERROR: Extracted Xray binary is corrupt or incompatible with this architecture." >&2
+      rm -f "$XRAY_BIN"
+      rm -rf /tmp/xray-extract "$bundled"
+      exit 1
+    }
+    rm -rf /tmp/xray-extract "$bundled"
+    if [ ! -f "/etc/systemd/system/${XRAY_SERVICE}.service" ]; then
+      cat > "/etc/systemd/system/${XRAY_SERVICE}.service" <<UNIT
+[Unit]
+Description=Xray Service
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+ExecStart=$XRAY_BIN run -config $XRAY_CONFIG_PATH
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNPROC=10000
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+  else
+    tmp='/tmp/install-xray.sh'
+    curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh -o "$tmp" || \
+      wget -qO "$tmp" https://github.com/XTLS/Xray-install/raw/main/install-release.sh
+    bash "$tmp" install
+    rm -f "$tmp"
+  fi
 fi
 
 systemctl daemon-reload >/dev/null 2>&1 || true

@@ -6,6 +6,7 @@ SELF_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(CDPATH= cd -- "$SELF_DIR/../.." && pwd)"
 SOURCE_DIR="$ROOT_DIR"
 PREFLIGHT_ONLY='0'
+RESUME_MODE='0'
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -21,8 +22,12 @@ while [ "$#" -gt 0 ]; do
 			PREFLIGHT_ONLY='1'
 			shift
 			;;
+		--resume)
+			RESUME_MODE='1'
+			shift
+			;;
 		*)
-			echo "Usage: $0 [--source-dir <repo-root>] [--preflight]" >&2
+			echo "Usage: $0 [--source-dir <repo-root>] [--preflight] [--resume]" >&2
 			exit 1
 			;;
 	esac
@@ -62,6 +67,34 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
+INSTALL_PROGRESS_FILE="/tmp/vpn-xray-install-progress"
+FILES_CHANGED=0
+
+mark_done() { printf '%s\n' "$1" >> "$INSTALL_PROGRESS_FILE"; }
+is_done() { [ -f "$INSTALL_PROGRESS_FILE" ] && grep -Fxq "$1" "$INSTALL_PROGRESS_FILE" 2>/dev/null; }
+
+copy_if_changed() {
+	local src="$1" dst="$2"
+	if [ -f "$dst" ]; then
+		local src_h dst_h
+		src_h="$(sha256_file "$src")"
+		dst_h="$(sha256_file "$dst")"
+		if [ "$src_h" = "$dst_h" ]; then
+			return 0
+		fi
+	fi
+	cp "$src" "$dst"
+	FILES_CHANGED=1
+}
+
+uci_set_if_different() {
+	local key="$1" value="$2"
+	local current
+	current="$(uci -q get "$key" 2>/dev/null || true)"
+	[ "$current" = "$value" ] && return 0
+	uci set "${key}=${value}"
+}
+
 info() {
 	printf '%s\n' "$*"
 }
@@ -93,7 +126,9 @@ ensure_pkg_installed() {
 	local package="$1"
 
 	pkg_installed_exact "$package" && return 0
-	opkg install "$package" >/dev/null 2>&1 || fail "Could not install package '$package' with opkg. Check router internet access and package feeds."
+	opkg install "$package" >/dev/null 2>&1 && return 0
+	install_bundled_opkg_single "$package" && return 0
+	fail "Could not install package '$package' with opkg or offline bundle. Check router internet access and package feeds."
 }
 
 ensure_cmd_via_package() {
@@ -111,10 +146,39 @@ try_pkg_install() {
 
 	pkg_installed_exact "$package" && return 0
 	opkg install "$package" >/dev/null 2>&1 || {
-		warn "Could not install optional package '$package' for $purpose. The core VPN path can still work, but the related feature may stay unavailable."
-		return 1
+		install_bundled_opkg_single "$package" 2>/dev/null || {
+			warn "Could not install optional package '$package' for $purpose. The core VPN path can still work, but the related feature may stay unavailable."
+			return 1
+		}
 	}
 	return 0
+}
+
+install_bundled_opkg_single() {
+	local package="$1"
+	local opkg_bundle_dir="${BUNDLED_PAYLOAD_DIR}/opkg"
+	local bundled
+
+	[ -d "$opkg_bundle_dir" ] || return 1
+	bundled="$(find "$opkg_bundle_dir" -name "${package}_*.ipk" 2>/dev/null | head -1)"
+	[ -n "$bundled" ] && [ -f "$bundled" ] || return 1
+	opkg install "$bundled" >/dev/null 2>&1
+}
+
+install_bundled_opkg_packages() {
+	local opkg_bundle_dir="${BUNDLED_PAYLOAD_DIR}/opkg"
+	local ipk_list
+
+	[ -d "$opkg_bundle_dir" ] || return 1
+	ipk_list="$(find "$opkg_bundle_dir" -name '*.ipk' 2>/dev/null | sort)"
+	[ -n "$ipk_list" ] || return 1
+
+	info "Installing packages from offline bundle..."
+	# shellcheck disable=SC2086
+	opkg install $ipk_list >/tmp/vpn-xray-bundled-opkg.log 2>&1 || {
+		warn "Bundled opkg install had errors (some may be harmless version conflicts). See /tmp/vpn-xray-bundled-opkg.log."
+		return 0
+	}
 }
 
 router_package_arch() {
@@ -345,9 +409,10 @@ ensure_pkg_installed_or_fallback() {
 
 	pkg_installed_exact "$package" && return 0
 	opkg install "$package" >/dev/null 2>&1 && return 0
+	install_bundled_opkg_single "$package" && return 0
 
-	warn "Could not install package '$package' from configured feeds for $purpose. Trying the official OpenWrt 21.02.3 package mirror."
-	install_pkg_via_openwrt_fallback "$package" || fail "Could not install package '$package' for $purpose from either opkg feeds or the official OpenWrt package mirror."
+	warn "Could not install package '$package' from configured feeds or offline bundle for $purpose. Trying the official OpenWrt 21.02.3 package mirror."
+	install_pkg_via_openwrt_fallback "$package" || fail "Could not install package '$package' for $purpose from opkg feeds, offline bundle, or the official OpenWrt package mirror."
 	pkg_installed_exact "$package" || fail "Package '$package' is still unavailable after fallback install."
 }
 
@@ -775,6 +840,10 @@ preflight() {
 install_platform() {
 	local archive binary libevent_pkg redsocks_pkg redsocks_rendered router_rules_rendered existing_ready switch_state
 
+	if [ "$RESUME_MODE" != '1' ]; then
+		rm -f "$INSTALL_PROGRESS_FILE"
+	fi
+
 	info "Running router platform preflight..."
 	preflight
 
@@ -783,22 +852,26 @@ install_platform() {
 		return 0
 	fi
 
-	info "Preparing router package manager..."
-	if opkg update >/tmp/vpn-xray-opkg-update.log 2>&1; then
-		OPKG_UPDATE_OK='1'
-	else
-		warn "opkg update did not fully complete. Continuing with already-present commands and package lists."
-		warn "See /tmp/vpn-xray-opkg-update.log on the router for feed errors."
+	if ! is_done packages; then
+		info "Preparing router package manager..."
+		install_bundled_opkg_packages || true
+		if opkg update >/tmp/vpn-xray-opkg-update.log 2>&1; then
+			OPKG_UPDATE_OK='1'
+		else
+			warn "opkg update did not fully complete. Continuing with already-present commands and package lists."
+			warn "See /tmp/vpn-xray-opkg-update.log on the router for feed errors."
+		fi
+		ensure_pkg_installed ca-bundle
+		ensure_pkg_installed ca-certificates
+		ensure_cmd_via_package curl curl
+		ensure_cmd_via_package unzip unzip
+		ensure_vps_ssh_dependencies
+		try_pkg_install git "Git-backed shared rules sync" || true
+		try_pkg_install git-http "Git-backed shared rules sync" || true
+		ensure_git_sync_dependencies
+		ensure_python3_runtime
+		mark_done packages
 	fi
-	ensure_pkg_installed ca-bundle
-	ensure_pkg_installed ca-certificates
-	ensure_cmd_via_package curl curl
-	ensure_cmd_via_package unzip unzip
-	ensure_vps_ssh_dependencies
-	try_pkg_install git "Git-backed shared rules sync" || true
-	try_pkg_install git-http "Git-backed shared rules sync" || true
-	ensure_git_sync_dependencies
-	ensure_python3_runtime
 
 	archive="$DOWNLOAD_DIR/$XRAY_CORE_ARCHIVE"
 	stage_bundled_or_download "$XRAY_CORE_ARCHIVE" "$archive" "$XRAY_CORE_URL" "$XRAY_CORE_ARCHIVE_SHA256"
@@ -812,19 +885,32 @@ install_platform() {
 	stage_bundled_or_download "$LIBEVENT_PACKAGE" "$libevent_pkg" "$LIBEVENT_URL" "$LIBEVENT_SHA256"
 	stage_bundled_or_download "$REDSOCKS_PACKAGE" "$redsocks_pkg" "$REDSOCKS_URL" "$REDSOCKS_SHA256"
 
-	info "Stopping vpn-xray runtime before file updates..."
-	/etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
-	/etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
-	/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
-	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
-	killall codex-xray-core 2>/dev/null || true
+	if ! is_done deps; then
+		info "Stopping vpn-xray runtime before file updates..."
+		/etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
+		/etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
+		/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
+		/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+		killall codex-xray-core 2>/dev/null || true
 
-	info "Installing router-side dependencies..."
-	opkg install "$libevent_pkg" "$redsocks_pkg" >/dev/null 2>&1 || fail "Could not install the router-side redsocks dependencies."
-	command -v redsocks >/dev/null 2>&1 || fail "redsocks is still unavailable after package install."
+		info "Installing router-side dependencies..."
+		opkg install "$libevent_pkg" "$redsocks_pkg" >/dev/null 2>&1 || fail "Could not install the router-side redsocks dependencies."
+		command -v redsocks >/dev/null 2>&1 || fail "redsocks is still unavailable after package install."
+		mark_done deps
+	fi
 
 	mkdir -p /usr/local/bin /etc/xray /var/log/xray /etc/router-rules/generated /etc/router-rules/ssh /usr/share/vpn-xray /www/cgi-bin /etc/gl-switch.d "$PLATFORM_DIR"
-	cp "$binary" "$ROUTER_BIN"
+	if [ -f "$ROUTER_BIN" ]; then
+		local old_h new_h
+		old_h="$(sha256_file "$ROUTER_BIN")"
+		new_h="$(sha256_file "$binary")"
+		if [ "$old_h" != "$new_h" ]; then
+			info "Xray binary changed; stopping runtime before replacement..."
+			/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+			killall codex-xray-core 2>/dev/null || true
+		fi
+	fi
+	copy_if_changed "$binary" "$ROUTER_BIN"
 	chmod 755 "$ROUTER_BIN"
 
 	redsocks_rendered="$WORK_DIR/redsocks.conf"
@@ -876,19 +962,19 @@ EOF
 	fi
 
 	mkdir -p /etc/hotplug.d/iface
-	cp "$PROFILE_DIR/files/codex-xray.init" /etc/init.d/codex-xray
-	cp "$PROFILE_DIR/files/codex-transproxy.init" /etc/init.d/codex-transproxy
-	cp "$PROFILE_DIR/files/codex-xray-uplink.hotplug" /etc/hotplug.d/iface/95-codex-xray-uplink
-	cp "$PROFILE_DIR/files/xray-switch-watchdog.init" /etc/init.d/xray-switch-watchdog
-	cp "$COMMON_DIR/files/router-rules-sync.init" /etc/init.d/router-rules-sync
-	cp "$COMMON_DIR/files/lib-common.sh" /usr/share/vpn-xray/lib-common.sh
-	cp "$COMMON_DIR/files/router-rules-external.py" /usr/share/vpn-xray/router-rules-external.py
-	cp "$PROFILE_DIR/files/gl-switch-xray.sh" /etc/gl-switch.d/xray.sh
-	cp "$COMMON_DIR/files/router-rules" /usr/bin/router-rules
-	cp "$PROFILE_DIR/files/xray.html" /www/xray.html
-	cp "$PROFILE_DIR/files/xray-admin.cgi" /www/cgi-bin/xray-admin
-	cp "$PROFILE_DIR/files/xray-vps.cgi" /www/cgi-bin/xray-vps
-	cp "$PROFILE_DIR/files/xray-rules.cgi" /www/cgi-bin/xray-rules
+	copy_if_changed "$PROFILE_DIR/files/codex-xray.init" /etc/init.d/codex-xray
+	copy_if_changed "$PROFILE_DIR/files/codex-transproxy.init" /etc/init.d/codex-transproxy
+	copy_if_changed "$PROFILE_DIR/files/codex-xray-uplink.hotplug" /etc/hotplug.d/iface/95-codex-xray-uplink
+	copy_if_changed "$PROFILE_DIR/files/xray-switch-watchdog.init" /etc/init.d/xray-switch-watchdog
+	copy_if_changed "$COMMON_DIR/files/router-rules-sync.init" /etc/init.d/router-rules-sync
+	copy_if_changed "$COMMON_DIR/files/lib-common.sh" /usr/share/vpn-xray/lib-common.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules-external.py" /usr/share/vpn-xray/router-rules-external.py
+	copy_if_changed "$PROFILE_DIR/files/gl-switch-xray.sh" /etc/gl-switch.d/xray.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules" /usr/bin/router-rules
+	copy_if_changed "$PROFILE_DIR/files/xray.html" /www/xray.html
+	copy_if_changed "$PROFILE_DIR/files/xray-admin.cgi" /www/cgi-bin/xray-admin
+	copy_if_changed "$PROFILE_DIR/files/xray-vps.cgi" /www/cgi-bin/xray-vps
+	copy_if_changed "$PROFILE_DIR/files/xray-rules.cgi" /www/cgi-bin/xray-rules
 	normalize_installed_text_files \
 		/etc/init.d/codex-xray \
 		/etc/init.d/codex-transproxy \
@@ -965,29 +1051,34 @@ EOF
 		existing_ready='0'
 	fi
 
-	info "Restarting router services..."
 	exec </dev/null
-	/etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
-	/etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
-	/etc/init.d/firewall reload >/dev/null 2>&1 || true
-	/etc/init.d/stubby stop >/dev/null 2>&1 || true
-	/etc/init.d/stubby disable >/dev/null 2>&1 || true
-	/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-	/etc/init.d/odhcpd restart >/dev/null 2>&1 || true
-	/etc/init.d/codex-xray enable >/dev/null 2>&1 || true
-	/etc/init.d/codex-transproxy enable >/dev/null 2>&1 || true
-	/etc/init.d/xray-switch-watchdog enable >/dev/null 2>&1 || true
-	/etc/init.d/router-rules-sync enable >/dev/null 2>&1 || true
-	/etc/init.d/gl_switch_button_check stop >/dev/null 2>&1 || true
-	/etc/init.d/gl_switch_button_check disable >/dev/null 2>&1 || true
-	/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
-	if defer_xray_activation; then
-		info "Deferred Xray runtime activation; router path will stay off until a profile is explicitly applied."
+	if [ "$FILES_CHANGED" = '1' ] || ! is_done services; then
+		info "Restarting router services..."
+		/etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
+		/etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
+		/etc/init.d/firewall reload >/dev/null 2>&1 || true
+		/etc/init.d/stubby stop >/dev/null 2>&1 || true
+		/etc/init.d/stubby disable >/dev/null 2>&1 || true
+		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+		/etc/init.d/odhcpd restart >/dev/null 2>&1 || true
+		/etc/init.d/codex-xray enable >/dev/null 2>&1 || true
+		/etc/init.d/codex-transproxy enable >/dev/null 2>&1 || true
+		/etc/init.d/xray-switch-watchdog enable >/dev/null 2>&1 || true
+		/etc/init.d/router-rules-sync enable >/dev/null 2>&1 || true
+		/etc/init.d/gl_switch_button_check stop >/dev/null 2>&1 || true
+		/etc/init.d/gl_switch_button_check disable >/dev/null 2>&1 || true
+		/usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
+		if defer_xray_activation; then
+			info "Deferred Xray runtime activation; router path will stay off until a profile is explicitly applied."
+		else
+			/usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
+			/etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
+		fi
+		/etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
+		mark_done services
 	else
-		/usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
-		/etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
+		info "No file changes detected; skipping service restart."
 	fi
-	/etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
 
 	switch_state="$(current_switch_state)"
 	info "Router platform is installed."
