@@ -1024,9 +1024,11 @@
         <label for="scriptEditorCode">Python Script</label>
         <textarea id="scriptEditorCode" class="mono" spellcheck="false" style="min-height:280px;font-size:12px;line-height:1.4;"></textarea>
       </div>
-      <div class="button-wrap" style="margin-top:12px;">
+      <div class="button-wrap" style="margin-top:12px;align-items:center;">
         <button id="scriptEditorSaveBtn" class="warn-btn">Validate &amp; Save</button>
+        <button id="scriptEditorRevertBtn" style="display:none;">Revert to Saved</button>
         <button id="scriptEditorDeleteBtn" style="background:#c13838;color:#fff;display:none;">Delete Source</button>
+        <span id="scriptEditorDirtyIndicator" style="display:none;color:var(--warn);font-size:12px;font-weight:600;">unsaved changes</span>
       </div>
       <pre id="scriptEditorOutput" style="margin-top:12px;font-size:12px;min-height:40px;max-height:120px;overflow:auto;">Validation results will appear here.</pre>
     </div>
@@ -2732,6 +2734,34 @@
       }
     }
 
+    const scriptEditorSaved = { label: "", url: "", maxTargets: "5000", code: "" };
+
+    function scriptEditorDirty() {
+      return (
+        document.getElementById("scriptEditorLabel").value !== scriptEditorSaved.label ||
+        document.getElementById("scriptEditorUrl").value !== scriptEditorSaved.url ||
+        document.getElementById("scriptEditorMaxTargets").value !== scriptEditorSaved.maxTargets ||
+        document.getElementById("scriptEditorCode").value !== scriptEditorSaved.code
+      );
+    }
+
+    function updateScriptEditorDirtyState() {
+      const dirty = scriptEditorDirty();
+      const indicator = document.getElementById("scriptEditorDirtyIndicator");
+      const revertBtn = document.getElementById("scriptEditorRevertBtn");
+      if (indicator) indicator.style.display = dirty ? "" : "none";
+      if (revertBtn) revertBtn.style.display = (dirty && scriptEditorSaved.code) ? "" : "none";
+    }
+
+    function revertScriptEditor() {
+      document.getElementById("scriptEditorLabel").value = scriptEditorSaved.label;
+      document.getElementById("scriptEditorUrl").value = scriptEditorSaved.url;
+      document.getElementById("scriptEditorMaxTargets").value = scriptEditorSaved.maxTargets;
+      document.getElementById("scriptEditorCode").value = scriptEditorSaved.code;
+      document.getElementById("scriptEditorOutput").textContent = "Reverted to saved version.";
+      updateScriptEditorDirtyState();
+    }
+
     function openScriptEditor(sourceId) {
       const isNew = !sourceId;
       document.getElementById("scriptEditorTitle").textContent = isNew ? "Add External Source" : "Edit External Source Script";
@@ -2741,9 +2771,14 @@
       document.getElementById("scriptEditorUrl").value = "";
       document.getElementById("scriptEditorMaxTargets").value = "5000";
       document.getElementById("scriptEditorCode").value = "";
-      document.getElementById("scriptEditorOutput").textContent = "Validation results will appear here.";
+      document.getElementById("scriptEditorOutput").textContent = isNew ? "Fill in the fields and paste a Python script." : "Loading saved script...";
       document.getElementById("scriptEditorDeleteBtn").style.display = isNew ? "none" : "";
       document.getElementById("scriptEditorDeleteBtn").dataset.sourceId = sourceId || "";
+      scriptEditorSaved.label = "";
+      scriptEditorSaved.url = "";
+      scriptEditorSaved.maxTargets = "5000";
+      scriptEditorSaved.code = "";
+      updateScriptEditorDirtyState();
       const modal = document.getElementById("scriptEditorModal");
       modal.classList.add("show");
       modal.setAttribute("aria-hidden", "false");
@@ -2767,6 +2802,12 @@
         document.getElementById("scriptEditorUrl").value = data.url || "";
         document.getElementById("scriptEditorMaxTargets").value = data.max_targets || "5000";
         document.getElementById("scriptEditorCode").value = data.script_text || "";
+        scriptEditorSaved.label = data.label || "";
+        scriptEditorSaved.url = data.url || "";
+        scriptEditorSaved.maxTargets = String(data.max_targets || "5000");
+        scriptEditorSaved.code = data.script_text || "";
+        document.getElementById("scriptEditorOutput").textContent = "Saved script loaded. Edit and Validate & Save, or close to discard changes.";
+        updateScriptEditorDirtyState();
       } catch (err) {
         document.getElementById("scriptEditorOutput").textContent = `Failed to load script: ${err.message}`;
       }
@@ -2794,6 +2835,11 @@
           source_id: sourceId, label, url, script_text: scriptText, max_targets: maxTargets
         }, { timeoutMs: RULES_EXTERNAL_VALIDATE_TIMEOUT_MS });
         if (data.ok === false) { throw new Error(data.error || "Save failed"); }
+        scriptEditorSaved.label = label;
+        scriptEditorSaved.url = url;
+        scriptEditorSaved.maxTargets = maxTargets;
+        scriptEditorSaved.code = scriptText;
+        updateScriptEditorDirtyState();
         outputEl.textContent = `Saved. Validation passed: ${data.validated_lines || "?"} lines.`;
         flash(`Script ${sourceId} saved and validated.`, "good");
         closeScriptEditor();
@@ -3065,6 +3111,10 @@
     document.getElementById("scriptEditorDeleteBtn").addEventListener("click", (event) => {
       const sourceId = event.currentTarget.dataset.sourceId || "";
       if (sourceId) deleteExternalScript(sourceId);
+    });
+    document.getElementById("scriptEditorRevertBtn").addEventListener("click", revertScriptEditor);
+    ["scriptEditorLabel", "scriptEditorUrl", "scriptEditorMaxTargets", "scriptEditorCode"].forEach((id) => {
+      document.getElementById(id).addEventListener("input", updateScriptEditorDirtyState);
     });
     document.getElementById("rulesTextModalClose").addEventListener("click", hideRulesTextModal);
     document.getElementById("rulesTextModal").addEventListener("click", (event) => {
