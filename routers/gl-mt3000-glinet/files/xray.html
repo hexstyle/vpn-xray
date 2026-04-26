@@ -2066,8 +2066,9 @@
       if (externalEnabled) {
         const errorSources = externalSources.filter((s) => s.health === "error");
         if (errorSources.length > 0) {
+          const details = errorSources.map((s) => `${s.label || s.id}: ${s.last_message || "fetch failed"}`).join("\n");
           const names = errorSources.map((s) => s.label || s.id).join(", ");
-          chips.push(`<span class="chip bad">${escapeHtml(names)}: error</span>`);
+          chips.push(`<span class="chip bad rules-external-error-chip" title="${escapeHtml(details)}" style="cursor:pointer;">${escapeHtml(names)}: error</span>`);
         }
       }
       if (state.rulesDirty) {
@@ -3057,6 +3058,14 @@
     document.getElementById("rulesPushBtn").addEventListener("click", (event) => pushRules(event.currentTarget));
     document.getElementById("rulesLoadTextBtn").addEventListener("click", (event) => loadRulesText(event.currentTarget));
     document.getElementById("rulesExternalRunBtn").addEventListener("click", (event) => runExternalSource(event.currentTarget));
+    document.getElementById("rulesSummaryChips").addEventListener("click", (event) => {
+      const errorChip = event.target.closest(".rules-external-error-chip");
+      if (errorChip) {
+        const el = document.getElementById("rulesExternalSources");
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        flash(errorChip.title || "External source error", "bad");
+      }
+    });
     document.getElementById("rulesExternalSources").addEventListener("click", (event) => {
       const downloadFresh = event.target.closest(".rules-external-download-fresh-btn");
       if (downloadFresh) {
