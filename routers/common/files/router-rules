@@ -2029,7 +2029,7 @@ refresh_external_sources_internal() {
 		enabled_count=$((enabled_count + 1))
 		generated_file="$(mktemp)"
 		if ! generate_external_source_internal "$id" > "$generated_file" 2> "$error_file"; then
-			message="$(sed '/^[[:space:]]*$/d' "$error_file" | sed -n '1p')"
+			message="$(sed '/^[[:space:]]*$/d' "$error_file" | head -5 | tr '\n' '|' | sed 's/|$//;s/|/ | /g')"
 			[ -n "$message" ] || message="External source fetch failed for $id."
 			set_external_source_status "$id" error "$message" '0' '0'
 			status_trace_add sync_trace "external $id skipped: $message"
