@@ -1624,22 +1624,47 @@ generate_external_source_internal() {
 	script_file="$(external_source_script_for_id "$id" 2>/dev/null || true)"
 	if [ -n "$script_file" ] && [ -f "$script_file" ]; then
 		max_targets="$(external_source_max_targets "$id")"
-		local script_timeout tmp_out line_count
+		local script_timeout tmp_out tmp_err line_count bad_lines
 		script_timeout="$EXTERNAL_SCRIPT_TIMEOUT"
 		tmp_out="$(mktemp)"
+		tmp_err="$(mktemp)"
 		rc=0
-		run_with_timeout "$script_timeout" "$python_bin" "$script_file" --collapse --url "$url" --timeout "$script_timeout" > "$tmp_out" 2>&1 || rc=$?
+		run_with_timeout "$script_timeout" "$python_bin" "$script_file" --collapse --url "$url" --timeout "$script_timeout" > "$tmp_out" 2> "$tmp_err" || rc=$?
 		rm -f "$script_file"
 		if [ "$rc" -ne 0 ]; then
-			head -5 "$tmp_out" >&2
-			rm -f "$tmp_out"
-			return $rc
+			if [ "$rc" -eq 124 ] 2>/dev/null; then
+				echo "Script $id killed: exceeded ${script_timeout}s timeout" >&2
+			else
+				echo "Script $id failed with exit code $rc" >&2
+			fi
+			head -5 "$tmp_err" >&2
+			rm -f "$tmp_out" "$tmp_err"
+			return 1
 		fi
+		rm -f "$tmp_err"
 		line_count="$(wc -l < "$tmp_out" | awk '{print $1}')"
-		if [ "$line_count" -gt "$max_targets" ] 2>/dev/null; then
-			echo "Script $id produced $line_count lines (max $max_targets), output truncated" >&2
+		if [ "$line_count" -eq 0 ]; then
+			echo "Script $id produced no output" >&2
+			rm -f "$tmp_out"
+			return 1
 		fi
-		head -n "$max_targets" "$tmp_out"
+		if [ "$line_count" -gt "$max_targets" ] 2>/dev/null; then
+			echo "Script $id produced $line_count lines (max $max_targets), rejecting" >&2
+			rm -f "$tmp_out"
+			return 1
+		fi
+		bad_lines="$(awk '
+			/^[[:space:]]*$/ { next }
+			/^[0-9]+(\.[0-9]+){3}(\/[0-9]+)?$/ { next }
+			/^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$/ { next }
+			{ print NR": "$0 }
+		' "$tmp_out" | head -3)"
+		if [ -n "$bad_lines" ]; then
+			printf 'Script %s: invalid output lines:\n%s\n' "$id" "$bad_lines" >&2
+			rm -f "$tmp_out"
+			return 1
+		fi
+		cat "$tmp_out"
 		rm -f "$tmp_out"
 		return 0
 	fi
