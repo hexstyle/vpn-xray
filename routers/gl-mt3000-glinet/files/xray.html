@@ -2647,6 +2647,7 @@
         }
         await refreshAll(false, false, true);
         flash((state.rules?.sync_phase_message || state.rules?.last_sync_message || finalData.sync_phase_message || finalData.last_sync_message || `${verb} finished.`), "good");
+        backgroundSmokeRefresh().catch(() => {});
       } catch (err) {
         flash(`${verb} failed: ${err.message}`, "bad");
         document.getElementById("rulesTraceOutput").textContent = formatRulesJobFailureDetails(err.routerJob || state.rules, `${verb} failed: ${err.message}`);
@@ -2914,6 +2915,31 @@
       } finally {
         setBusy(button, false);
         endForegroundTask();
+      }
+    }
+
+    async function backgroundSmokeRefresh() {
+      const pathEl = document.getElementById("pathActive");
+      const pathHint = document.getElementById("pathActiveHint");
+      if (pathEl) { pathEl.textContent = "checking\u2026"; pathEl.className = "value"; }
+      if (pathHint) { pathHint.textContent = "Running a quick smoke test to verify the transparent path after sync."; }
+      try {
+        const data = await callApi(runtimeApi, "smoke", null, { timeoutMs: 45000 });
+        const smokeStatus = data.status || (data.ok ? "ok" : "error");
+        state.runtime = {
+          ...(state.runtime || {}),
+          last_smoke_at: String(Math.floor(Date.now() / 1000)),
+          last_smoke_status: smokeStatus,
+          last_smoke_message: data.message || "",
+          last_smoke_https_ok: !!data.https_ok,
+          last_smoke_egress_ok: !!data.egress_ok,
+          last_smoke_openai_ok: !!data.openai_ok,
+          path_state: data.ok ? "active" : "degraded",
+          path_degraded: !data.ok
+        };
+        renderRuntime(state.runtime);
+      } catch (_) {
+        await refreshAll(false, false, true).catch(() => {});
       }
     }
 
