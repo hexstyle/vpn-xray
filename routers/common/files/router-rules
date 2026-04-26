@@ -1568,6 +1568,7 @@ maybe_migrate_external_repo_layout_internal() {
 		{
 			line = trim($0)
 			if (line == "" || line ~ /^#/) {
+				print
 				next
 			}
 			if (!(tolower(line) in managed)) {
