@@ -1062,25 +1062,6 @@ download_external_file_action() {
 	rm -f "$output_file"
 }
 
-migrate_external_catalog_action() {
-	local error_file rc message
-
-	error_file="$(mktemp)"
-	rc=0
-	ROUTER_RULES_SYNC_ACTOR='ui-migrate' /usr/bin/router-rules migrate-external-catalog > /dev/null 2> "$error_file" || rc=$?
-
-	if [ "$rc" -ne 0 ]; then
-		message="$(sed '/^[[:space:]]*$/d' "$error_file" | sed -n '1p')"
-		[ -n "$message" ] || message='Catalog migration failed.'
-		rm -f "$error_file"
-		emit_error migrate_external_catalog "$message"
-		return 0
-	fi
-	rm -f "$error_file"
-
-	status_action
-}
-
 REQUEST_DATA="$(load_request_data)"
 
 case "$(request_value action)" in
@@ -1116,9 +1097,6 @@ case "$(request_value action)" in
 		;;
 	download_external_file)
 		download_external_file_action
-		;;
-	migrate_external_catalog)
-		migrate_external_catalog_action
 		;;
 	*)
 		emit_error "$(request_value action)" 'Unknown action.'

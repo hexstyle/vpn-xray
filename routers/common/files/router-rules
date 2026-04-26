@@ -151,19 +151,34 @@ scripts_dir() {
 	printf '%s/%s\n' "$(repo_path)" "$SCRIPTS_DIR_RELPATH"
 }
 
+external_source_catalog_from_scripts() {
+	local sdir="$1" f id label url
+	for f in "$sdir"/*.json; do
+		[ -f "$f" ] || continue
+		id="$(basename "$f" .json)"
+		label="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('label',sys.argv[2]))" "$f" "$id" 2>/dev/null || echo "$id")"
+		url="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('url',''))" "$f" 2>/dev/null || true)"
+		printf '%s|%s|%s\n' "$id" "$label" "$url"
+	done
+}
+
 external_source_catalog() {
-	local sdir f id label url
+	local sdir
 	sdir="$(scripts_dir)"
+	# Read from JSON scripts if available
 	if [ -d "$sdir" ] && ls "$sdir"/*.json >/dev/null 2>&1; then
-		for f in "$sdir"/*.json; do
-			[ -f "$f" ] || continue
-			id="$(basename "$f" .json)"
-			label="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('label',sys.argv[2]))" "$f" "$id" 2>/dev/null || echo "$id")"
-			url="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('url',''))" "$f" 2>/dev/null || true)"
-			printf '%s|%s|%s\n' "$id" "$label" "$url"
-		done
+		external_source_catalog_from_scripts "$sdir"
 		return 0
 	fi
+	# Auto-migrate hardcoded catalog to scripts when repo exists
+	if [ -d "$(repo_path)" ]; then
+		migrate_external_catalog_internal >/dev/null 2>&1 || true
+		if [ -d "$sdir" ] && ls "$sdir"/*.json >/dev/null 2>&1; then
+			external_source_catalog_from_scripts "$sdir"
+			return 0
+		fi
+	fi
+	# First-boot fallback: repo not cloned yet
 	cat <<'EOF'
 microsoft_service_tags|Microsoft Service Tags|https://www.microsoft.com/en-us/download/details.aspx?id=56519
 cloudflare_ipv4|Cloudflare IPv4|https://www.cloudflare.com/ips-v4

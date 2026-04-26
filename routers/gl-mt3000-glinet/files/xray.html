@@ -351,35 +351,11 @@
       background: #fbfcfd;
     }
 
-    .health-dot {
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      margin-right: 6px;
-      vertical-align: middle;
-    }
-
-    .health-dot.ok { background: var(--good); }
-    .health-dot.error { background: var(--bad); }
-    .health-dot.unknown { background: #b0b8c0; }
-
-    .source-has-error {
-      border-color: var(--bad);
-      background: #fef6f6;
-    }
-
-    .source-error-banner {
-      margin-top: 8px;
-      padding: 8px 10px;
-      border-radius: 8px;
-      background: #fde8e8;
-      color: var(--bad);
+    .source-error-inline {
+      margin-top: 6px;
       font-size: 12px;
-      font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", monospace;
-      line-height: 1.45;
-      white-space: pre-wrap;
-      word-break: break-word;
+      color: var(--bad);
+      line-height: 1.4;
     }
 
     .external-source-meta {
@@ -919,7 +895,6 @@
         <div id="rulesExternalSources" class="external-source-grid" style="margin-top:12px;"></div>
         <div class="button-wrap" style="margin-top:12px;">
           <button id="rulesAddExternalSourceBtn">Add External Source</button>
-          <button id="rulesMigrateExternalCatalogBtn" style="display:none;">Migrate Hardcoded Sources to Scripts</button>
         </div>
         <div class="button-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:12px;">
           <div class="field">
@@ -1355,33 +1330,26 @@
         return;
       }
       const sourceList = Array.isArray(sources) ? sources : [];
-      const anyHasScript = sourceList.some((s) => s.has_script);
-      const migrateBtn = document.getElementById("rulesMigrateExternalCatalogBtn");
-      if (migrateBtn) {
-        migrateBtn.style.display = (!anyHasScript && sourceList.length > 0) ? "" : "none";
-      }
       const html = sourceList.map((source) => {
         const enabled = Object.prototype.hasOwnProperty.call(selectionOverride, source.id)
           ? !!selectionOverride[source.id]
           : !!source.enabled;
         const health = source.health || "unknown";
-        const healthLabel = health === "ok" ? "OK" : health === "error" ? "Error" : "Never run";
-        const status = source.last_status || (source.file_present ? "stored" : "never");
         const lastSync = source.last_run_at ? formatUnixTime(source.last_run_at) : "never";
         const storedInfo = source.file_present ? `${source.file_count || 0} targets` : "no file";
-        const errorBlock = (health === "error" && source.last_message)
-          ? `<div class="source-error-banner">${escapeHtml(source.last_message)}</div>`
+        const errorLine = (health === "error" && source.last_message)
+          ? `<div class="source-error-inline">Last fetch failed: ${escapeHtml(source.last_message)}</div>`
           : "";
         return `
-          <div class="external-source-card${health === "error" ? " source-has-error" : ""}">
+          <div class="external-source-card">
             <div class="subhead" style="align-items:flex-start;margin-bottom:0;">
               <div style="flex:1 1 auto;">
                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-                  <span class="health-dot ${escapeHtml(health)}" title="${escapeHtml(healthLabel)}"></span>
                   <span style="font-weight:700;">${escapeHtml(source.label || source.id)}</span>
                   <span style="font-size:11px;color:var(--muted);margin-left:4px;">${escapeHtml(storedInfo)} · ${escapeHtml(lastSync)}</span>
                 </div>
                 <div style="font-size:12px;color:var(--muted);font-family:monospace;">${escapeHtml(source.url || "")}</div>
+                ${errorLine}
               </div>
               <div class="toggle-row" style="justify-content:flex-end;">
                 <span class="toggle-label">Apply</span>
@@ -1399,12 +1367,10 @@
                 </label>
               </div>
             </div>
-            ${errorBlock}
             <div class="external-source-actions">
               <button class="rules-external-download-stored-btn" data-source-id="${escapeHtml(source.id)}">Download Stored</button>
               <button class="rules-external-download-fresh-btn" data-source-id="${escapeHtml(source.id)}">Download Fresh</button>
-              ${source.has_script ? `<button class="rules-external-edit-btn" data-source-id="${escapeHtml(source.id)}">Edit Script</button>` : ""}
-              ${source.has_script ? `<button class="rules-external-delete-btn" data-source-id="${escapeHtml(source.id)}" style="color:var(--bad);">Delete</button>` : ""}
+              <button class="rules-external-edit-btn" data-source-id="${escapeHtml(source.id)}">Edit</button>
             </div>
           </div>
         `;
@@ -2093,15 +2059,20 @@
         `Repo ready: ${repoReady ? "yes" : "no"}`
       ].filter(Boolean);
       const chips = [
-        `<span class="chip ${uiJobRunning ? "warn" : uiJobState === "error" ? "bad" : uiJobState === "success" ? "ok" : ""}">UI op: ${escapeHtml(uiJobState ? `${uiJobKind || "operation"} ${uiJobState}` : "idle")}</span>`,
-        `<span class="chip ${gitHealth.chipClass}">Git sync: ${escapeHtml(gitHealth.label)}</span>`,
+        `<span class="chip ${gitHealth.chipClass}">Git: ${escapeHtml(gitHealth.label)}</span>`,
         `<span class="chip ${modePending ? "warn" : mode === "selective" ? "ok" : ""}">Mode: ${escapeHtml(mode)}${modePending ? " (applying)" : ""}</span>`,
         `<span class="chip">Rules: ${escapeHtml(counts)}</span>`,
-        `<span class="chip ${!externalEnabled ? "" : lastExternalStatus === "updated" ? "ok" : lastExternalStatus === "error" ? "bad" : "warn"}">External: ${escapeHtml(!externalEnabled ? "off" : lastExternalStatus)}</span>`,
-        `<span class="chip ${cutoverRequired ? "warn" : "ok"}">Runtime: ${escapeHtml(cutoverRequired ? "reset pending" : "current")}</span>`,
-        `<span class="chip ${phase === "error" ? "bad" : phase === "verified" ? "ok" : "warn"}">Phase: ${escapeHtml(phase)}</span>`,
-        `<span class="chip ${state.rulesDirty ? "bad" : "ok"}">${state.rulesDirty ? "Local edits pending" : "Editor clean"}</span>`
       ];
+      if (externalEnabled) {
+        const errorSources = externalSources.filter((s) => s.health === "error");
+        if (errorSources.length > 0) {
+          const names = errorSources.map((s) => s.label || s.id).join(", ");
+          chips.push(`<span class="chip bad">${escapeHtml(names)}: error</span>`);
+        }
+      }
+      if (state.rulesDirty) {
+        chips.push(`<span class="chip bad">Unsaved edits</span>`);
+      }
 
       document.getElementById("rulesSummaryChips").innerHTML = chips.join("");
       if (
@@ -2370,9 +2341,6 @@
         button.disabled = state.foregroundBusy || !source?.file_present;
       });
       document.querySelectorAll(".rules-external-edit-btn").forEach((button) => {
-        button.disabled = state.foregroundBusy;
-      });
-      document.querySelectorAll(".rules-external-delete-btn").forEach((button) => {
         button.disabled = state.foregroundBusy;
       });
       if (externalHint) {
@@ -2765,26 +2733,32 @@
 
     function openScriptEditor(sourceId) {
       const isNew = !sourceId;
-      document.getElementById("scriptEditorTitle").textContent = isNew ? "Add External Source" : "Edit External Source Script";
+      const source = sourceId ? externalSourceById(sourceId) : null;
+      const hasScript = !!source?.has_script;
+      document.getElementById("scriptEditorTitle").textContent = isNew ? "Add External Source"
+        : hasScript ? "Edit External Source" : "Create Script for External Source";
       document.getElementById("scriptEditorId").value = sourceId || "";
       document.getElementById("scriptEditorId").disabled = !isNew;
-      document.getElementById("scriptEditorLabel").value = "";
-      document.getElementById("scriptEditorUrl").value = "";
-      document.getElementById("scriptEditorMaxTargets").value = "5000";
+      document.getElementById("scriptEditorLabel").value = (!isNew && !hasScript && source) ? (source.label || "") : "";
+      document.getElementById("scriptEditorUrl").value = (!isNew && !hasScript && source) ? (source.url || "") : "";
+      document.getElementById("scriptEditorMaxTargets").value = source?.max_targets || "5000";
       document.getElementById("scriptEditorCode").value = "";
-      document.getElementById("scriptEditorOutput").textContent = isNew ? "Fill in the fields and paste a Python script." : "Loading saved script...";
-      document.getElementById("scriptEditorDeleteBtn").style.display = isNew ? "none" : "";
+      document.getElementById("scriptEditorOutput").textContent = isNew
+        ? "Fill in the fields and paste a Python script."
+        : hasScript ? "Loading saved script..."
+        : "This source uses the bundled parser. Paste a custom Python script to replace it.";
+      document.getElementById("scriptEditorDeleteBtn").style.display = hasScript ? "" : "none";
       document.getElementById("scriptEditorDeleteBtn").dataset.sourceId = sourceId || "";
-      scriptEditorSaved.label = "";
-      scriptEditorSaved.url = "";
-      scriptEditorSaved.maxTargets = "5000";
+      scriptEditorSaved.label = (!isNew && !hasScript && source) ? (source.label || "") : "";
+      scriptEditorSaved.url = (!isNew && !hasScript && source) ? (source.url || "") : "";
+      scriptEditorSaved.maxTargets = source?.max_targets || "5000";
       scriptEditorSaved.code = "";
       updateScriptEditorDirtyState();
       const modal = document.getElementById("scriptEditorModal");
       modal.classList.add("show");
       modal.setAttribute("aria-hidden", "false");
 
-      if (!isNew) {
+      if (!isNew && hasScript) {
         loadScriptForEditing(sourceId);
       }
     }
@@ -2866,23 +2840,6 @@
       } catch (err) {
         flash(`Delete failed: ${err.message}`, "bad");
       } finally {
-        endForegroundTask();
-      }
-    }
-
-    async function migrateExternalCatalog() {
-      beginForegroundTask("Migrating hardcoded sources to JSON scripts...", 60000);
-      const btn = document.getElementById("rulesMigrateExternalCatalogBtn");
-      if (btn) setBusy(btn, true);
-      try {
-        const data = await callApi(rulesApi, "migrate_external_catalog", null, { timeoutMs: 60000 });
-        if (data.ok === false) { throw new Error(data.error || "Migration failed"); }
-        flash("Migration complete. Sources are now editable scripts.", "good");
-        await refreshRules(false, true);
-      } catch (err) {
-        flash(`Migration failed: ${err.message}`, "bad");
-      } finally {
-        if (btn) setBusy(btn, false);
         endForegroundTask();
       }
     }
@@ -3116,10 +3073,6 @@
         openScriptEditor(editBtn.dataset.sourceId || "");
         return;
       }
-      const deleteBtn = event.target.closest(".rules-external-delete-btn");
-      if (deleteBtn) {
-        deleteExternalScript(deleteBtn.dataset.sourceId || "");
-      }
     });
     document.getElementById("rulesExternalSources").addEventListener("change", (event) => {
       if (event.target.matches(".rules-external-enable-input")) {
@@ -3128,7 +3081,6 @@
       }
     });
     document.getElementById("rulesAddExternalSourceBtn").addEventListener("click", () => openScriptEditor(""));
-    document.getElementById("rulesMigrateExternalCatalogBtn").addEventListener("click", migrateExternalCatalog);
     document.getElementById("scriptEditorClose").addEventListener("click", closeScriptEditor);
     document.getElementById("scriptEditorModal").addEventListener("click", (event) => {
       if (event.target.id === "scriptEditorModal") closeScriptEditor();
