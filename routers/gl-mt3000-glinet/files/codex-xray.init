@@ -366,6 +366,8 @@ start() {
 	refresh_egress_route
 	save_mptcp_state
 	save_offload_state
+	export GOMEMLIMIT=120MiB
+	export GOGC=50
 	start-stop-daemon -S -b -m -p "$PIDFILE" -x "$BIN" -- run -config "$CONFIG"
 }
 

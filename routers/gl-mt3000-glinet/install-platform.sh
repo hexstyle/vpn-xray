@@ -966,6 +966,7 @@ EOF
 	copy_if_changed "$PROFILE_DIR/files/codex-transproxy.init" /etc/init.d/codex-transproxy
 	copy_if_changed "$PROFILE_DIR/files/codex-xray-uplink.hotplug" /etc/hotplug.d/iface/95-codex-xray-uplink
 	copy_if_changed "$PROFILE_DIR/files/xray-switch-watchdog.init" /etc/init.d/xray-switch-watchdog
+	copy_if_changed "$PROFILE_DIR/files/xray-health-monitor.init" /etc/init.d/xray-health-monitor
 	copy_if_changed "$COMMON_DIR/files/router-rules-sync.init" /etc/init.d/router-rules-sync
 	copy_if_changed "$COMMON_DIR/files/lib-common.sh" /usr/share/vpn-xray/lib-common.sh
 	copy_if_changed "$COMMON_DIR/files/router-rules-external.py" /usr/share/vpn-xray/router-rules-external.py
@@ -980,6 +981,7 @@ EOF
 		/etc/init.d/codex-transproxy \
 		/etc/hotplug.d/iface/95-codex-xray-uplink \
 		/etc/init.d/xray-switch-watchdog \
+		/etc/init.d/xray-health-monitor \
 		/etc/init.d/router-rules-sync \
 		/etc/gl-switch.d/xray.sh \
 		/usr/bin/router-rules \
@@ -989,7 +991,7 @@ EOF
 		/www/cgi-bin/xray-vps \
 		/www/cgi-bin/xray-rules \
 		/www/xray.html
-	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
+	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/xray-health-monitor /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
 	chmod 644 /www/xray.html
 
 	rm -rf /usr/share/vpn-xray/vps
@@ -1042,6 +1044,17 @@ EOF
 
 	write_platform_metadata
 
+	# Kernel tuning: reserve more free pages so interrupt handlers and the
+	# OOM-killer have breathing room on a no-swap 512 MB system.
+	# softlockup_panic writes a stack trace to ramoops when the kernel hangs.
+	mkdir -p /etc/sysctl.d
+	cat > /etc/sysctl.d/99-xray-stability.conf <<-'SYSCTL'
+	vm.min_free_kbytes=16384
+	kernel.softlockup_panic=1
+	SYSCTL
+	sysctl -w vm.min_free_kbytes=16384 >/dev/null 2>&1 || true
+	sysctl -w kernel.softlockup_panic=1 >/dev/null 2>&1 || true
+
 	if valid_router_config_present; then
 		touch "$CONFIG_READY_FILE"
 		chmod 600 "$CONFIG_READY_FILE"
@@ -1064,6 +1077,8 @@ EOF
 		/etc/init.d/codex-xray enable >/dev/null 2>&1 || true
 		/etc/init.d/codex-transproxy enable >/dev/null 2>&1 || true
 		/etc/init.d/xray-switch-watchdog enable >/dev/null 2>&1 || true
+		/etc/init.d/xray-health-monitor enable >/dev/null 2>&1 || true
+		/etc/init.d/xray-health-monitor start >/dev/null 2>&1 || true
 		/etc/init.d/router-rules-sync enable >/dev/null 2>&1 || true
 		/etc/init.d/gl_switch_button_check stop >/dev/null 2>&1 || true
 		/etc/init.d/gl_switch_button_check disable >/dev/null 2>&1 || true

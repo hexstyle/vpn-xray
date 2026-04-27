@@ -78,17 +78,26 @@ router_live_value() {
 }
 
 router_current_json() {
-	local ready
+	local ready _rc_sa _rc_sp _rc_sn _rc_uu _rc_pk _rc_si _rc_fl
 	router_config_ready && ready=1 || ready=0
+	eval "$(jsonfilter -i "$ROUTER_CONFIG" \
+		-e '_rc_sa=@.outbounds[0].settings.vnext[0].address' \
+		-e '_rc_sp=@.outbounds[0].settings.vnext[0].port' \
+		-e '_rc_sn=@.outbounds[0].streamSettings.realitySettings.serverName' \
+		-e '_rc_uu=@.outbounds[0].settings.vnext[0].users[0].id' \
+		-e '_rc_pk=@.outbounds[0].streamSettings.realitySettings.publicKey' \
+		-e '_rc_si=@.outbounds[0].streamSettings.realitySettings.shortId' \
+		-e '_rc_fl=@.outbounds[0].settings.vnext[0].users[0].flow' \
+		2>/dev/null)" 2>/dev/null || true
 	printf '{'
 	printf '"config_ready":'; json_bool "$ready"; printf ','
-	printf '"server_address":"%s",' "$(json_escape "$(router_live_value server_address)")"
-	printf '"server_port":"%s",' "$(json_escape "$(router_live_value server_port)")"
-	printf '"server_name":"%s",' "$(json_escape "$(router_live_value server_name)")"
-	printf '"uuid":"%s",' "$(json_escape "$(router_live_value uuid)")"
-	printf '"public_key":"%s",' "$(json_escape "$(router_live_value public_key)")"
-	printf '"short_id":"%s",' "$(json_escape "$(router_live_value short_id)")"
-	printf '"flow":"%s"' "$(json_escape "$(router_live_value flow)")"
+	printf '"server_address":"%s",' "$(json_escape "${_rc_sa:-}")"
+	printf '"server_port":"%s",' "$(json_escape "${_rc_sp:-}")"
+	printf '"server_name":"%s",' "$(json_escape "${_rc_sn:-}")"
+	printf '"uuid":"%s",' "$(json_escape "${_rc_uu:-}")"
+	printf '"public_key":"%s",' "$(json_escape "${_rc_pk:-}")"
+	printf '"short_id":"%s",' "$(json_escape "${_rc_si:-}")"
+	printf '"flow":"%s"' "$(json_escape "${_rc_fl:-}")"
 	printf '}'
 }
 
@@ -748,83 +757,113 @@ install_command_for_profile() {
 
 remote_cache_json() {
 	local cache_path="$1"
-	printf '{'
-	printf '"status":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_STATUS)")"
-	printf '"ssh_ok":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_SSH_OK)")"
-	printf '"hostname":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_HOSTNAME)")"
-	printf '"fqdn":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_FQDN)")"
-	printf '"kernel":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_KERNEL)")"
-	printf '"arch":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_ARCH)")"
-	printf '"pretty_name":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_PRETTY_NAME)")"
-	printf '"os_id":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_OS_ID)")"
-	printf '"os_version":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_OS_VERSION)")"
-	printf '"virt":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_VIRT)")"
-	printf '"systemd":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_SYSTEMD)")"
-	printf '"pkg_mgr":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_PKG_MGR)")"
-	printf '"install_profile":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_INSTALL_PROFILE)")"
-	printf '"install_label":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_INSTALL_LABEL)")"
-	printf '"install_supported":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_INSTALL_SUPPORTED)")"
-	printf '"install_notes":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_INSTALL_NOTES)")"
-	printf '"memory":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_MEMORY)")"
-	printf '"disk_root":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_DISK_ROOT)")"
-	printf '"uptime":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_UPTIME)")"
-	printf '"public_ip":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_PUBLIC_IP)")"
-	printf '"ipinfo_json":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_IPINFO_JSON)")"
-	printf '"xray_present":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_XRAY_PRESENT)")"
-	printf '"xray_version":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_XRAY_VERSION)")"
-	printf '"xray_service":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_XRAY_SERVICE)")"
-	printf '"listener_port":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_LISTENER_PORT)")"
-	printf '"listener_443":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_LISTENER_443)")"
-	printf '"managed_meta":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_MANAGED_META)")"
-	printf '"server_port":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_server_port)")"
-	printf '"server_name":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_server_name)")"
-	printf '"uuid":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_uuid)")"
-	printf '"public_key":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_public_key)")"
-	printf '"short_id":"%s",' "$(json_escape "$(cache_get "$cache_path" REMOTE_short_id)")"
-	printf '"flow":"%s"' "$(json_escape "$(cache_get "$cache_path" REMOTE_flow)")"
-	printf '}'
+	if [ ! -f "$cache_path" ]; then
+		printf '{"status":"","ssh_ok":"","hostname":"","fqdn":"","kernel":"","arch":"","pretty_name":"","os_id":"","os_version":"","virt":"","systemd":"","pkg_mgr":"","install_profile":"","install_label":"","install_supported":"","install_notes":"","memory":"","disk_root":"","uptime":"","public_ip":"","ipinfo_json":"","xray_present":"","xray_version":"","xray_service":"","listener_port":"","listener_443":"","managed_meta":"","server_port":"","server_name":"","uuid":"","public_key":"","short_id":"","flow":""}'
+		return 0
+	fi
+	awk '
+	BEGIN {
+		FS="="
+		ORS=""
+		split("REMOTE_STATUS status REMOTE_SSH_OK ssh_ok REMOTE_HOSTNAME hostname REMOTE_FQDN fqdn REMOTE_KERNEL kernel REMOTE_ARCH arch REMOTE_PRETTY_NAME pretty_name REMOTE_OS_ID os_id REMOTE_OS_VERSION os_version REMOTE_VIRT virt REMOTE_SYSTEMD systemd REMOTE_PKG_MGR pkg_mgr REMOTE_INSTALL_PROFILE install_profile REMOTE_INSTALL_LABEL install_label REMOTE_INSTALL_SUPPORTED install_supported REMOTE_INSTALL_NOTES install_notes REMOTE_MEMORY memory REMOTE_DISK_ROOT disk_root REMOTE_UPTIME uptime REMOTE_PUBLIC_IP public_ip REMOTE_IPINFO_JSON ipinfo_json REMOTE_XRAY_PRESENT xray_present REMOTE_XRAY_VERSION xray_version REMOTE_XRAY_SERVICE xray_service REMOTE_LISTENER_PORT listener_port REMOTE_LISTENER_443 listener_443 REMOTE_MANAGED_META managed_meta REMOTE_server_port server_port REMOTE_server_name server_name REMOTE_uuid uuid REMOTE_public_key public_key REMOTE_short_id short_id REMOTE_flow flow", pairs, " ")
+		for (i = 1; i in pairs; i += 2) {
+			key_map[pairs[i]] = pairs[i+1]
+		}
+		order_str = "status ssh_ok hostname fqdn kernel arch pretty_name os_id os_version virt systemd pkg_mgr install_profile install_label install_supported install_notes memory disk_root uptime public_ip ipinfo_json xray_present xray_version xray_service listener_port listener_443 managed_meta server_port server_name uuid public_key short_id flow"
+		n = split(order_str, order, " ")
+		for (i = 1; i <= n; i++) vals[order[i]] = ""
+	}
+	{
+		k = $1
+		sub(/^[^=]*=/, "")
+		v = $0
+		if (k in key_map) {
+			gsub(/\\/, "\\\\", v)
+			gsub(/"/, "\\\"", v)
+			gsub(/\t/, "\\t", v)
+			gsub(/\r/, "\\r", v)
+			vals[key_map[k]] = v
+		}
+	}
+	END {
+		printf "{"
+		for (i = 1; i <= n; i++) {
+			if (i > 1) printf ","
+			printf "\"%s\":\"%s\"", order[i], vals[order[i]]
+		}
+		printf "}"
+	}
+	' "$cache_path"
 }
 
 profile_json() {
 	local profile_id="$1"
-	local cache_path managed_path bootstrap_path managed_present bootstrap_present router_diff remote_diff endpoint_host
+	local _pj_label _pj_vps_profile _pj_auth_mode _pj_ssh_host _pj_ssh_port _pj_ssh_user
+	local _pj_server_address _pj_server_port _pj_server_name _pj_uuid _pj_public_key _pj_short_id _pj_flow
+	local _pj_managed_key_path _pj_bootstrap_key_path _pj_managed_pubkey _pj_last_inspect_status _pj_last_inspect_at
+	local _pj_managed_present _pj_bootstrap_present _pj_endpoint_host
+	local _pj_cache_path _pj_router_diff _pj_remote_diff
+	local _pj_line _pj_key _pj_val
 
-	cache_path="$(profile_cache_path "$profile_id")"
-	managed_path="$(profile_get "$profile_id" managed_key_path)"
-	bootstrap_path="$(profile_get "$profile_id" bootstrap_key_path)"
-	[ -n "$managed_path" ] && [ -f "$managed_path" ] && managed_present=1 || managed_present=0
-	[ -n "$bootstrap_path" ] && [ -f "$bootstrap_path" ] && bootstrap_present=1 || bootstrap_present=0
-	router_diff="$(profile_diff_fields "$profile_id" router)"
-	remote_diff="$(profile_diff_fields "$profile_id" remote)"
-	endpoint_host="$(profile_get "$profile_id" server_address)"
-	[ -n "$endpoint_host" ] || endpoint_host="$(profile_get "$profile_id" ssh_host)"
+	eval "$(uci -q show "${PROFILE_PACKAGE}.${profile_id}" 2>/dev/null | awk -F= -v pfx="${PROFILE_PACKAGE}.${profile_id}." '
+		BEGIN { ORS="" }
+		{
+			k = $0
+			sub(/=.*/, "", k)
+			v = $0
+			sub(/^[^=]*=/, "", v)
+			if (index(k, pfx) != 1) next
+			k = substr(k, length(pfx) + 1)
+			if (k == "" || k ~ /\./) next
+			# strip surrounding single quotes from uci output
+			if (substr(v,1,1) == "\x27" && substr(v,length(v),1) == "\x27") {
+				v = substr(v, 2, length(v)-2)
+			}
+			gsub(/\x27/, "\x27\"\x27\"\x27", v)
+			printf "_pj_%s=\x27%s\x27\n", k, v
+		}
+	')"
+
+	_pj_managed_key_path="${_pj_managed_key_path:-}"
+	_pj_bootstrap_key_path="${_pj_bootstrap_key_path:-}"
+	[ -n "$_pj_managed_key_path" ] && [ -f "$_pj_managed_key_path" ] && _pj_managed_present=1 || _pj_managed_present=0
+	[ -n "$_pj_bootstrap_key_path" ] && [ -f "$_pj_bootstrap_key_path" ] && _pj_bootstrap_present=1 || _pj_bootstrap_present=0
+
+	_pj_endpoint_host="${_pj_server_address:-}"
+	[ -n "$_pj_endpoint_host" ] || _pj_endpoint_host="${_pj_ssh_host:-}"
+
+	_pj_vps_profile="$(normalize_vps_profile "${_pj_vps_profile:-}")"
+
+	_pj_cache_path="${INSPECT_DIR}/${profile_id}.env"
+	_pj_router_diff="$(profile_diff_fields "$profile_id" router)"
+	_pj_remote_diff="$(profile_diff_fields "$profile_id" remote)"
 
 	printf '{'
 	printf '"id":"%s",' "$(json_escape "$profile_id")"
-	printf '"label":"%s",' "$(json_escape "$(profile_get "$profile_id" label)")"
-	printf '"vps_profile":"%s",' "$(json_escape "$(normalize_vps_profile "$(profile_get "$profile_id" vps_profile)")")"
-	printf '"auth_mode":"%s",' "$(json_escape "$(profile_get "$profile_id" auth_mode)")"
-	printf '"endpoint_host":"%s",' "$(json_escape "$endpoint_host")"
-	printf '"ssh_host":"%s",' "$(json_escape "$(profile_get "$profile_id" ssh_host)")"
-	printf '"ssh_port":"%s",' "$(json_escape "$(profile_get "$profile_id" ssh_port)")"
-	printf '"ssh_user":"%s",' "$(json_escape "$(profile_get "$profile_id" ssh_user)")"
-	printf '"server_address":"%s",' "$(json_escape "$(profile_get "$profile_id" server_address)")"
-	printf '"server_port":"%s",' "$(json_escape "$(profile_get "$profile_id" server_port)")"
-	printf '"server_name":"%s",' "$(json_escape "$(profile_get "$profile_id" server_name)")"
-	printf '"uuid":"%s",' "$(json_escape "$(profile_get "$profile_id" uuid)")"
-	printf '"public_key":"%s",' "$(json_escape "$(profile_get "$profile_id" public_key)")"
-	printf '"short_id":"%s",' "$(json_escape "$(profile_get "$profile_id" short_id)")"
-	printf '"flow":"%s",' "$(json_escape "$(profile_get "$profile_id" flow)")"
-	printf '"managed_key_path":"%s",' "$(json_escape "$managed_path")"
-	printf '"managed_pubkey":"%s",' "$(json_escape "$(profile_get "$profile_id" managed_pubkey)")"
-	printf '"managed_key_present":'; json_bool "$managed_present"; printf ','
-	printf '"bootstrap_key_present":'; json_bool "$bootstrap_present"; printf ','
-	printf '"last_inspect_status":"%s",' "$(json_escape "$(profile_get "$profile_id" last_inspect_status)")"
-	printf '"last_inspect_at":"%s",' "$(json_escape "$(profile_get "$profile_id" last_inspect_at)")"
-	printf '"router_diff":"%s",' "$(json_escape "$router_diff")"
-	printf '"remote_diff":"%s",' "$(json_escape "$remote_diff")"
+	printf '"label":"%s",' "$(json_escape "${_pj_label:-}")"
+	printf '"vps_profile":"%s",' "$(json_escape "$_pj_vps_profile")"
+	printf '"auth_mode":"%s",' "$(json_escape "${_pj_auth_mode:-}")"
+	printf '"endpoint_host":"%s",' "$(json_escape "$_pj_endpoint_host")"
+	printf '"ssh_host":"%s",' "$(json_escape "${_pj_ssh_host:-}")"
+	printf '"ssh_port":"%s",' "$(json_escape "${_pj_ssh_port:-}")"
+	printf '"ssh_user":"%s",' "$(json_escape "${_pj_ssh_user:-}")"
+	printf '"server_address":"%s",' "$(json_escape "${_pj_server_address:-}")"
+	printf '"server_port":"%s",' "$(json_escape "${_pj_server_port:-}")"
+	printf '"server_name":"%s",' "$(json_escape "${_pj_server_name:-}")"
+	printf '"uuid":"%s",' "$(json_escape "${_pj_uuid:-}")"
+	printf '"public_key":"%s",' "$(json_escape "${_pj_public_key:-}")"
+	printf '"short_id":"%s",' "$(json_escape "${_pj_short_id:-}")"
+	printf '"flow":"%s",' "$(json_escape "${_pj_flow:-}")"
+	printf '"managed_key_path":"%s",' "$(json_escape "$_pj_managed_key_path")"
+	printf '"managed_pubkey":"%s",' "$(json_escape "${_pj_managed_pubkey:-}")"
+	printf '"managed_key_present":'; json_bool "$_pj_managed_present"; printf ','
+	printf '"bootstrap_key_present":'; json_bool "$_pj_bootstrap_present"; printf ','
+	printf '"last_inspect_status":"%s",' "$(json_escape "${_pj_last_inspect_status:-}")"
+	printf '"last_inspect_at":"%s",' "$(json_escape "${_pj_last_inspect_at:-}")"
+	printf '"router_diff":"%s",' "$(json_escape "$_pj_router_diff")"
+	printf '"remote_diff":"%s",' "$(json_escape "$_pj_remote_diff")"
 	printf '"remote_cache":'
-	remote_cache_json "$cache_path"
+	remote_cache_json "$_pj_cache_path"
 	printf '}'
 }
 
@@ -856,8 +895,8 @@ status_json() {
 	printf '}'
 }
 
-ensure_profile_store() {
-	local active profile_id
+ensure_profile_store_light() {
+	local active
 
 	ensure_dirs
 	if ! uci -q get "${PROFILE_PACKAGE}.${PROFILE_STATE}" >/dev/null 2>&1; then
@@ -891,6 +930,12 @@ ensure_profile_store() {
 	if [ -z "$active" ] || ! profile_exists "$active"; then
 		set_active_profile 'default'
 	fi
+}
+
+ensure_profile_store() {
+	local profile_id
+
+	ensure_profile_store_light
 
 	for profile_id in $(profile_ids); do
 		profile_del "$profile_id" ssh_password
@@ -942,8 +987,8 @@ done
 memory_v="$(free -h 2>/dev/null | sed -n '2p' | sed 's/[[:space:]]\+/ /g' || true)"
 disk_root_v="$(df -h / 2>/dev/null | sed -n '2p' | sed 's/[[:space:]]\+/ /g' || true)"
 uptime_v="$(uptime 2>/dev/null | sed 's/[[:space:]]\+/ /g' || true)"
-ipinfo_v="$(curl -4fsS https://ipinfo.io/json 2>/dev/null | tr -d '\n' || true)"
-public_ip_v="$(curl -4fsS https://api.ipify.org 2>/dev/null || true)"
+ipinfo_v="$(timeout 10 curl -4fsS --max-time 8 https://ipinfo.io/json 2>/dev/null | tr -d '\n' || true)"
+public_ip_v="$(timeout 10 curl -4fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)"
 xray_bin=''
 for p in /usr/local/bin/xray /usr/bin/xray; do
 	[ -x "$p" ] && {
@@ -1737,44 +1782,55 @@ apply_everything_action() {
 }
 
 REQUEST_DATA="$(load_request_data)"
-ensure_profile_store
 
 case "$(request_value action)" in
 	''|status)
+		ensure_profile_store_light
 		emit_header
 		status_json
 		;;
 	save_profile)
+		ensure_profile_store
 		save_profile_action
 		;;
 	select_profile)
+		ensure_profile_store
 		select_profile_action
 		;;
 	create_profile)
+		ensure_profile_store
 		create_profile_action
 		;;
 	generate_key)
+		ensure_profile_store
 		generate_key_action
 		;;
 	install_key)
+		ensure_profile_store
 		install_key_action
 		;;
 	inspect_vps)
+		ensure_profile_store
 		inspect_action
 		;;
 	check_profile)
+		ensure_profile_store
 		check_profile_action
 		;;
 	adopt_vps)
+		ensure_profile_store
 		adopt_vps_action
 		;;
 	apply_router)
+		ensure_profile_store
 		apply_profile_to_router_action
 		;;
 	setup_vps)
+		ensure_profile_store
 		setup_vps_action
 		;;
 	apply_profile)
+		ensure_profile_store
 		apply_everything_action
 		;;
 	*)

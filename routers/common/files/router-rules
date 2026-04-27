@@ -42,6 +42,10 @@ EXTERNAL_SYNC_PID_FILE='/tmp/router-rules-external-sync.pid'
 
 . "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}"
 
+# Temp file helpers with identifiable prefix for stale cleanup.
+rr_mktemp()  { mktemp /tmp/rr-XXXXXXXX; }
+rr_mktempd() { mktemp -d /tmp/rrd-XXXXXXXX; }
+
 status_include_rules_text() {
 	[ "${ROUTER_RULES_STATUS_INCLUDE_RULES_TEXT:-1}" = '1' ]
 }
@@ -156,8 +160,9 @@ external_source_catalog_from_scripts() {
 	for f in "$sdir"/*.json; do
 		[ -f "$f" ] || continue
 		id="$(basename "$f" .json)"
-		label="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('label',sys.argv[2]))" "$f" "$id" 2>/dev/null || echo "$id")"
-		url="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('url',''))" "$f" 2>/dev/null || true)"
+		label="$(jsonfilter -i "$f" -e '@.label' 2>/dev/null || echo "$id")"
+		[ -n "$label" ] || label="$id"
+		url="$(jsonfilter -i "$f" -e '@.url' 2>/dev/null || true)"
 		printf '%s|%s|%s\n' "$id" "$label" "$url"
 	done
 }
@@ -517,7 +522,7 @@ status_set() {
 	local value="$2"
 	local tmp
 
-	tmp="$(mktemp)"
+	tmp="$(rr_mktemp)"
 	if [ -f "$STATUS_FILE" ]; then
 		grep -v "^${key}=" "$STATUS_FILE" > "$tmp" || true
 	fi
@@ -769,7 +774,7 @@ repo_bootstrap() {
 	fi
 
 	if [ -d "$repo" ]; then
-		preserved_snapshot="$(mktemp -d)"
+		preserved_snapshot="$(rr_mktempd)"
 		snapshot_rules_tree_from_worktree_internal "$repo" "$preserved_snapshot"
 	fi
 
@@ -1017,7 +1022,7 @@ merge_base_preferred_unique_lines() {
 	local marker="$4"
 	local appended_lines
 
-	appended_lines="$(mktemp)"
+	appended_lines="$(rr_mktemp)"
 	cp "$base_file" "$out_file"
 
 	awk '
@@ -1475,9 +1480,9 @@ compose_effective_rules_internal() {
 		printf '%s\n' "$(effective_rules_file)"
 		return 0
 	fi
-	combined_file="$(mktemp)"
-	out_file="$(mktemp)"
-	collapsed_file="$(mktemp)"
+	combined_file="$(rr_mktemp)"
+	out_file="$(rr_mktemp)"
+	collapsed_file="$(rr_mktemp)"
 
 	: > "$combined_file"
 	if [ -s "$manual_file" ]; then
@@ -1544,8 +1549,8 @@ maybe_migrate_external_repo_layout_internal() {
 	}
 
 	main_file="$(repo_rules_path)"
-	union_file="$(mktemp)"
-	filtered_file="$(mktemp)"
+	union_file="$(rr_mktemp)"
+	filtered_file="$(rr_mktemp)"
 	collect_managed_external_sources_internal "$union_file"
 	[ -f "$main_file" ] || : > "$main_file"
 	before_count="$(rule_count "$main_file")"
@@ -1600,7 +1605,7 @@ external_source_script_for_id() {
 	local json_file tmp_script
 	json_file="$(scripts_dir)/${id}.json"
 	[ -f "$json_file" ] || return 1
-	tmp_script="$(mktemp)"
+	tmp_script="$(rr_mktemp)"
 	python3 -c "import json,sys; sys.stdout.write(json.load(open(sys.argv[1])).get('script',''))" "$json_file" > "$tmp_script" 2>/dev/null || {
 		rm -f "$tmp_script"
 		return 1
@@ -1642,8 +1647,8 @@ generate_external_source_internal() {
 		max_targets="$(external_source_max_targets "$id")"
 		local script_timeout tmp_out tmp_err line_count bad_lines
 		script_timeout="$EXTERNAL_SCRIPT_TIMEOUT"
-		tmp_out="$(mktemp)"
-		tmp_err="$(mktemp)"
+		tmp_out="$(rr_mktemp)"
+		tmp_err="$(rr_mktemp)"
 		rc=0
 		run_with_timeout "$script_timeout" "$python_bin" "$script_file" --collapse --url "$url" --timeout "$script_timeout" > "$tmp_out" 2> "$tmp_err" || rc=$?
 		rm -f "$script_file"
@@ -1729,7 +1734,7 @@ validate_external_script_internal() {
 	python_bin="$(python_interpreter || true)"
 	[ -n "$python_bin" ] || { echo 'python3 required' >&2; return 1; }
 
-	tmp_script="$(mktemp)"
+	tmp_script="$(rr_mktemp)"
 	"$python_bin" -c "
 import json, sys, py_compile, tempfile, os
 data = json.load(open(sys.argv[1]))
@@ -1757,7 +1762,7 @@ print(tf.name)
 
 	url="$("$python_bin" -c "import json,sys; print(json.load(open(sys.argv[1])).get('url',''))" "$json_file")"
 	timeout_seconds="$EXTERNAL_SCRIPT_TIMEOUT"
-	output="$(mktemp)"
+	output="$(rr_mktemp)"
 	if ! run_with_timeout "$timeout_seconds" "$python_bin" "$real_script" --collapse --url "$url" --timeout "$timeout_seconds" > "$output" 2>&1; then
 		echo "Script timed out or failed (limit ${timeout_seconds}s)" >&2
 		head -5 "$output" >&2
@@ -1964,7 +1969,7 @@ refresh_external_source_internal() {
 	local current_file source_file previous_count updated_count added_count removed_count message changed_flag
 	local generated_signature stored_signature updated_signature now
 
-	current_file="$(mktemp)"
+	current_file="$(rr_mktemp)"
 	source_file="$(external_source_path "$id")"
 	mkdir -p "$(dirname "$source_file")"
 	[ -f "$source_file" ] || : > "$source_file"
@@ -2024,8 +2029,8 @@ refresh_external_sources_internal() {
 	local source_meta error_file enabled_count total_generated total_added changed_any summary
 	local id label url generated_file generated_count message removed_count result changed_flag added_count
 
-	source_meta="$(mktemp)"
-	error_file="$(mktemp)"
+	source_meta="$(rr_mktemp)"
+	error_file="$(rr_mktemp)"
 	enabled_count=0
 	total_generated=0
 	total_added=0
@@ -2043,7 +2048,7 @@ refresh_external_sources_internal() {
 	while IFS='|' read -r id label url || [ -n "$id" ]; do
 		[ -n "$id" ] || continue
 		enabled_count=$((enabled_count + 1))
-		generated_file="$(mktemp)"
+		generated_file="$(rr_mktemp)"
 		if ! generate_external_source_internal "$id" > "$generated_file" 2> "$error_file"; then
 			message="$(sed '/^[[:space:]]*$/d' "$error_file" | head -5 | tr '\n' '|' | sed 's/|$//;s/|/ | /g')"
 			[ -n "$message" ] || message="External source fetch failed for $id."
@@ -2197,8 +2202,8 @@ split_rules_internal() {
 	source_file="$(compose_effective_rules_internal)"
 	out_domains="$(domain_file)"
 	out_literals="$(literal_file)"
-	tmp_domains="$(mktemp)"
-	tmp_literals="$(mktemp)"
+	tmp_domains="$(rr_mktemp)"
+	tmp_literals="$(rr_mktemp)"
 
 	awk -v domains_out="$tmp_domains" -v literals_out="$tmp_literals" '
 		function trim(s) {
@@ -2234,7 +2239,7 @@ resolve_rules_internal() {
 	out_resolved="$(resolved_file)"
 	out_domains="$(domain_file)"
 	out_literals="$(literal_file)"
-	tmp_resolved="$(mktemp)"
+	tmp_resolved="$(rr_mktemp)"
 
 	split_rules_internal
 	: > "$out_map"
@@ -2284,10 +2289,10 @@ build_xray_ipset_internal() {
 		resolve_rules_internal
 	fi
 	conf="$(xray_dnsmasq_conf)"
-	tmp_conf="$(mktemp)"
+	tmp_conf="$(rr_mktemp)"
 	count=0
 
-	restore_file="$(mktemp)"
+	restore_file="$(rr_mktemp)"
 	{
 		printf 'create %s hash:net family inet maxelem 65536 -exist\n' "$setname"
 		printf 'flush %s\n' "$setname"
@@ -2331,7 +2336,7 @@ build_xray_dnsmasq_server_conf_internal() {
 
 	domains="$(domain_file)"
 	conf="$(xray_dnsmasq_server_conf)"
-	tmp_conf="$(mktemp)"
+	tmp_conf="$(rr_mktemp)"
 	dns="$(dns_resolver)"
 	changed=0
 
@@ -2674,13 +2679,13 @@ sync_repo_internal() {
 	branch="$(repo_branch)"
 	mode="$(sync_mode)"
 	requested_push="$(sync_push_requested)"
-	local_snapshot="$(mktemp -d)"
-	remote_snapshot="$(mktemp -d)"
+	local_snapshot="$(rr_mktempd)"
+	remote_snapshot="$(rr_mktempd)"
 	requested_base_head="${ROUTER_RULES_BASE_HEAD:-}"
 	if [ -n "$requested_base_head" ]; then
 		requested_base_head="$(git_cmd -C "$repo" rev-parse --verify "${requested_base_head}^{commit}" 2>/dev/null || printf '%s' "$requested_base_head")"
 	fi
-	git_error_log="$(mktemp)"
+	git_error_log="$(rr_mktemp)"
 
 	snapshot_rules_tree_from_worktree_internal "$repo" "$local_snapshot"
 	local_head_before="$(git_cmd -C "$repo" rev-parse --verify HEAD 2>/dev/null || true)"
@@ -3164,8 +3169,20 @@ if [ "${ROUTER_RULES_LIB_ONLY:-0}" = '1' ]; then
 fi
 
 cmd="${1:-}"
+
+# Purge stale temp files from previous crashed runs (older than 10 min).
+find /tmp -maxdepth 1 \( -name 'rr-*' -o -name 'rrd-*' \) -mmin +10 -exec rm -rf {} + 2>/dev/null || true
+
 case "$cmd" in
 	status-json)
+		# Guard: abort immediately if another status-json is already running.
+		# Prevents process pile-up that can OOM a low-memory router.
+		_sj_lock='/tmp/router-rules-status.flock'
+		exec 9>"$_sj_lock"
+		if ! flock -n 9; then
+			printf '{"ok":false,"error":"busy","error_message":"Another status query is still running."}'
+			exit 0
+		fi
 		status_json
 		;;
 	check-remote-rules)

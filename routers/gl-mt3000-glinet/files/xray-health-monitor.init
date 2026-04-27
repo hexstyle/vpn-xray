@@ -1,0 +1,92 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=06
+USE_PROCD=1
+
+HEALTH_LOG='/tmp/xray-health.tsv'
+ALERT_LOG='/tmp/xray-health-alerts.log'
+INTERVAL=30
+MAX_LINES=2880
+MAX_BYTES=1048576
+MAX_ALERT_LINES=200
+
+start_service() {
+	procd_open_instance
+	procd_set_param command /bin/sh -c '
+LOG="'"$HEALTH_LOG"'"
+ALERTS="'"$ALERT_LOG"'"
+INT='"$INTERVAL"'
+MAXL='"$MAX_LINES"'
+MAXB='"$MAX_BYTES"'
+MAXA='"$MAX_ALERT_LINES"'
+xpid_prev=""
+
+alert() {
+	echo "$(date +%s)	$*" >> "$ALERTS"
+	lc=$(wc -l < "$ALERTS" 2>/dev/null || echo 0)
+	if [ "$lc" -gt "$MAXA" ]; then
+		tail -n "$((MAXA / 2))" "$ALERTS" > "${ALERTS}.tmp"
+		mv "${ALERTS}.tmp" "$ALERTS"
+	fi
+}
+
+rotate() {
+	[ -f "$LOG" ] || return 0
+	sz=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+	lc=$(wc -l < "$LOG" 2>/dev/null || echo 0)
+	if [ "$sz" -gt "$MAXB" ] || [ "$lc" -gt "$MAXL" ]; then
+		tail -n "$((MAXL / 2))" "$LOG" > "${LOG}.tmp"
+		mv "${LOG}.tmp" "$LOG"
+	fi
+}
+
+: > "$LOG"
+: > "$ALERTS"
+
+while true; do
+	eval $(awk "/MemTotal/{t=\$2}/MemAvailable/{a=\$2}END{printf \"mt=%d ma=%d\",t,a}" /proc/meminfo)
+
+	la=$(cut -d" " -f1 /proc/loadavg)
+
+	xpid=$(cat /var/run/codex-xray.pid 2>/dev/null) || xpid=""
+	xrss=0; xfd=0; xth=0; xup=0
+	if [ -n "$xpid" ] && kill -0 "$xpid" 2>/dev/null; then
+		xrss=$(awk "/VmRSS/{print \$2}" /proc/$xpid/status 2>/dev/null) || xrss=0
+		xfd=$(ls /proc/$xpid/fd 2>/dev/null | wc -l) || xfd=0
+		xth=$(awk "/Threads/{print \$2}" /proc/$xpid/status 2>/dev/null) || xth=0
+		xup=1
+	fi
+
+	ct=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null) || ct=0
+	rxe=$(dmesg 2>/dev/null | grep -c CheckRxError) || rxe=0
+
+	rpid=$(cat /var/run/redsocks.pid 2>/dev/null) || rpid=""
+	[ -n "$rpid" ] && kill -0 "$rpid" 2>/dev/null && rup=1 || rup=0
+
+	if timeout 3 wget -q -O /dev/null http://connectivitycheck.gstatic.com/generate_204 2>/dev/null; then
+		cok=1
+	else
+		cok=0
+	fi
+
+	printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+		"$(date +%s)" "$ma" "$la" "$xrss" "$xfd" "$xth" "$ct" "$rxe" "$xup" "$rup" "$cok" >> "$LOG"
+
+	[ "$ma" -lt 80000 ] && alert "LOW_MEM avail=${ma}kB"
+	[ "${xrss:-0}" -gt 60000 ] 2>/dev/null && alert "XRAY_RSS_HIGH ${xrss}kB"
+	[ "${xfd:-0}" -gt 500 ] 2>/dev/null && alert "XRAY_FD_HIGH $xfd"
+	[ "${ct:-0}" -gt 12000 ] 2>/dev/null && alert "CONNTRACK_HIGH $ct"
+	[ "$xup" = "0" ] && alert "XRAY_DOWN"
+	[ "$rup" = "0" ] && alert "REDSOCKS_DOWN"
+	[ -n "$xpid_prev" ] && [ "$xpid" != "$xpid_prev" ] && alert "XRAY_RESTARTED old=$xpid_prev new=$xpid"
+	xpid_prev="$xpid"
+
+	rotate
+
+	sleep "$INT"
+done
+'
+	procd_set_param respawn 10 5 0
+	procd_close_instance
+}

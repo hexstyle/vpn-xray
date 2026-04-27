@@ -87,7 +87,7 @@ reset_counter() {
 
 smoke_output() {
 	[ -x "'"$ADMIN_CGI"'" ] || return 1
-	REQUEST_METHOD=GET QUERY_STRING=action=smoke "'"$ADMIN_CGI"'" 2>/dev/null \
+	timeout 30 env REQUEST_METHOD=GET QUERY_STRING=action=smoke "'"$ADMIN_CGI"'" 2>/dev/null \
 		| tr -d "\r" \
 		| sed -n "/^{/,\$p" \
 		| sed -n "1p"
@@ -114,7 +114,7 @@ restart_runtime() {
 
 	record_timestamp "$LAST_RECOVERY_FILE"
 	if [ -x "'"$ADMIN_CGI"'" ]; then
-		output="$(REQUEST_METHOD=GET QUERY_STRING=action=restart "'"$ADMIN_CGI"'" 2>/dev/null \
+		output="$(timeout 30 env REQUEST_METHOD=GET QUERY_STRING=action=restart "'"$ADMIN_CGI"'" 2>/dev/null \
 			| tr -d "\r" \
 			| sed -n "/^{/,\$p" \
 			| sed -n "1p" || true)"

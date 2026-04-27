@@ -302,14 +302,14 @@ run_candidate_probe() {
 		'/tmp/codex-xray-probe-access.log' \
 		'/tmp/codex-xray-probe-error.log'
 
-	if "$BIN" run -test -config "$PROBE_CONFIG" >/dev/null 2>&1; then
+	if timeout 10 "$BIN" run -test -config "$PROBE_CONFIG" >/dev/null 2>&1; then
 		PROBE_CONFIG_VALID=1
 	else
 		return 0
 	fi
 
 	probe_cleanup
-	"$BIN" run -config "$PROBE_CONFIG" >"$PROBE_STDOUT" 2>&1 &
+	timeout 45 "$BIN" run -config "$PROBE_CONFIG" >"$PROBE_STDOUT" 2>&1 &
 	echo "$!" > "$PROBE_PID"
 	sleep 2
 
@@ -523,14 +523,46 @@ record_smoke_status() {
 	status_file_set last_smoke_openai_ok "$openai_ok"
 }
 
+health_json() {
+	local health_log='/tmp/xray-health.tsv'
+	local alert_log='/tmp/xray-health-alerts.log'
+	local mem_total
+
+	mem_total="$(awk '/MemTotal/{print $2}' /proc/meminfo)"
+	printf '{"mem_total_kb":%s,' "${mem_total:-0}"
+	printf '"samples":['
+	if [ -f "$health_log" ]; then
+		awk -F'\t' '
+		BEGIN { first=1 }
+		NF>=11 {
+			if (!first) printf ","
+			printf "{\"t\":%s,\"ma\":%s,\"la\":\"%s\",\"xr\":%s,\"xf\":%s,\"xt\":%s,\"ct\":%s,\"rx\":%s,\"xu\":%s,\"ru\":%s,\"co\":%s}",
+				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+			first=0
+		}' "$health_log"
+	fi
+	printf '],"alerts":['
+	if [ -f "$alert_log" ]; then
+		awk -F'\t' '
+		BEGIN { first=1 }
+		NF>=2 {
+			if (!first) printf ","
+			gsub(/"/, "\\\"", $2)
+			printf "{\"t\":%s,\"msg\":\"%s\"}", $1, $2
+			first=0
+		}' "$alert_log"
+	fi
+	printf ']}'
+}
+
 smoke_json() {
 	local http_test_output https_test_output egress_output api_output
 	local http_ok https_ok egress_ok openai_ok overall_status overall_message
 
-	http_test_output="$(curl -ksS -I -m 12 -x "$LOCAL_HTTP_PROXY" https://example.com 2>&1 | sed -n '1,20p' || true)"
-	https_test_output="$(curl -ksS -I -m 12 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://example.com 2>&1 | sed -n '1,20p' || true)"
-	egress_output="$(curl -ksS -m 12 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://ipinfo.io/ip 2>&1 | sed -n '1,8p' || true)"
-	api_output="$(curl -ksS -I -m 12 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://api.openai.com/v1/models 2>&1 | sed -n '1,20p' || true)"
+	http_test_output="$(curl -ksS -I -m 5 -x "$LOCAL_HTTP_PROXY" https://example.com 2>&1 | sed -n '1,20p' || true)"
+	https_test_output="$(curl -ksS -I -m 5 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://example.com 2>&1 | sed -n '1,20p' || true)"
+	egress_output="$(curl -ksS -m 5 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://ipinfo.io/ip 2>&1 | sed -n '1,8p' || true)"
+	api_output="$(curl -ksS -I -m 5 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://api.openai.com/v1/models 2>&1 | sed -n '1,20p' || true)"
 
 	http_ok=0
 	if ! printf '%s' "$http_test_output" | grep -q 'curl:' && smoke_output_has_success_like_http_status "$http_test_output"; then
@@ -726,6 +758,10 @@ case "$(request_value action)" in
 	smoke)
 		emit_header
 		smoke_json
+		;;
+	health)
+		emit_header
+		health_json
 		;;
 	probe)
 		action_probe

@@ -949,6 +949,43 @@
       </div>
       <pre id="logsOutput">No logs loaded yet.</pre>
     </section>
+
+    <section class="card" style="margin-top:18px;" id="healthSection">
+      <div class="subhead">
+        <div>
+          <h2 style="margin:0;">System Health</h2>
+          <p>Memory, Xray RSS, connectivity and alerts over the last 24 h.</p>
+        </div>
+        <div class="button-wrap" style="margin-top:0;">
+          <button id="healthBtn">Load Health</button>
+        </div>
+      </div>
+      <div id="healthCharts" style="display:none;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+          <div>
+            <div class="label" style="margin-bottom:4px;">Memory Available (MB)</div>
+            <canvas id="chartMem" height="120" style="width:100%;"></canvas>
+          </div>
+          <div>
+            <div class="label" style="margin-bottom:4px;">Xray RSS (MB)</div>
+            <canvas id="chartRss" height="120" style="width:100%;"></canvas>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+          <div>
+            <div class="label" style="margin-bottom:4px;">Conntrack</div>
+            <canvas id="chartCt" height="120" style="width:100%;"></canvas>
+          </div>
+          <div>
+            <div class="label" style="margin-bottom:4px;">Connectivity</div>
+            <canvas id="chartConn" height="120" style="width:100%;"></canvas>
+          </div>
+        </div>
+        <div id="healthAlerts" style="margin-top:14px;"></div>
+        <div class="label" style="margin-top:8px;color:var(--muted);" id="healthMeta"></div>
+      </div>
+      <div id="healthEmpty">No health data loaded yet.</div>
+    </section>
   </div>
 
   <div id="rulesTextModal" class="modal-backdrop" aria-hidden="true">
@@ -2500,6 +2537,150 @@
       }
     }
 
+    /* ---- System Health ---- */
+    function drawSparkline(canvasId, points, opts = {}) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas || !points.length) return;
+      const ctx = canvas.getContext("2d");
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      ctx.scale(dpr, dpr);
+
+      const color = opts.color || "var(--accent)";
+      const fill = opts.fill || "rgba(11,95,255,0.08)";
+      const yMin = opts.yMin != null ? opts.yMin : Math.min(...points);
+      const yMax = opts.yMax != null ? opts.yMax : Math.max(...points);
+      const range = yMax - yMin || 1;
+      const pad = 2;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // grid lines
+      ctx.strokeStyle = "#e4e9ed";
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i <= 4; i++) {
+        const gy = pad + (h - 2 * pad) * (i / 4);
+        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
+      }
+
+      // y-axis labels
+      ctx.fillStyle = "#8899aa";
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      const fmt = opts.fmt || (v => v.toFixed(0));
+      ctx.fillText(fmt(yMax), 2, pad + 10);
+      ctx.fillText(fmt(yMin), 2, h - pad);
+
+      // line
+      ctx.beginPath();
+      const step = w / Math.max(points.length - 1, 1);
+      points.forEach((v, i) => {
+        const x = i * step;
+        const y = pad + (h - 2 * pad) * (1 - (v - yMin) / range);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // fill
+      const last = points.length - 1;
+      ctx.lineTo(last * step, h);
+      ctx.lineTo(0, h);
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+
+      // bad-zone highlight for connectivity (0 = fail)
+      if (opts.markZeros) {
+        ctx.fillStyle = "rgba(193,56,56,0.18)";
+        points.forEach((v, i) => {
+          if (v === 0) {
+            ctx.fillRect(i * step - step / 2, 0, step, h);
+          }
+        });
+      }
+    }
+
+    async function loadHealth() {
+      const btn = document.getElementById("healthBtn");
+      btn.disabled = true;
+      btn.textContent = "Loading...";
+      try {
+        const data = await callApi(runtimeApi, "health", null, { timeoutMs: 6000 });
+        const samples = data.samples || [];
+        const alerts = data.alerts || [];
+        const memTotalMb = (data.mem_total_kb || 491388) / 1024;
+
+        if (!samples.length) {
+          document.getElementById("healthEmpty").textContent = "Health monitor has no data yet. It collects a sample every 30 s.";
+          return;
+        }
+
+        document.getElementById("healthEmpty").style.display = "none";
+        document.getElementById("healthCharts").style.display = "block";
+
+        const memPts = samples.map(s => s.ma / 1024);
+        const rssPts = samples.map(s => s.xr / 1024);
+        const ctPts  = samples.map(s => s.ct);
+        const coPts  = samples.map(s => s.co);
+
+        drawSparkline("chartMem", memPts, {
+          yMin: 0, yMax: memTotalMb,
+          color: "#0d8b4b", fill: "rgba(13,139,75,0.08)",
+          fmt: v => v.toFixed(0) + " MB"
+        });
+        drawSparkline("chartRss", rssPts, {
+          yMin: 0, yMax: Math.max(60, ...rssPts),
+          color: "#0b5fff", fill: "rgba(11,95,255,0.08)",
+          fmt: v => v.toFixed(0) + " MB"
+        });
+        drawSparkline("chartCt", ctPts, {
+          yMin: 0,
+          color: "#b36c00", fill: "rgba(179,108,0,0.08)",
+          fmt: v => v.toFixed(0)
+        });
+        drawSparkline("chartConn", coPts, {
+          yMin: 0, yMax: 1,
+          color: "#0d8b4b", fill: "rgba(13,139,75,0.08)",
+          markZeros: true,
+          fmt: v => v === 1 ? "OK" : "FAIL"
+        });
+
+        // time range
+        const first = samples[0];
+        const last = samples[samples.length - 1];
+        const dur = last.t - first.t;
+        const durMin = (dur / 60).toFixed(0);
+        const meta = document.getElementById("healthMeta");
+        meta.textContent = `${samples.length} samples over ${durMin} min \u2014 ` +
+          `mem ${memPts[memPts.length-1].toFixed(0)}/${memTotalMb.toFixed(0)} MB, ` +
+          `xray RSS ${rssPts[rssPts.length-1].toFixed(1)} MB, ` +
+          `conntrack ${ctPts[ctPts.length-1]}`;
+
+        // alerts
+        const alertDiv = document.getElementById("healthAlerts");
+        if (alerts.length) {
+          alertDiv.innerHTML = '<div class="label" style="color:var(--bad);margin-bottom:4px;">Alerts</div>' +
+            alerts.slice(-20).map(a => {
+              const d = new Date(a.t * 1000);
+              const ts = d.toLocaleTimeString();
+              return `<div style="font-size:12px;color:var(--bad);font-family:monospace;">${ts} ${a.msg}</div>`;
+            }).join("");
+        } else {
+          alertDiv.innerHTML = '<div class="label" style="color:var(--good);">No alerts</div>';
+        }
+      } catch (err) {
+        document.getElementById("healthEmpty").textContent = `Failed: ${err.message}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Load Health";
+      }
+    }
+
     function shouldAutoloadRulesText(data) {
       const sourceCount = Number(data?.source_count || 0) || 0;
       return sourceCount > 0 && sourceCount <= RULES_TEXT_AUTOLOAD_SOURCE_LIMIT;
@@ -3051,6 +3232,7 @@
     document.getElementById("applyProfileBtn").addEventListener("click", (event) => applyProfile(event.currentTarget));
     document.getElementById("createProfileBtn").addEventListener("click", (event) => createProfile(event.currentTarget));
     document.getElementById("logsBtn").addEventListener("click", loadLogs);
+    document.getElementById("healthBtn").addEventListener("click", loadHealth);
     document.getElementById("smokeBtn").addEventListener("click", runSmoke);
     document.getElementById("rulesSaveConfigBtn").addEventListener("click", (event) => saveRulesConfig(event.currentTarget));
     document.getElementById("rulesApplyBtn").addEventListener("click", (event) => applyRules(event.currentTarget));
@@ -3176,14 +3358,14 @@
     setStartupControlsDisabled(true);
     flashLoading("Loading current router and VPS state...");
 
-    callApi(runtimeApi, "status", null, { timeoutMs: 4000 })
+    callApi(runtimeApi, "status", null, { timeoutMs: 8000 })
       .then((runtime) => {
         state.runtime = runtime;
         renderAll(false);
       })
       .catch(() => {});
 
-    callApi(vpsApi, "status", null, { timeoutMs: 4000 })
+    callApi(vpsApi, "status", null, { timeoutMs: 8000 })
       .then((vps) => {
         state.vps = vps;
         renderAll(true);
