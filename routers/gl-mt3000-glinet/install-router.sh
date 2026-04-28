@@ -101,32 +101,41 @@ PY
 fi
 
 router_ssh() {
-  local err rc
+  local err rc attempt max_retries=3
 
-  err="$(mktemp)"
-  if ssh "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" "$@" 2>"$err"; then
-    rm -f "$err"
-    return 0
-  fi
-
-  rc=$?
-  cat "$err" >&2
-
-  if grep -q 'REMOTE HOST IDENTIFICATION HAS CHANGED' "$err"; then
-    echo "Installer SSH cache has a stale host key for $ROUTER_HOST. Refreshing and retrying once..." >&2
-    remove_hostkey_entry "$INSTALLER_KNOWN_HOSTS" "$ROUTER_HOST"
+  for (( attempt = 1; attempt <= max_retries; attempt++ )); do
+    err="$(mktemp)"
     if ssh "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" "$@" 2>"$err"; then
       rm -f "$err"
       return 0
     fi
+
     rc=$?
+
+    if grep -q 'REMOTE HOST IDENTIFICATION HAS CHANGED' "$err"; then
+      cat "$err" >&2
+      echo "Installer SSH cache has a stale host key for $ROUTER_HOST. Refreshing and retrying once..." >&2
+      remove_hostkey_entry "$INSTALLER_KNOWN_HOSTS" "$ROUTER_HOST"
+      rm -f "$err"
+      continue
+    fi
+
+    # Retry on transient connection failures (network reload, WiFi blip)
+    if grep -qiE 'Connection reset|Broken pipe|Connection refused|Connection timed out|No route to host' "$err" && (( attempt < max_retries )); then
+      echo "Router SSH attempt $attempt/$max_retries failed (transient). Retrying in 3s..." >&2
+      rm -f "$err"
+      sleep 3
+      continue
+    fi
+
     cat "$err" >&2
-  fi
+    rm -f "$err"
+    break
+  done
 
   echo "Router SSH failed for $ROUTER_SSH." >&2
   echo "Checks: the router should be reachable at $ROUTER_HOST, SSH must accept the current admin password, and the installer uses its own host-key cache at $INSTALLER_KNOWN_HOSTS." >&2
   echo "If the router was factory-reset or replaced, rerun the install. The stale key in ~/.ssh/known_hosts is no longer relevant to this installer." >&2
-  rm -f "$err"
   return "$rc"
 }
 
@@ -510,23 +519,10 @@ if ! wait_for_router_runtime_ready; then
   echo "Warning: router runtime did not report ready before installer exit." >&2
 fi
 
-if [[ "$NETWORK_RELOAD" == "1" ]]; then
-  router_ssh "nohup sh -c 'sleep 1; /etc/init.d/network reload >/tmp/vpn-xray-network-reload.log 2>&1 || true' >/dev/null 2>&1 &" >/dev/null 2>&1 || true
-  echo "Queued async network reload on $ROUTER_HOST"
-  echo "Waiting for router SSH to recover after network reload..."
-  sleep 3
-  if wait_for_router_after_network_reload; then
-    echo "Router is reachable again over SSH after network reload"
-  else
-    echo "Router did not come back on $ROUTER_SSH after network reload." >&2
-    echo "Stop here and verify both wired and Wi-Fi management access before making more router changes." >&2
-    exit 1
-  fi
-fi
-
 # Bootstrap VPS profile on the router so the admin panel VPS sync works
 # out of the box: create the xray_vps UCI config from the deployed xray
 # client config and register the router's managed SSH key on the VPS.
+# Runs BEFORE network reload — reload drops SSH connections.
 if [[ -n "${VPS_SSH:-}" && -n "${VPS_HOST:-}" ]]; then
   echo "Bootstrapping router VPS profile for admin panel..."
 
@@ -555,6 +551,22 @@ if [[ -n "${VPS_SSH:-}" && -n "${VPS_HOST:-}" ]]; then
   fi
 else
   echo "VPS_SSH is not configured; skipping admin panel VPS profile bootstrap."
+fi
+
+# Network reload is the last step — it drops all active SSH connections
+# to the router, so no SSH commands should follow it.
+if [[ "$NETWORK_RELOAD" == "1" ]]; then
+  router_ssh "nohup sh -c 'sleep 1; /etc/init.d/network reload >/tmp/vpn-xray-network-reload.log 2>&1 || true' >/dev/null 2>&1 &" >/dev/null 2>&1 || true
+  echo "Queued async network reload on $ROUTER_HOST"
+  echo "Waiting for router SSH to recover after network reload..."
+  sleep 3
+  if wait_for_router_after_network_reload; then
+    echo "Router is reachable again over SSH after network reload"
+  else
+    echo "Router did not come back on $ROUTER_SSH after network reload." >&2
+    echo "Stop here and verify both wired and Wi-Fi management access before making more router changes." >&2
+    exit 1
+  fi
 fi
 
 echo "Deployed to $ROUTER_HOST"
