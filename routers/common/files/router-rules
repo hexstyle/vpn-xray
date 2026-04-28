@@ -273,9 +273,17 @@ external_source_enabled_by_id() {
 	if cfg_has_option "$key"; then
 		raw="$(cfg_get "$key" '0')"
 	else
+		# No per-source flag stored yet.
 		raw='0'
-		if [ "$(legacy_external_source_enabled)" = '1' ] && legacy_external_source_selected "$id"; then
-			raw='1'
+		if [ "$(legacy_external_source_enabled)" = '1' ]; then
+			if legacy_external_source_selected "$id" 2>/dev/null; then
+				# Migration: source URL was in the legacy URL list
+				raw='1'
+			elif [ -z "$(legacy_external_source_url)" ]; then
+				# Fresh install: global flag on, no legacy URL list
+				# → default all sources to enabled
+				raw='1'
+			fi
 		fi
 	fi
 
