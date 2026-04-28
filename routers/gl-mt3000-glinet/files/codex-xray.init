@@ -366,6 +366,19 @@ start() {
 	refresh_egress_route
 	save_mptcp_state
 	save_offload_state
+
+	# Spread eth0 IRQs across both CPUs to reduce spinlock contention on CPU0
+	if [ -d /proc/irq ]; then
+		for d in /proc/irq/*/; do
+			action="$(cat "${d}actions" 2>/dev/null || true)"
+			case "$action" in
+				*eth0*)
+					echo 3 > "${d}smp_affinity" 2>/dev/null || true
+					;;
+			esac
+		done
+	fi
+
 	export GOMEMLIMIT=120MiB
 	export GOGC=50
 	start-stop-daemon -S -b -m -p "$PIDFILE" -x "$BIN" -- run -config "$CONFIG"

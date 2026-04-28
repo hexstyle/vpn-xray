@@ -464,11 +464,15 @@ router_ssh "rm -rf $remote_source_root && mkdir -p $remote_source_root"
 router_ssh "cat > $remote_source_tar" < "$source_bundle"
 router_ssh "tar -xf $remote_source_tar -C $remote_source_root && rm -f $remote_source_tar"
 router_ssh "sed -i 's/\r$//' $remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh"
-router_ssh "$remote_platform_cmd"
 
+# Deploy configs BEFORE install-platform.sh so they survive if the router
+# reboots during platform setup (e.g. network/wireless reload).
+router_ssh 'mkdir -p /etc/xray /var/log/xray'
 router_ssh 'cat > /etc/xray/codex-xray.json && chmod 600 /etc/xray/codex-xray.json' < "$json_cfg"
 router_ssh 'cat > /etc/redsocks.conf && chmod 600 /etc/redsocks.conf' < "$redsocks_cfg"
 router_ssh 'cat > /etc/config/router_rules && chmod 600 /etc/config/router_rules' < "$router_rules_cfg"
+
+router_ssh "$remote_platform_cmd"
 
 router_ssh "
   exec </dev/null
@@ -518,6 +522,39 @@ if [[ "$NETWORK_RELOAD" == "1" ]]; then
     echo "Stop here and verify both wired and Wi-Fi management access before making more router changes." >&2
     exit 1
   fi
+fi
+
+# Bootstrap VPS profile on the router so the admin panel VPS sync works
+# out of the box: create the xray_vps UCI config from the deployed xray
+# client config and register the router's managed SSH key on the VPS.
+if [[ -n "${VPS_SSH:-}" && -n "${VPS_HOST:-}" ]]; then
+  echo "Bootstrapping router VPS profile for admin panel..."
+
+  # Force fresh profile creation from the just-deployed xray config.
+  # Any stale xray_vps from a previous install would have wrong values.
+  router_ssh "rm -f /etc/config/xray_vps"
+
+  # Invoke the VPS CGI to initialize the profile store: creates a
+  # 'default' profile from the router config, generates x25519 material,
+  # and creates a managed SSH key pair for router→VPS access.
+  router_ssh "QUERY_STRING='action=generate_key' REQUEST_METHOD='GET' /www/cgi-bin/xray-vps >/dev/null 2>&1 || true"
+
+  # Retrieve the router's managed SSH public key
+  router_pubkey="$(router_ssh "cat /etc/xray/ssh-keys/default_ed25519.pub 2>/dev/null" || true)"
+
+  if [[ -n "$router_pubkey" ]]; then
+    echo "Registering router managed SSH key on VPS ($VPS_HOST)..."
+    printf '%s\n' "$router_pubkey" | ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "
+      mkdir -p ~/.ssh && chmod 700 ~/.ssh
+      touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+      PUB=\$(cat)
+      grep -qxF \"\$PUB\" ~/.ssh/authorized_keys 2>/dev/null || printf '%s\n' \"\$PUB\" >> ~/.ssh/authorized_keys
+    " 2>/dev/null || echo "Warning: could not register router SSH key on VPS. Admin panel VPS sync will need manual key setup." >&2
+  else
+    echo "Warning: router did not produce a managed SSH public key. Admin panel VPS sync will need manual key setup." >&2
+  fi
+else
+  echo "VPS_SSH is not configured; skipping admin panel VPS profile bootstrap."
 fi
 
 echo "Deployed to $ROUTER_HOST"

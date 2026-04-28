@@ -982,6 +982,8 @@
           </div>
         </div>
         <div id="healthAlerts" style="margin-top:14px;"></div>
+        <div id="healthCrashes" style="margin-top:14px;"></div>
+        <div id="healthGuards" style="margin-top:10px;"></div>
         <div class="label" style="margin-top:8px;color:var(--muted);" id="healthMeta"></div>
       </div>
       <div id="healthEmpty">No health data loaded yet.</div>
@@ -2661,17 +2663,46 @@
           `xray RSS ${rssPts[rssPts.length-1].toFixed(1)} MB, ` +
           `conntrack ${ctPts[ctPts.length-1]}`;
 
-        // alerts
+        // alerts (filter out guard actions — they get their own section)
+        const guardAlerts = alerts.filter(a => /^GUARD_/.test(a.msg));
+        const otherAlerts = alerts.filter(a => !/^GUARD_/.test(a.msg));
         const alertDiv = document.getElementById("healthAlerts");
-        if (alerts.length) {
+        if (otherAlerts.length) {
           alertDiv.innerHTML = '<div class="label" style="color:var(--bad);margin-bottom:4px;">Alerts</div>' +
-            alerts.slice(-20).map(a => {
+            otherAlerts.slice(-20).map(a => {
               const d = new Date(a.t * 1000);
               const ts = d.toLocaleTimeString();
               return `<div style="font-size:12px;color:var(--bad);font-family:monospace;">${ts} ${a.msg}</div>`;
             }).join("");
         } else {
           alertDiv.innerHTML = '<div class="label" style="color:var(--good);">No alerts</div>';
+        }
+
+        // crash history (persists across reboots on flash)
+        const crashes = data.crashes || [];
+        const crashDiv = document.getElementById("healthCrashes");
+        if (crashes.length) {
+          crashDiv.innerHTML = '<div class="label" style="color:#c00;margin-bottom:4px;">Crash History (survived reboots)</div>' +
+            crashes.slice(-10).map(c => {
+              const d = new Date(c.t * 1000);
+              const ts = d.toLocaleDateString() + " " + d.toLocaleTimeString();
+              return `<div style="font-size:12px;color:#c00;font-family:monospace;">${ts} ${c.msg}</div>`;
+            }).join("");
+        } else {
+          crashDiv.innerHTML = "";
+        }
+
+        // guard actions (proactive restarts/flushes)
+        const guardDiv = document.getElementById("healthGuards");
+        if (guardAlerts.length) {
+          guardDiv.innerHTML = '<div class="label" style="color:#b36c00;margin-bottom:4px;">Guard Actions</div>' +
+            guardAlerts.slice(-10).map(a => {
+              const d = new Date(a.t * 1000);
+              const ts = d.toLocaleTimeString();
+              return `<div style="font-size:12px;color:#b36c00;font-family:monospace;">${ts} ${a.msg}</div>`;
+            }).join("");
+        } else {
+          guardDiv.innerHTML = "";
         }
       } catch (err) {
         document.getElementById("healthEmpty").textContent = `Failed: ${err.message}`;

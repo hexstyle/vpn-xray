@@ -526,6 +526,7 @@ record_smoke_status() {
 health_json() {
 	local health_log='/tmp/xray-health.tsv'
 	local alert_log='/tmp/xray-health-alerts.log'
+	local crash_log='/etc/xray-crash-log'
 	local mem_total
 
 	mem_total="$(awk '/MemTotal/{print $2}' /proc/meminfo)"
@@ -551,6 +552,17 @@ health_json() {
 			printf "{\"t\":%s,\"msg\":\"%s\"}", $1, $2
 			first=0
 		}' "$alert_log"
+	fi
+	printf '],"crashes":['
+	if [ -f "$crash_log" ]; then
+		awk -F'\t' '
+		BEGIN { first=1 }
+		NF>=2 {
+			if (!first) printf ","
+			gsub(/"/, "\\\"", $2)
+			printf "{\"t\":%s,\"msg\":\"%s\"}", $1, $2
+			first=0
+		}' "$crash_log"
 	fi
 	printf ']}'
 }

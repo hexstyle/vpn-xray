@@ -1044,16 +1044,39 @@ EOF
 
 	write_platform_metadata
 
-	# Kernel tuning: reserve more free pages so interrupt handlers and the
-	# OOM-killer have breathing room on a no-swap 512 MB system.
-	# softlockup_panic writes a stack trace to ramoops when the kernel hangs.
+	# Kernel tuning for stability on a no-swap 512 MB system:
+	#  - min_free_kbytes: reserve pages for interrupt handlers and OOM-killer
+	#  - softlockup_panic: dump stack to ramoops on soft lockup
+	#  - panic: auto-reboot 10s after kernel panic (don't hang forever)
+	#  - nf_conntrack_max: headroom so conntrack table doesn't silently drop
+	#  - netdev_budget: process more packets per softirq cycle (less spinlock contention)
 	mkdir -p /etc/sysctl.d
 	cat > /etc/sysctl.d/99-xray-stability.conf <<-'SYSCTL'
 	vm.min_free_kbytes=16384
 	kernel.softlockup_panic=1
+	kernel.panic=10
+	net.netfilter.nf_conntrack_max=16384
+	net.core.netdev_budget=600
 	SYSCTL
 	sysctl -w vm.min_free_kbytes=16384 >/dev/null 2>&1 || true
 	sysctl -w kernel.softlockup_panic=1 >/dev/null 2>&1 || true
+	sysctl -w kernel.panic=10 >/dev/null 2>&1 || true
+	sysctl -w net.netfilter.nf_conntrack_max=16384 >/dev/null 2>&1 || true
+	sysctl -w net.core.netdev_budget=600 >/dev/null 2>&1 || true
+
+	# Balance NET_RX softirqs across both CPUs.  By default CPU0 handles
+	# ~87 % of all RX interrupts, which concentrates spinlock contention
+	# in the packet-processing path on a single core.
+	if [ -d /proc/irq ]; then
+		for d in /proc/irq/*/; do
+			action="$(cat "${d}actions" 2>/dev/null || true)"
+			case "$action" in
+				*eth0*)
+					echo 3 > "${d}smp_affinity" 2>/dev/null || true
+					;;
+			esac
+		done
+	fi
 
 	if valid_router_config_present; then
 		touch "$CONFIG_READY_FILE"

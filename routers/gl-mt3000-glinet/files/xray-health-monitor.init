@@ -6,21 +6,55 @@ USE_PROCD=1
 
 HEALTH_LOG='/tmp/xray-health.tsv'
 ALERT_LOG='/tmp/xray-health-alerts.log'
+CRASH_LOG='/etc/xray-crash-log'
+BREADCRUMB='/etc/xray-health-laststate'
 INTERVAL=30
 MAX_LINES=2880
 MAX_BYTES=1048576
 MAX_ALERT_LINES=200
+MAX_CRASH_LINES=100
+BREADCRUMB_INTERVAL=10
+
+detect_unclean_shutdown() {
+	[ -f "$BREADCRUMB" ] || return 0
+	local prev_uptime now_uptime prev_epoch crash_line
+	prev_uptime="$(sed -n 's/^uptime=//p' "$BREADCRUMB" | sed -n '1p')"
+	prev_epoch="$(sed -n 's/^epoch=//p' "$BREADCRUMB" | sed -n '1p')"
+	now_uptime="$(cut -d. -f1 /proc/uptime)"
+	[ -n "$prev_uptime" ] || return 0
+	if [ "$now_uptime" -lt "$prev_uptime" ] 2>/dev/null; then
+		crash_line="$(date +%s)	CRASH_DETECTED reboot_after_uptime=${prev_uptime}s last_sample_epoch=${prev_epoch:-?}"
+		local prev_state
+		prev_state="$(grep '^state=' "$BREADCRUMB" | sed 's/^state=//' | sed -n '1p')"
+		[ -n "$prev_state" ] && crash_line="$crash_line pre_crash=$prev_state"
+		echo "$crash_line" >> "$CRASH_LOG"
+		lc=$(wc -l < "$CRASH_LOG" 2>/dev/null || echo 0)
+		if [ "$lc" -gt "$MAX_CRASH_LINES" ]; then
+			tail -n "$((MAX_CRASH_LINES / 2))" "$CRASH_LOG" > "${CRASH_LOG}.tmp"
+			mv "${CRASH_LOG}.tmp" "$CRASH_LOG"
+		fi
+		echo "$crash_line" >> "$ALERT_LOG"
+	fi
+	rm -f "$BREADCRUMB"
+}
 
 start_service() {
+	detect_unclean_shutdown
+
 	procd_open_instance
 	procd_set_param command /bin/sh -c '
 LOG="'"$HEALTH_LOG"'"
 ALERTS="'"$ALERT_LOG"'"
+CRUMB="'"$BREADCRUMB"'"
 INT='"$INTERVAL"'
 MAXL='"$MAX_LINES"'
 MAXB='"$MAX_BYTES"'
 MAXA='"$MAX_ALERT_LINES"'
+CRUMB_INT='"$BREADCRUMB_INTERVAL"'
 xpid_prev=""
+tick=0
+last_restart_tick=0
+xray_down_streak=0
 
 alert() {
 	echo "$(date +%s)	$*" >> "$ALERTS"
@@ -39,6 +73,17 @@ rotate() {
 		tail -n "$((MAXL / 2))" "$LOG" > "${LOG}.tmp"
 		mv "${LOG}.tmp" "$LOG"
 	fi
+}
+
+guard_restart_xray() {
+	local reason="$1"
+	local cooldown=$((CRUMB_INT * 2))
+	if [ $((tick - last_restart_tick)) -lt "$cooldown" ]; then
+		return 0
+	fi
+	alert "GUARD_RESTART reason=$reason"
+	/etc/init.d/codex-xray restart >/dev/null 2>&1 || true
+	last_restart_tick=$tick
 }
 
 : > "$LOG"
@@ -70,9 +115,11 @@ while true; do
 		cok=0
 	fi
 
+	now=$(date +%s)
 	printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-		"$(date +%s)" "$ma" "$la" "$xrss" "$xfd" "$xth" "$ct" "$rxe" "$xup" "$rup" "$cok" >> "$LOG"
+		"$now" "$ma" "$la" "$xrss" "$xfd" "$xth" "$ct" "$rxe" "$xup" "$rup" "$cok" >> "$LOG"
 
+	# --- Alerts (observational) ---
 	[ "$ma" -lt 80000 ] && alert "LOW_MEM avail=${ma}kB"
 	[ "${xrss:-0}" -gt 60000 ] 2>/dev/null && alert "XRAY_RSS_HIGH ${xrss}kB"
 	[ "${xfd:-0}" -gt 500 ] 2>/dev/null && alert "XRAY_FD_HIGH $xfd"
@@ -80,7 +127,55 @@ while true; do
 	[ "$xup" = "0" ] && alert "XRAY_DOWN"
 	[ "$rup" = "0" ] && alert "REDSOCKS_DOWN"
 	[ -n "$xpid_prev" ] && [ "$xpid" != "$xpid_prev" ] && alert "XRAY_RESTARTED old=$xpid_prev new=$xpid"
+
+	# --- Proactive guards (preventive) ---
+	# Guard 1: critically low memory — restart xray before OOM killer or kernel panic
+	if [ "$ma" -lt 50000 ] 2>/dev/null && [ "$xup" = "1" ]; then
+		guard_restart_xray "LOW_MEM_CRITICAL avail=${ma}kB"
+	fi
+
+	# Guard 2: xray RSS runaway — restart before it starves the system
+	if [ "${xrss:-0}" -gt 80000 ] 2>/dev/null && [ "$xup" = "1" ]; then
+		guard_restart_xray "XRAY_RSS_RUNAWAY ${xrss}kB"
+	fi
+
+	# Guard 3: fd leak — restart before file descriptor exhaustion
+	if [ "${xfd:-0}" -gt 800 ] 2>/dev/null && [ "$xup" = "1" ]; then
+		guard_restart_xray "XRAY_FD_RUNAWAY $xfd"
+	fi
+
+	# Guard 4: conntrack nearing max — flush stale entries
+	if [ "${ct:-0}" -gt 14000 ] 2>/dev/null; then
+		conntrack -F >/dev/null 2>&1 || true
+		alert "GUARD_CONNTRACK_FLUSH ct=$ct"
+	fi
+
+	# Guard 5: xray down for >2 consecutive checks — attempt restart
+	if [ "$xup" = "0" ]; then
+		xray_down_streak=$((xray_down_streak + 1))
+		if [ "$xray_down_streak" -ge 3 ]; then
+			guard_restart_xray "XRAY_DOWN_SUSTAINED streak=$xray_down_streak"
+			xray_down_streak=0
+		fi
+	else
+		xray_down_streak=0
+	fi
+
 	xpid_prev="$xpid"
+	tick=$((tick + 1))
+
+	# --- Persistent breadcrumb (crash forensics) ---
+	if [ $((tick % CRUMB_INT)) -eq 0 ]; then
+		up=$(cut -d. -f1 /proc/uptime)
+		{
+			printf "epoch=%s\n" "$now"
+			printf "uptime=%s\n" "$up"
+			printf "state=ma%s_xr%s_ct%s_xu%s_ru%s_co%s\n" \
+				"$ma" "${xrss:-0}" "${ct:-0}" "$xup" "$rup" "$cok"
+		} > "${CRUMB}.tmp"
+		mv "${CRUMB}.tmp" "$CRUMB"
+		sync
+	fi
 
 	rotate
 
