@@ -330,6 +330,21 @@ repo_push_url() {
 		value=''
 	fi
 	if [ -n "$value" ]; then
+		if [ "$(git_auth_mode)" = 'ssh' ]; then
+			case "$value" in
+				https://github.com/*)
+					rest="${value#https://github.com/}"
+					owner="${rest%%/*}"
+					rest="${rest#*/}"
+					repo="${rest%%.git*}"
+					repo="${repo%%/*}"
+					if [ -n "$owner" ] && [ -n "$repo" ]; then
+						printf 'git@github.com:%s/%s.git\n' "$owner" "$repo"
+						return 0
+					fi
+					;;
+			esac
+		fi
 		printf '%s\n' "$value"
 		return 0
 	fi
@@ -423,7 +438,25 @@ git_auth_mode() {
 }
 
 git_readonly_mode() {
+	git_push_auth_configured && return 1
 	[ "$(git_auth_mode)" = 'readonly' ]
+}
+
+git_push_auth_configured() {
+	local url
+
+	url="$(repo_push_url)"
+	case "$url" in
+		git@*|ssh://*)
+			[ -s "$(ssh_key_path)" ]
+			;;
+		http://*|https://*)
+			[ -n "$(git_http_username)" ] || [ -n "$(git_http_password)" ]
+			;;
+		*)
+			return 1
+			;;
+	esac
 }
 
 repo_fetch_url_available() {
@@ -464,7 +497,58 @@ repo_push_configured() {
 	if is_placeholder_value "$(repo_push_url)"; then
 		return 1
 	fi
+	git_push_auth_configured || return 1
 	return 0
+}
+
+git_push_status_fields() {
+	local fetch_ready push_enabled push_url auth_mode status message next_step effective_auth
+
+	fetch_ready='0'
+	repo_fetch_configured && fetch_ready='1'
+	push_enabled="$(enable_push)"
+	push_url="$(repo_push_url)"
+	auth_mode="$(git_auth_mode)"
+	status='ready'
+	message='Push is configured.'
+	next_step='Use Push To Git after editing the shared rules list.'
+	effective_auth='unknown'
+
+	case "$push_url" in
+		git@*|ssh://*) effective_auth='ssh' ;;
+		http://*|https://*) effective_auth='https' ;;
+	esac
+
+	if [ "$fetch_ready" != '1' ]; then
+		status='missing_repo'
+		message='Git sync is not configured, so push cannot run.'
+		next_step='Enable Git sync and save a valid repository URL first.'
+	elif [ "$push_enabled" != '1' ]; then
+		status='disabled'
+		message='Push is disabled by router policy.'
+		next_step='Turn on "Allow Push To Git" in Git Sync Settings, choose HTTPS token or SSH key auth, then save settings.'
+	elif is_placeholder_value "$push_url"; then
+		status='missing_push_url'
+		message='Push URL is missing.'
+		next_step='Set Push URL, or leave it empty only when the fetch URL is also a writable remote.'
+	elif [ "$effective_auth" = 'https' ] && ! git_push_auth_configured; then
+		status='missing_https_token'
+		message='Push URL uses HTTPS, but no HTTPS write credentials are stored.'
+		next_step='Set Git Auth to HTTPS and save a GitHub token/password with write access.'
+	elif [ "$effective_auth" = 'ssh' ] && ! git_push_auth_configured; then
+		status='missing_ssh_key'
+		message='Push URL uses SSH, but the router has no SSH private key.'
+		next_step='Set Git Auth to SSH, generate or paste the router key, then register the public key as a writable deploy key on GitHub.'
+	elif ! repo_push_configured; then
+		status='not_ready'
+		message='Push is not ready.'
+		next_step='Check Push URL and write credentials.'
+	fi
+
+	printf 'status=%s\n' "$status"
+	printf 'message=%s\n' "$message"
+	printf 'next_step=%s\n' "$next_step"
+	printf 'effective_auth=%s\n' "$effective_auth"
 }
 
 repo_configured() {
@@ -691,6 +775,28 @@ xray_state_signature() {
 	printf '%s|effective:%s\n' "$mode" "$effective_sig"
 }
 
+xray_state_signature_quick_internal() {
+	local mode effective_sig current_tracked_sig stored_tracked_sig
+
+	mode="$(xray_mode)"
+	case "$mode" in
+		full)
+			printf 'full\n'
+			return 0
+			;;
+	esac
+	current_tracked_sig="$(tracked_rules_signature)"
+	stored_tracked_sig="$(cat "$(effective_rules_signature_file)" 2>/dev/null || true)"
+	case "$stored_tracked_sig" in
+		"${current_tracked_sig}|collapse_skipped:0"|"${current_tracked_sig}|collapse_skipped:1")
+			effective_sig="$(file_signature "$(effective_rules_file)")"
+			printf '%s|effective:%s\n' "$mode" "$effective_sig"
+			return 0
+			;;
+	esac
+	printf '%s|effective:stale:%s\n' "$mode" "$(file_signature "$(repo_rules_path)")"
+}
+
 resolved_state_signature() {
 	file_signature "$(resolved_file)"
 }
@@ -749,8 +855,35 @@ git_env_setup() {
 	esac
 }
 
+git_push_env_setup() {
+	local url
+
+	unset GIT_SSH_COMMAND GIT_ASKPASS GIT_TERMINAL_PROMPT ROUTER_RULES_GIT_USERNAME ROUTER_RULES_GIT_PASSWORD
+	url="$(repo_push_url)"
+	case "$url" in
+		git@*|ssh://*)
+			if [ -f "$(ssh_key_path)" ]; then
+				export GIT_SSH_COMMAND="ssh -i $(ssh_key_path) -o BatchMode=yes -o StrictHostKeyChecking=no"
+			fi
+			;;
+		http://*|https://*)
+			export ROUTER_RULES_GIT_USERNAME="$(git_http_username)"
+			export ROUTER_RULES_GIT_PASSWORD="$(git_http_password)"
+			[ -n "$ROUTER_RULES_GIT_USERNAME" ] || export ROUTER_RULES_GIT_USERNAME='git'
+			export GIT_TERMINAL_PROMPT=0
+			write_git_askpass
+			export GIT_ASKPASS="$(git_askpass_path)"
+			;;
+	esac
+}
+
 git_cmd() {
 	git_env_setup
+	git "$@"
+}
+
+git_push_cmd() {
+	git_push_env_setup
 	git "$@"
 }
 
@@ -1479,9 +1612,11 @@ EOF
 
 compose_effective_rules_internal() {
 	local manual_file combined_file out_file collapsed_file tracked_sig id label url path python_bin
+	local skip_collapse
 
 	manual_file="$(repo_rules_path)"
-	tracked_sig="$(tracked_rules_signature)"
+	skip_collapse="${ROUTER_RULES_SKIP_EFFECTIVE_COLLAPSE:-0}"
+	tracked_sig="$(tracked_rules_signature)|collapse_skipped:${skip_collapse}"
 	if [ -s "$(effective_rules_file)" ] \
 		&& [ -f "$(effective_rules_signature_file)" ] \
 		&& [ "$(cat "$(effective_rules_signature_file)" 2>/dev/null || true)" = "$tracked_sig" ]; then
@@ -1531,7 +1666,10 @@ EOF
 	' "$combined_file" > "$out_file"
 
 	python_bin="$(python_interpreter || true)"
-	if [ -n "$python_bin" ] && [ -f "$(external_source_script)" ]; then
+	if [ "$skip_collapse" = '1' ]; then
+		rm -f "$collapsed_file"
+		mv "$out_file" "$(effective_rules_file)"
+	elif [ -n "$python_bin" ] && [ -f "$(external_source_script)" ]; then
 		if "$python_bin" "$(external_source_script)" --collapse --input-file "$out_file" > "$collapsed_file" 2>/dev/null; then
 			mv "$collapsed_file" "$(effective_rules_file)"
 		else
@@ -2146,6 +2284,14 @@ sync_external_source_internal() {
 	fi
 }
 
+fast_resolve_refresh_due_internal() {
+	# Fast UI applies intentionally skip the expensive full collapse/re-resolve.
+	# Do not run that work from background-tick under the global lock; normal
+	# sync/external refresh paths will rebuild fully when they actually change
+	# the shared rules snapshot.
+	return 1
+}
+
 background_tick_internal() {
 	background_external_refresh_running_internal || true
 	if should_refresh_external_source_internal; then
@@ -2239,7 +2385,8 @@ split_rules_internal() {
 }
 
 resolve_rules_internal() {
-	local source_file dns out_map out_resolved out_domains out_literals tmp_resolved line resolved
+	local source_file dns out_map out_resolved out_domains out_literals tmp_resolved old_map line resolved
+	local reuse_cache
 
 	source_file="$(compose_effective_rules_internal)"
 	dns="$(dns_resolver)"
@@ -2248,8 +2395,11 @@ resolve_rules_internal() {
 	out_domains="$(domain_file)"
 	out_literals="$(literal_file)"
 	tmp_resolved="$(rr_mktemp)"
+	old_map="$(rr_mktemp)"
+	reuse_cache="${ROUTER_RULES_REUSE_RESOLVED_CACHE:-0}"
 
 	split_rules_internal
+	[ -f "$out_map" ] && cp "$out_map" "$old_map"
 	: > "$out_map"
 	: > "$tmp_resolved"
 
@@ -2264,7 +2414,13 @@ resolve_rules_internal() {
 	if [ -f "$out_domains" ]; then
 		while IFS= read -r line || [ -n "$line" ]; do
 			[ -n "$line" ] || continue
-		resolve_domain_ipv4 "$line" "$dns" | while IFS= read -r resolved || [ -n "$resolved" ]; do
+		if [ "$reuse_cache" = '1' ] && [ -s "$old_map" ]; then
+			resolved="$(awk -F '\t' -v host="$line" '$2 == "domain" && $3 == host { print $1 }' "$old_map" | awk '!seen[$0]++')"
+		else
+			resolved=''
+		fi
+		[ -n "$resolved" ] || resolved="$(resolve_domain_ipv4 "$line" "$dns" || true)"
+		printf '%s\n' "$resolved" | while IFS= read -r resolved || [ -n "$resolved" ]; do
 			[ -n "$resolved" ] || continue
 			printf '%s\n' "$resolved"
 			printf '%s\tdomain\t%s\n' "$resolved" "$line" >> "$out_map"
@@ -2273,15 +2429,18 @@ resolve_rules_internal() {
 	fi
 
 	sort -u "$tmp_resolved" > "$out_resolved"
-	rm -f "$tmp_resolved"
+	rm -f "$tmp_resolved" "$old_map"
 	status_set last_resolve_at "$(date +%s)"
+	if [ "$reuse_cache" != '1' ]; then
+		status_set last_full_resolve_at "$(date +%s)"
+	fi
 	status_set resolved_count "$(wc -l < "$out_resolved" | awk '{print $1}')"
 	status_set source_count "$(rule_count "$(repo_rules_path)")"
 	status_set effective_source_count "$(rule_count "$source_file")"
 }
 
 build_xray_ipset_internal() {
-	local setname domains conf tmp_conf resolved count restore_file value
+	local setname domains conf tmp_conf resolved count restore_file value old_resolved incremental adds_file dels_file
 
 	# Preload literal targets and current A-record snapshots for domains.
 	# On some OpenWrt/dnsmasq builds the ipset hook does not populate
@@ -2289,6 +2448,8 @@ build_xray_ipset_internal() {
 	setname="$(xray_ipset)"
 	domains="$(domain_file)"
 	resolved="$(resolved_file)"
+	old_resolved="$(rr_mktemp)"
+	[ -f "$resolved" ] && cp "$resolved" "$old_resolved"
 	if [ "${ROUTER_RULES_USE_CACHED_RESOLVED:-0}" = '1' ] && [ -f "$resolved" ]; then
 		# Boot-time restore should prefer the last resolved snapshot so the
 		# selective dataplane comes back before a full DNS refresh finishes.
@@ -2300,19 +2461,37 @@ build_xray_ipset_internal() {
 	tmp_conf="$(rr_mktemp)"
 	count=0
 
-	restore_file="$(rr_mktemp)"
-	{
-		printf 'create %s hash:net family inet maxelem 65536 -exist\n' "$setname"
-		printf 'flush %s\n' "$setname"
-		if [ -f "$resolved" ]; then
-			while IFS= read -r value || [ -n "$value" ]; do
-				[ -n "$value" ] || continue
-				printf 'add %s %s -exist\n' "$setname" "$value"
-			done < "$resolved"
-		fi
-	} > "$restore_file"
-	ipset restore < "$restore_file"
-	rm -f "$restore_file"
+	incremental="${ROUTER_RULES_INCREMENTAL_IPSET:-0}"
+	if [ "$incremental" = '1' ] && [ -s "$old_resolved" ] && ipset list "$setname" >/dev/null 2>&1; then
+		adds_file="$(rr_mktemp)"
+		dels_file="$(rr_mktemp)"
+		awk 'FILENAME == ARGV[1] { old[$0]=1; next } $0 != "" && !($0 in old) { print }' "$old_resolved" "$resolved" > "$adds_file"
+		awk 'FILENAME == ARGV[1] { new[$0]=1; next } $0 != "" && !($0 in new) { print }' "$resolved" "$old_resolved" > "$dels_file"
+		while IFS= read -r value || [ -n "$value" ]; do
+			[ -n "$value" ] || continue
+			ipset add "$setname" "$value" -exist >/dev/null 2>&1 || true
+		done < "$adds_file"
+		while IFS= read -r value || [ -n "$value" ]; do
+			[ -n "$value" ] || continue
+			ipset del "$setname" "$value" >/dev/null 2>&1 || true
+		done < "$dels_file"
+		rm -f "$adds_file" "$dels_file"
+	else
+		restore_file="$(rr_mktemp)"
+		{
+			printf 'create %s hash:net family inet maxelem 65536 -exist\n' "$setname"
+			printf 'flush %s\n' "$setname"
+			if [ -f "$resolved" ]; then
+				while IFS= read -r value || [ -n "$value" ]; do
+					[ -n "$value" ] || continue
+					printf 'add %s %s -exist\n' "$setname" "$value"
+				done < "$resolved"
+			fi
+		} > "$restore_file"
+		ipset restore < "$restore_file"
+		rm -f "$restore_file"
+	fi
+	rm -f "$old_resolved"
 	if [ -f "$resolved" ]; then
 		count="$(wc -l < "$resolved" | awk '{print $1}')"
 		[ -n "$count" ] || count=0
@@ -2519,10 +2698,25 @@ apply_xray_internal() {
 }
 
 hard_cutover_xray_internal() {
-	local signature mode subnet conntrack_flushed
+	local signature mode subnet conntrack_flushed fast_resolve restart_xray
 
-	set_sync_phase cutover_in_progress 'Resetting transparent path and clearing live sessions for the current ruleset'
-	ROUTER_RULES_FORCE_RESTART=1 ROUTER_RULES_FORCE_XRAY_RESTART=1 apply_xray_internal
+	fast_resolve="${ROUTER_RULES_FAST_RESOLVE:-0}"
+	if [ "$fast_resolve" = '1' ]; then
+		set_sync_phase cutover_in_progress 'Fast-applying local rules with cached DNS and resolving only new domains'
+		restart_xray=0
+		if path_requested && ! xray_runtime_healthy; then
+			restart_xray=1
+		fi
+		if [ "$restart_xray" = '1' ]; then
+			ROUTER_RULES_FORCE_RESTART=1 ROUTER_RULES_FORCE_XRAY_RESTART=1 ROUTER_RULES_REUSE_RESOLVED_CACHE=1 ROUTER_RULES_SKIP_EFFECTIVE_COLLAPSE=1 ROUTER_RULES_INCREMENTAL_IPSET=1 apply_xray_internal
+		else
+			ROUTER_RULES_FORCE_RESTART=1 ROUTER_RULES_REUSE_RESOLVED_CACHE=1 ROUTER_RULES_SKIP_EFFECTIVE_COLLAPSE=1 ROUTER_RULES_INCREMENTAL_IPSET=1 apply_xray_internal
+		fi
+		status_set last_fast_resolve_at "$(date +%s)"
+	else
+		set_sync_phase cutover_in_progress 'Resetting transparent path and clearing live sessions for the current ruleset'
+		ROUTER_RULES_FORCE_RESTART=1 ROUTER_RULES_FORCE_XRAY_RESTART=1 apply_xray_internal
+	fi
 	subnet="$(lan_ipv4_cidr)"
 	conntrack_flushed=0
 	if [ -n "$subnet" ] && command -v conntrack >/dev/null 2>&1; then
@@ -2530,7 +2724,11 @@ hard_cutover_xray_internal() {
 		conntrack -D -f ipv4 -p udp -s "$subnet" >/dev/null 2>&1 || true
 		conntrack_flushed=1
 	fi
-	signature="$(xray_state_signature)"
+	if [ "$fast_resolve" = '1' ]; then
+		signature="$(ROUTER_RULES_SKIP_EFFECTIVE_COLLAPSE=1 xray_state_signature)"
+	else
+		signature="$(xray_state_signature)"
+	fi
 	mode="$(xray_mode)"
 	status_set last_cutover_at "$(date +%s)"
 	status_set last_cutover_status 'ok'
@@ -2538,7 +2736,11 @@ hard_cutover_xray_internal() {
 	status_set last_cutover_signature "$signature"
 	status_set last_cutover_mode "$mode"
 	status_set last_verified_at "$(date +%s)"
-	set_sync_phase verified "Current ruleset is active after hard cutover (mode=${mode}, conntrack_flushed=${conntrack_flushed})"
+	if [ "$fast_resolve" = '1' ]; then
+		set_sync_phase verified "Current ruleset is active after fast local cutover (mode=${mode}, conntrack_flushed=${conntrack_flushed})"
+	else
+		set_sync_phase verified "Current ruleset is active after hard cutover (mode=${mode}, conntrack_flushed=${conntrack_flushed})"
+	fi
 }
 
 refresh_resolved_runtime_internal() {
@@ -2551,10 +2753,22 @@ refresh_resolved_runtime_internal() {
 	set_sync_phase verified "Resolved selective targets refreshed without hard cutover (mode=${mode})"
 }
 
+xray_needs_apply_for_mode_internal() {
+	case "${1:-$(sync_mode)}" in
+		apply|push)
+			ROUTER_RULES_SKIP_EFFECTIVE_COLLAPSE=1 xray_needs_apply_internal
+			;;
+		*)
+			xray_needs_apply_internal
+			;;
+	esac
+}
+
 sync_apply_xray_internal() {
-	local mode
+	local mode local_first_applied
 
 	mode="$(sync_mode)"
+	local_first_applied=0
 	if [ "$mode" = 'apply' ]; then
 		status_set last_sync_changed '0'
 		status_set last_sync_strategy 'local-apply'
@@ -2579,20 +2793,31 @@ sync_apply_xray_internal() {
 		fi
 		return 0
 	else
+		if [ "$mode" = 'push' ] && [ "$(sync_actor)" != 'background' ] && xray_needs_apply_for_mode_internal "$mode"; then
+			set_sync_phase local_apply_in_progress 'Applying local rules before Git push so routing changes take effect immediately'
+			ROUTER_RULES_FAST_RESOLVE=1 hard_cutover_xray_internal
+			local_first_applied=1
+		fi
 		set_sync_phase checking_remote 'Checking Git remote and local rules state'
 		if ! sync_repo_internal; then
 			set_sync_phase git_error 'Git sync failed; applying local rules'
 		fi
 	fi
 
-	if xray_needs_apply_internal; then
+	if xray_needs_apply_for_mode_internal "$mode"; then
 		set_sync_phase drift_detected 'Found runtime drift against the current ruleset; starting cutover'
-		hard_cutover_xray_internal
+		if [ "$mode" = 'apply' ] || [ "$mode" = 'push' ]; then
+			ROUTER_RULES_FAST_RESOLVE=1 hard_cutover_xray_internal
+		else
+			hard_cutover_xray_internal
+		fi
 	elif resolved_snapshot_needs_apply_internal; then
 		refresh_resolved_runtime_internal
 	else
 		status_set last_verified_at "$(date +%s)"
-		if [ "$mode" = 'apply' ]; then
+		if [ "$local_first_applied" = '1' ]; then
+			set_sync_phase verified 'Local routing was already applied before Git push; runtime still matches the active ruleset'
+		elif [ "$mode" = 'apply' ]; then
 			set_sync_phase verified 'Local rules are saved and the active runtime state already matches them'
 		else
 			set_sync_phase verified 'Everything is already synchronized with Git and active on the router'
@@ -2782,7 +3007,7 @@ sync_repo_internal() {
 			rm -f "$git_error_log"
 			return 1
 		fi
-		if git_cmd -C "$repo" push origin "$branch" >/dev/null 2>"$git_error_log"; then
+		if git_push_cmd -C "$repo" push origin "$branch" >/dev/null 2>"$git_error_log"; then
 			pushed=1
 		else
 			error_line="$(sed '/^[[:space:]]*$/d' "$git_error_log" | sed -n '1p')"
@@ -2925,6 +3150,7 @@ status_json() {
 	local setname current_signature last_cutover_at last_cutover_status last_cutover_message last_cutover_signature cutover_required
 	local sync_phase sync_phase_at sync_phase_message sync_trace last_verified_at last_sync_actor last_sync_strategy rules_checksum last_apply_signature interval
 	local fetch_url push_url_raw push_url_effective auth_mode http_username http_password_set ssh_key_present ssh_pub git_configured sync_enabled git_readonly
+	local git_push_status_payload git_push_status git_push_message git_push_next_step git_push_effective_auth git_push_ready
 	local external_enabled external_interval external_due last_external_run_at last_external_status last_external_message last_external_generated_count last_external_added_count last_external_actor
 	local rules_text_included id label url path count external_sources_payload remote_ref browser_rules_url
 	local last_remote_probe_at last_remote_probe_status last_remote_probe_message last_remote_probe_head last_remote_probe_update_available
@@ -2970,6 +3196,13 @@ status_json() {
 		ssh_pub="$(ssh-keygen -y -f "$(ssh_key_path)" 2>/dev/null || true)"
 	fi
 	repo_fetch_configured && git_configured=1 || git_configured=0
+	git_push_status_payload="$(git_push_status_fields)"
+	git_push_status="$(printf '%s\n' "$git_push_status_payload" | sed -n 's/^status=//p' | sed -n '1p')"
+	git_push_message="$(printf '%s\n' "$git_push_status_payload" | sed -n 's/^message=//p' | sed -n '1p')"
+	git_push_next_step="$(printf '%s\n' "$git_push_status_payload" | sed -n 's/^next_step=//p' | sed -n '1p')"
+	git_push_effective_auth="$(printf '%s\n' "$git_push_status_payload" | sed -n 's/^effective_auth=//p' | sed -n '1p')"
+	git_push_ready='0'
+	[ "$git_push_status" = 'ready' ] && git_push_ready='1'
 
 	repo_head=''
 	repo_dirty='0'
@@ -3010,7 +3243,7 @@ EOF
 	last_apply_xray="$(status_get last_apply_xray)"
 	last_sync_actor="$(status_get last_sync_actor)"
 	last_sync_strategy="$(status_get last_sync_strategy)"
-	current_signature="$(xray_state_signature)"
+	current_signature="$(xray_state_signature_quick_internal)"
 	rules_checksum="$(file_signature "$rules_file")"
 	last_apply_signature="$(status_get last_apply_xray_signature)"
 	last_cutover_at="$(status_get last_cutover_at)"
@@ -3071,6 +3304,11 @@ EOF
 	printf '"repo_dirty":'; json_bool "$repo_dirty"; printf ','
 	printf '"git_auth_mode":"%s",' "$(json_escape "$auth_mode")"
 	printf '"git_readonly":'; json_bool "$git_readonly"; printf ','
+	printf '"git_push_ready":'; json_bool "$git_push_ready"; printf ','
+	printf '"git_push_status":"%s",' "$(json_escape "$git_push_status")"
+	printf '"git_push_message":"%s",' "$(json_escape "$git_push_message")"
+	printf '"git_push_next_step":"%s",' "$(json_escape "$git_push_next_step")"
+	printf '"git_push_effective_auth":"%s",' "$(json_escape "$git_push_effective_auth")"
 	printf '"git_http_username":"%s",' "$(json_escape "$http_username")"
 	printf '"git_http_password_set":'; json_bool "$http_password_set"; printf ','
 	printf '"git_ssh_key_present":'; json_bool "$ssh_key_present"; printf ','

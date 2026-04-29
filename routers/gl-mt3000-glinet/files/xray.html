@@ -339,6 +339,44 @@
       padding: 12px;
     }
 
+    .status-banner {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin-top: 12px;
+      background: #fbfcfd;
+      line-height: 1.45;
+    }
+
+    .status-banner.ok {
+      background: #eefaf3;
+      border-color: #ccead8;
+      color: #115934;
+    }
+
+    .status-banner.warn {
+      background: #fff7ea;
+      border-color: #f0d4a2;
+      color: #8b5300;
+    }
+
+    .status-banner.bad {
+      background: #fff0f0;
+      border-color: #efc0c0;
+      color: #8e2222;
+    }
+
+    .status-banner-title {
+      font-weight: 800;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .status-banner-body {
+      font-size: 13px;
+      white-space: pre-line;
+    }
+
     .external-source-grid {
       display: grid;
       gap: 12px;
@@ -846,6 +884,21 @@
           <label for="rulesRepoPushUrl">Push URL</label>
           <input type="text" id="rulesRepoPushUrl" placeholder="Optional. Leave empty to reuse Repository URL for push.">
         </div>
+        <div class="field field-full" style="margin-top:12px;">
+          <label for="rulesEnablePush">Allow Push To Git</label>
+          <div class="toggle-row">
+            <span class="toggle-label">Pull-only</span>
+            <label class="toggle-switch" for="rulesEnablePush">
+              <input type="checkbox" id="rulesEnablePush" aria-label="Allow this router to push shared rules to Git">
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">Push enabled</span>
+            <span class="toggle-state" id="rulesPushStateText">Push disabled.</span>
+          </div>
+          <div class="hint" id="rulesPushHint">
+            Leave disabled when this router should only pull/apply rules locally. Enable only after configuring writable HTTPS token or SSH deploy-key access.
+          </div>
+        </div>
         <div class="button-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:12px;">
           <div class="field">
             <label for="rulesRepoBranch">Branch</label>
@@ -925,6 +978,8 @@
       </div>
       <div class="readonly-pane" style="margin-top:12px;">
         <div class="label">Git Sync / Runtime Status</div>
+        <div id="rulesGitStatusBanner" style="margin-top:12px;"></div>
+        <div id="rulesGitActionPanel" class="hint" style="margin-top:12px;"></div>
         <div id="rulesStatusGrid" style="display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin-top:12px;"></div>
       </div>
       <details class="readonly-pane" style="margin-top:12px;">
@@ -1131,6 +1186,7 @@
         "rulesPullBtn",
         "rulesPushBtn",
         "rulesGitSyncEnabled",
+        "rulesEnablePush",
         "rulesRepoFetchUrl",
         "rulesRepoPushUrl",
         "rulesRepoBranch",
@@ -1168,6 +1224,7 @@
         "rulesPullBtn",
         "rulesPushBtn",
         "rulesGitSyncEnabled",
+        "rulesEnablePush",
         "rulesRepoFetchUrl",
         "rulesRepoPushUrl",
         "rulesRepoBranch",
@@ -1468,6 +1525,7 @@
       const gitConfigured = !!data?.git_configured;
       const repoReady = !!data?.repo_ready;
       const gitReadonly = !!data?.git_readonly;
+      const pushReady = !!data?.git_push_ready;
       const uiJobRunning = data?.ui_job_state === "running" && ["sync_rules", "pull_rules", "push_rules", "sync_external_source"].includes(data?.ui_job_kind || "");
       const intervalSeconds = Number(data?.sync_interval || 0) || 30;
       const probeStatus = data?.last_remote_probe_status || "";
@@ -1544,6 +1602,13 @@
         };
       }
       if (lastSyncStatus === "ok") {
+        if (!pushReady) {
+          return {
+            chipClass: "warn",
+            label: "ready (push blocked)",
+            detail: data?.git_push_message || "Pull/apply are ready, but Push needs write configuration."
+          };
+        }
         return {
           chipClass: "ok",
           label: gitReadonly ? "ready (pull-only)" : "ready",
@@ -1563,15 +1628,45 @@
       return !!state.rules?.git_readonly;
     }
 
+    function rulesGitPushBlockedLive() {
+      return !!state.rules?.git_sync_enabled && !state.rules?.git_push_ready;
+    }
+
+    function rulesGitPushActionText(data = state.rules) {
+      if (!data?.git_sync_enabled) {
+        return "Git sync is disabled. Push is not used in local-only mode.";
+      }
+      if (data?.git_push_ready) {
+        return `Push is ready via ${data.git_push_effective_auth || data.git_auth_mode || "configured"} auth.`;
+      }
+      const lines = [
+        `Push blocked: ${data?.git_push_message || "write access is not configured."}`,
+        `Fix: ${data?.git_push_next_step || "Configure writable Git credentials, then save settings."}`
+      ];
+      if (data?.git_push_effective_auth === "ssh" || data?.git_auth_mode === "ssh") {
+        lines.push("For GitHub SSH deploy keys: add the public key below to the target repository with write access enabled.");
+      } else if (data?.git_push_effective_auth === "https" || data?.repo_push_url_effective?.startsWith("https://")) {
+        lines.push("For GitHub HTTPS: use a token/password that can write to the repository.");
+      }
+      if (data?.git_ssh_public_key) {
+        lines.push(`Router public key: ${data.git_ssh_public_key}`);
+      }
+      return lines.join("\n");
+    }
+
     function rulesGitReadonlyProjected() {
       const syncEnabled = !!document.getElementById("rulesGitSyncEnabled")?.checked;
       const authMode = document.getElementById("rulesGitAuthMode")?.value || "none";
       const repoUrl = document.getElementById("rulesRepoFetchUrl")?.value.trim() || "";
+      const pushEnabled = !!document.getElementById("rulesEnablePush")?.checked;
       const httpUsername = document.getElementById("rulesGitHttpUsername")?.value.trim() || "";
       const httpPassword = document.getElementById("rulesGitHttpPassword")?.value || "";
 
       if (!syncEnabled) {
         return false;
+      }
+      if (!pushEnabled) {
+        return true;
       }
 
       switch (authMode) {
@@ -1655,6 +1750,7 @@
         repo_fetch_url: document.getElementById("rulesRepoFetchUrl").value.trim(),
         repo_push_url: document.getElementById("rulesRepoPushUrl").value.trim(),
         repo_branch: document.getElementById("rulesRepoBranch").value.trim(),
+        enable_push: document.getElementById("rulesEnablePush").checked ? "1" : "0",
         sync_interval: document.getElementById("rulesSyncInterval").value.trim() || "30",
         external_source_enabled_ids: selectedExternalSourceIds().join(","),
         external_source_interval: document.getElementById("rulesExternalInterval").value.trim() || "86400",
@@ -1990,6 +2086,8 @@
       const gitSyncEnabled = !!data.git_sync_enabled;
       const gitConfigured = !!data.git_configured;
       const gitReadonly = !!data.git_readonly;
+      const gitPushReady = !!data.git_push_ready;
+      const gitPushBlocked = gitSyncEnabled && !gitPushReady;
       const repoReady = !!data.repo_ready;
       const externalSources = Array.isArray(data.external_sources) ? data.external_sources : [];
       const enabledExternalSources = externalSources.filter((item) => !!item.enabled);
@@ -2039,6 +2137,9 @@
         ["UI operation detail", uiJobMessage || "(no active UI-triggered router operation)"],
         ["Git sync state", gitHealth.label],
         ["Git sync detail", gitHealthDetail],
+        ["Git push state", gitPushReady ? "ready" : (data.git_push_status || "not ready")],
+        ["Git push detail", data.git_push_message || "(no push detail)"],
+        ["Git push fix", data.git_push_next_step || "(no action required)"],
         ["Background probe", gitSyncEnabled ? (gitConfigured ? `Every ${intervalSeconds}s · ${lastRemoteProbeStatus}${lastRemoteProbeAt}` : "Enabled, but still not ready for remote probes") : "Idle in local-only mode"],
         ["Managed source refresh", externalEnabled ? `Every ${externalIntervalSeconds}s · ${externalDue ? "due now" : "scheduled"}${lastExternalAt}` : "Background refresh disabled"],
         ["Remote rules file", data.remote_rules_ref || "(unknown)"],
@@ -2059,6 +2160,9 @@
         `Routing mode: ${mode}${modePending ? " (apply in progress)" : ""}`,
         `Git sync state: ${gitHealth.label}`,
         `Git sync detail: ${gitHealthDetail}`,
+        `Git push state: ${gitPushReady ? "ready" : (data.git_push_status || "not ready")}`,
+        `Git push detail: ${data.git_push_message || "(no push detail)"}`,
+        `Git push fix: ${data.git_push_next_step || "(no action required)"}`,
         `Working copy strategy: ${syncStrategy}`,
         `Counts: ${counts}`,
         data.last_remote_probe_message ? `Remote probe: ${data.last_remote_probe_message}` : "",
@@ -2080,13 +2184,16 @@
         `Remote rules ref: ${data.remote_rules_ref || "(unknown)"}`,
         `Remote browser URL: ${data.repo_browser_rules_url || "(not available)"}`,
         `Push URL: ${data.repo_push_url || "(reuse fetch URL)"}`,
+        `Effective push URL: ${data.repo_push_url_effective || "(not available)"}`,
         `Rules file: ${data.rules_relpath || "(unknown)"}`,
         `Repo head: ${data.repo_head || "(none)"}`,
         `Sync interval: ${intervalSeconds}s`,
         `Repo dirty: ${data.repo_dirty ? "yes" : "no"}`,
         `Auth mode: ${data.git_auth_mode || "none"}`,
-        `Access mode: ${gitReadonly ? "pull-only" : "read-write"}`,
-        `Push path: ${gitReadonly ? "disabled until write auth is configured" : "available through the Push button"}`,
+        `Access mode: ${gitPushReady ? "read-write" : "pull/apply only"}`,
+        `Push policy: ${data.enable_push ? "enabled" : "disabled"}`,
+        `Push auth: ${data.git_push_effective_auth || "(unknown)"}`,
+        `Push path: ${gitPushReady ? "available through the Push button" : (data.git_push_message || "disabled until write auth is configured")}`,
         `Working copy strategy: ${syncStrategy}`,
         `Managed source files enabled: ${enabledExternalSources.length}/${externalSources.length}`,
         `External interval: ${externalIntervalSeconds}s`,
@@ -2113,6 +2220,9 @@
       if (state.rulesDirty) {
         chips.push(`<span class="chip bad">Unsaved edits</span>`);
       }
+      if (gitPushBlocked) {
+        chips.push(`<span class="chip warn">Push blocked</span>`);
+      }
 
       document.getElementById("rulesSummaryChips").innerHTML = chips.join("");
       if (
@@ -2132,6 +2242,7 @@
           externalSelection[source.id] = !!source.enabled;
         });
         document.getElementById("rulesGitSyncEnabled").checked = gitSyncEnabled;
+        document.getElementById("rulesEnablePush").checked = !!data.enable_push;
         document.getElementById("rulesRepoFetchUrl").value = data.repo_fetch_url || "";
         document.getElementById("rulesRepoPushUrl").value = data.repo_push_url || "";
         document.getElementById("rulesRepoBranch").value = data.repo_branch || "main";
@@ -2146,6 +2257,25 @@
         renderExternalSources(externalSources, currentExternalSourceSelection());
       }
       document.getElementById("rulesGitSshPublicKey").textContent = data.git_ssh_public_key || "No router SSH key yet.";
+      const gitActionPanel = document.getElementById("rulesGitActionPanel");
+      if (gitActionPanel) {
+        gitActionPanel.textContent = rulesGitPushActionText(data);
+        gitActionPanel.className = `hint ${gitPushBlocked ? "warn" : gitPushReady ? "ok" : ""}`;
+      }
+      const gitBanner = document.getElementById("rulesGitStatusBanner");
+      if (gitBanner) {
+        if (!gitSyncEnabled) {
+          gitBanner.innerHTML = "";
+        } else {
+          const bc = gitHealth.chipClass || "warn";
+          const title = gitHealth.label || "unknown";
+          let body = gitHealthDetail;
+          if (bc !== "ok" && data.git_push_next_step) {
+            body += `\nNext step: ${data.git_push_next_step}`;
+          }
+          gitBanner.innerHTML = `<div class="status-banner ${escapeHtml(bc)}"><div class="status-banner-title">${escapeHtml(title)}</div><div class="status-banner-body">${escapeHtml(body)}</div></div>`;
+        }
+      }
       const gitSyncStateText = document.getElementById("rulesGitSyncStateText");
       if (gitSyncStateText) {
         gitSyncStateText.textContent = gitSyncEnabled
@@ -2228,6 +2358,8 @@
       const gitSyncEnabled = !!state.rules?.git_sync_enabled;
       const gitConfigured = !!state.rules?.git_configured;
       const gitReadonly = rulesGitReadonlyLive();
+      const gitPushReady = !!state.rules?.git_push_ready;
+      const gitPushBlocked = rulesGitPushBlockedLive();
       const backendJobRunning = rulesJobIsRunning(state.rules);
       const workingCopyDetail = rulesWorkingCopyDetail(state.rules);
       const editor = document.getElementById("rulesText");
@@ -2245,11 +2377,11 @@
       }
       if (pushButton) {
         pushButton.textContent = state.rulesDirty ? "Save + Push To Git" : "Push To Git";
-        pushButton.disabled = state.foregroundBusy || backendJobRunning || !gitSyncEnabled || !gitConfigured || gitReadonly;
+        pushButton.disabled = state.foregroundBusy || backendJobRunning || !gitSyncEnabled || !gitConfigured || !gitPushReady;
         pushButton.title = !gitConfigured
           ? "Configure and validate Git sync first."
-          : gitReadonly
-          ? "Push stays unavailable until write credentials are configured."
+          : gitPushBlocked
+          ? rulesGitPushActionText(state.rules)
           : "";
       }
       if (editor) {
@@ -2273,8 +2405,8 @@
           hint.textContent = `Live status stays lightweight after large imports, so the full shared list is not auto-loaded into the editor. Click 'Load Current List' before editing or saving text changes. ${applyScope}`;
         } else if (gitReadonly) {
           hint.textContent = state.rulesDirty
-            ? `You have unsaved local edits in the router working copy. Pull merges the fetched Git file into it while keeping unique local rules, and Push stays unavailable until write credentials are configured. ${workingCopyDetail} ${applyScope}`
-            : `Git sync is active in pull-only mode. You can still edit and apply the router working copy locally. Pull refreshes it from Git, and Push stays unavailable until write credentials are configured. ${workingCopyDetail} ${applyScope}`;
+            ? `You have unsaved local edits in the router working copy. Pull merges the fetched Git file into it while keeping unique local rules. Push is blocked: ${state.rules?.git_push_message || "write access is not configured."} ${workingCopyDetail} ${applyScope}`
+            : `Git sync is active in pull/apply mode. Push is blocked: ${state.rules?.git_push_message || "write access is not configured."} Fix: ${state.rules?.git_push_next_step || "configure writable credentials."} ${workingCopyDetail} ${applyScope}`;
         } else if (!gitSyncEnabled || !gitConfigured) {
           hint.textContent = state.rulesDirty
             ? `You have unsaved local edits. Saving applies the local text list directly on this router without any Git sync. ${applyScope}`
@@ -2291,6 +2423,7 @@
       const syncEnabled = !!document.getElementById("rulesGitSyncEnabled")?.checked;
       const authMode = document.getElementById("rulesGitAuthMode")?.value || "none";
       const repoUrl = document.getElementById("rulesRepoFetchUrl")?.value.trim() || "";
+      const pushEnabled = !!document.getElementById("rulesEnablePush")?.checked;
       const enabledSourceIds = selectedExternalSourceIds();
       const syncFieldsWrap = document.getElementById("rulesGitConfigFields");
       const httpsWrap = document.getElementById("rulesGitHttpsFields");
@@ -2300,6 +2433,8 @@
       const sshHint = document.getElementById("rulesGitSshHint");
       const syncHint = document.getElementById("rulesGitSyncHint");
       const syncStateText = document.getElementById("rulesGitSyncStateText");
+      const pushStateText = document.getElementById("rulesPushStateText");
+      const pushHint = document.getElementById("rulesPushHint");
       const usernameInput = document.getElementById("rulesGitHttpUsername");
       const passwordInput = document.getElementById("rulesGitHttpPassword");
       const sshKeyInput = document.getElementById("rulesGitSshPrivateKey");
@@ -2325,6 +2460,32 @@
           ? "Save Local-Only Mode"
           : (projectedReadonly ? "Save Pull-Only Git Settings" : "Save Git Settings");
       }
+      if (pushStateText) {
+        if (!syncEnabled) {
+          pushStateText.textContent = "Push unused while Git sync is disabled.";
+          pushStateText.className = "toggle-state";
+        } else if (state.rulesConfigDirty) {
+          pushStateText.textContent = pushEnabled
+            ? "Push will be attempted after write auth is saved."
+            : "Push will stay disabled after save.";
+          pushStateText.className = `toggle-state ${pushEnabled ? "warn" : ""}`;
+        } else if (state.rules?.git_push_ready) {
+          pushStateText.textContent = "Push is ready.";
+          pushStateText.className = "toggle-state ok";
+        } else {
+          pushStateText.textContent = state.rules?.git_push_message || "Push is not ready.";
+          pushStateText.className = "toggle-state warn";
+        }
+      }
+      if (pushHint) {
+        pushHint.textContent = !syncEnabled
+          ? "Git push is not used in local-only mode."
+          : state.rulesConfigDirty
+          ? (pushEnabled
+            ? "After save, Push also needs writable HTTPS token or SSH deploy-key access. The status panel below will show the exact blocker."
+            : "Pull/apply will stay available, but Push To Git will remain disabled.")
+          : rulesGitPushActionText(state.rules);
+      }
       if (sshHint) {
         sshHint.textContent = !syncEnabled
           ? "SSH key settings stay unused until Git sync is enabled."
@@ -2337,7 +2498,7 @@
       if (syncHint) {
         syncHint.textContent = syncEnabled
           ? (projectedReadonly
-            ? "When enabled in pull-only mode, the router pulls the configured remote rules file anonymously from the configured repository or GitHub file URL. Local editing on the router stays available, but Push stays disabled."
+            ? "When enabled in pull/apply mode, the router pulls the configured remote rules file. Local editing and Apply stay available, but Push requires the separate Allow Push setting and write credentials."
             : "When enabled, the router checks that the configured remote rules file exists before saving the sync settings.")
           : "With Git sync disabled, the router uses only the local text list below and never pulls from Git.";
       }
@@ -2359,6 +2520,10 @@
       }
       if (sshKeyInput) {
         sshKeyInput.disabled = !syncEnabled || authMode !== "ssh" || state.foregroundBusy;
+      }
+      const enablePushInput = document.getElementById("rulesEnablePush");
+      if (enablePushInput) {
+        enablePushInput.disabled = !syncEnabled || state.foregroundBusy || backendJobRunning;
       }
       if (externalIntervalInput) {
         externalIntervalInput.disabled = state.foregroundBusy || backendJobRunning || enabledSourceIds.length === 0;
@@ -3366,6 +3531,7 @@
     });
     [
       "rulesGitSyncEnabled",
+      "rulesEnablePush",
       "rulesGitAuthMode"
     ].forEach((id) => {
       const el = document.getElementById(id);
@@ -3374,6 +3540,7 @@
       }
     });
     document.getElementById("rulesGitSyncEnabled").addEventListener("change", updateRulesConfigUi);
+    document.getElementById("rulesEnablePush").addEventListener("change", updateRulesConfigUi);
     document.getElementById("rulesGitAuthMode").addEventListener("change", updateRulesConfigUi);
     [
       "rulesRepoFetchUrl",

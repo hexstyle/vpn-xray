@@ -477,6 +477,49 @@ effective_external_source_interval() {
 	esac
 }
 
+effective_router_rules_text_value() {
+	local key="$1"
+	local fallback="$2"
+	local existing
+
+	existing="$(existing_router_rules_value "$key")"
+	if [ -n "$existing" ]; then
+		printf '%s\n' "$existing"
+	else
+		printf '%s\n' "$fallback"
+	fi
+}
+
+effective_router_rules_bool_value() {
+	local key="$1"
+	local fallback="$2"
+	local existing
+
+	existing="$(existing_router_rules_value "$key")"
+	case "$existing" in
+		0|1)
+			printf '%s\n' "$existing"
+			;;
+		*)
+			printf '%s\n' "$fallback"
+			;;
+	esac
+}
+
+effective_git_auth_mode() {
+	local existing
+
+	existing="$(existing_router_rules_value git_auth_mode)"
+	case "$existing" in
+		auto|none|readonly|https|ssh)
+			printf '%s\n' "$existing"
+			;;
+		*)
+			printf '%s\n' "${RULES_GIT_AUTH_MODE:-auto}"
+			;;
+	esac
+}
+
 defer_xray_activation() {
 	[ "${DEFER_XRAY_ACTIVATION:-0}" = '1' ]
 }
@@ -618,18 +661,18 @@ render_redsocks_conf() {
 render_router_rules_conf() {
 	local output="$1"
 
-	RULES_GIT_SYNC_ENABLED="${RULES_GIT_SYNC_ENABLED:-}" \
-	RULES_REPO_FETCH_URL="${RULES_REPO_FETCH_URL:-}" \
-	RULES_REPO_PUSH_URL="${RULES_REPO_PUSH_URL:-}" \
-	RULES_REPO_BRANCH="${RULES_REPO_BRANCH:-main}" \
-	RULES_GIT_AUTH_MODE="${RULES_GIT_AUTH_MODE:-auto}" \
-	RULES_GIT_HTTP_USERNAME="${RULES_GIT_HTTP_USERNAME:-}" \
-	RULES_GIT_HTTP_PASSWORD="${RULES_GIT_HTTP_PASSWORD:-}" \
+	RULES_GIT_SYNC_ENABLED="$(effective_router_rules_bool_value git_sync_enabled "${RULES_GIT_SYNC_ENABLED:-}")" \
+	RULES_REPO_FETCH_URL="$(effective_router_rules_text_value repo_fetch_url "${RULES_REPO_FETCH_URL:-}")" \
+	RULES_REPO_PUSH_URL="$(effective_router_rules_text_value repo_push_url "${RULES_REPO_PUSH_URL:-}")" \
+	RULES_REPO_BRANCH="$(effective_router_rules_text_value repo_branch "${RULES_REPO_BRANCH:-main}")" \
+	RULES_GIT_AUTH_MODE="$(effective_git_auth_mode)" \
+	RULES_GIT_HTTP_USERNAME="$(effective_router_rules_text_value git_http_username "${RULES_GIT_HTTP_USERNAME:-}")" \
+	RULES_GIT_HTTP_PASSWORD="$(effective_router_rules_text_value git_http_password "${RULES_GIT_HTTP_PASSWORD:-}")" \
 	RULES_GIT_USER_NAME="${RULES_GIT_USER_NAME:-router-rules}" \
 	RULES_GIT_USER_EMAIL="${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}" \
 	RULES_DNS_RESOLVER="${RULES_DNS_RESOLVER:-9.9.9.9 208.67.222.222}" \
 	RULES_DEVICE_ID="${RULES_DEVICE_ID:-gl-router}" \
-	RULES_ENABLE_PUSH="${RULES_ENABLE_PUSH:-0}" \
+	RULES_ENABLE_PUSH="$(effective_router_rules_bool_value enable_push "${RULES_ENABLE_PUSH:-0}")" \
 	XRAY_RULES_MODE="$(effective_xray_rules_mode)" \
 	RULES_SYNC_INTERVAL="${RULES_SYNC_INTERVAL:-30}" \
 	RULES_EXTERNAL_SOURCE_ENABLED="$(effective_external_source_enabled)" \
@@ -925,18 +968,18 @@ install_platform() {
 	fi
 	uci -q batch <<EOF
 set router_rules.global=global
-set router_rules.global.git_sync_enabled='${RULES_GIT_SYNC_ENABLED:-}'
-set router_rules.global.repo_fetch_url='${RULES_REPO_FETCH_URL:-}'
-set router_rules.global.repo_push_url='${RULES_REPO_PUSH_URL:-}'
-set router_rules.global.repo_branch='${RULES_REPO_BRANCH:-main}'
-set router_rules.global.git_auth_mode='${RULES_GIT_AUTH_MODE:-auto}'
-set router_rules.global.git_http_username='${RULES_GIT_HTTP_USERNAME:-}'
-set router_rules.global.git_http_password='${RULES_GIT_HTTP_PASSWORD:-}'
+set router_rules.global.git_sync_enabled='$(effective_router_rules_bool_value git_sync_enabled "${RULES_GIT_SYNC_ENABLED:-}")'
+set router_rules.global.repo_fetch_url='$(effective_router_rules_text_value repo_fetch_url "${RULES_REPO_FETCH_URL:-}")'
+set router_rules.global.repo_push_url='$(effective_router_rules_text_value repo_push_url "${RULES_REPO_PUSH_URL:-}")'
+set router_rules.global.repo_branch='$(effective_router_rules_text_value repo_branch "${RULES_REPO_BRANCH:-main}")'
+set router_rules.global.git_auth_mode='$(effective_git_auth_mode)'
+set router_rules.global.git_http_username='$(effective_router_rules_text_value git_http_username "${RULES_GIT_HTTP_USERNAME:-}")'
+set router_rules.global.git_http_password='$(effective_router_rules_text_value git_http_password "${RULES_GIT_HTTP_PASSWORD:-}")'
 set router_rules.global.git_user_name='${RULES_GIT_USER_NAME:-router-rules}'
 set router_rules.global.git_user_email='${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}'
 set router_rules.global.dns_resolver='${RULES_DNS_RESOLVER:-9.9.9.9 208.67.222.222}'
 set router_rules.global.local_device_id='${RULES_DEVICE_ID:-gl-router}'
-set router_rules.global.enable_push='${RULES_ENABLE_PUSH:-0}'
+set router_rules.global.enable_push='$(effective_router_rules_bool_value enable_push "${RULES_ENABLE_PUSH:-0}")'
 set router_rules.global.xray_mode='$(effective_xray_rules_mode)'
 set router_rules.global.sync_interval='${RULES_SYNC_INTERVAL:-30}'
 set router_rules.global.external_source_enabled='$(effective_external_source_enabled)'
