@@ -85,8 +85,15 @@ install_progress_plan() {
 }
 
 install_progress_begin() {
+	local now elapsed
+	now="$(date +%s 2>/dev/null || echo 0)"
+	if [ "$_VX_PROGRESS_INDEX" -gt 0 ] && [ "${_VX_PROGRESS_LAST_BEGIN:-0}" -gt 0 ]; then
+		elapsed=$((now - _VX_PROGRESS_LAST_BEGIN))
+		printf '       (previous step took %ds)\n' "$elapsed" >&2
+	fi
 	_VX_PROGRESS_INDEX=$((_VX_PROGRESS_INDEX + 1))
 	_VX_PROGRESS_NAME="$1"
+	_VX_PROGRESS_LAST_BEGIN="$now"
 	printf '[%d/%d] %s\n' "$_VX_PROGRESS_INDEX" "$_VX_PROGRESS_TOTAL" "$_VX_PROGRESS_NAME" >&2
 	_vx_progress_write running
 	_vx_progress_after_update running
@@ -102,9 +109,20 @@ install_progress_fail() {
 }
 
 install_progress_complete() {
+	local now elapsed_total
+	now="$(date +%s 2>/dev/null || echo 0)"
+	if [ "${_VX_PROGRESS_LAST_BEGIN:-0}" -gt 0 ]; then
+		elapsed=$((now - _VX_PROGRESS_LAST_BEGIN))
+		printf '       (previous step took %ds)\n' "$elapsed" >&2
+	fi
+	if [ "${_VX_PROGRESS_STARTED:-0}" -gt 0 ] && [ "$now" -gt 0 ]; then
+		elapsed_total=$((now - _VX_PROGRESS_STARTED))
+		printf 'Install complete: %d/%d steps OK in %ds\n' "$_VX_PROGRESS_TOTAL" "$_VX_PROGRESS_TOTAL" "$elapsed_total" >&2
+	else
+		printf 'Install complete: %d/%d steps OK\n' "$_VX_PROGRESS_TOTAL" "$_VX_PROGRESS_TOTAL" >&2
+	fi
 	_VX_PROGRESS_INDEX="$_VX_PROGRESS_TOTAL"
 	_VX_PROGRESS_NAME='complete'
-	printf 'Install complete: %d/%d steps OK\n' "$_VX_PROGRESS_TOTAL" "$_VX_PROGRESS_TOTAL" >&2
 	_vx_progress_write complete
 	_vx_progress_after_update complete
 }

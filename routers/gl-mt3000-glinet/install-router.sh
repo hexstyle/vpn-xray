@@ -557,30 +557,36 @@ install_progress_begin "Install router platform packages and runtime"
 router_ssh "$remote_platform_cmd"
 
 install_progress_begin "Validate Xray config and apply runtime"
+# install-platform.sh already restarted services (codex-xray, codex-
+# transproxy, router-rules-sync, xray-switch-watchdog) and ran
+# sync-apply-xray as part of the services step. Re-stopping and re-
+# applying everything here previously cost ~127s on a no-op deploy
+# because we tore xray down and forced sync-apply-xray to do a full
+# cutover from scratch. Keep this step lightweight: validate the
+# uploaded config (mostly defensive — install-platform.sh already
+# started xray with it), make sure the ready marker reflects success,
+# and clean the remote staging dir.
 router_ssh "
   exec </dev/null
-  /etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
-  /etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
   /usr/local/bin/codex-xray-core run -test -config /etc/xray/codex-xray.json >/dev/null 2>&1 || {
     echo 'Router Xray config validation failed after upload.' >&2
     exit 1
   }
   touch /etc/xray/codex-xray.ready
   chmod 600 /etc/xray/codex-xray.ready
-  /etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
-  /etc/init.d/codex-xray stop >/dev/null 2>&1 || true
-  /usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
   rm -rf $remote_source_root
 "
 
+# Surface the live switch state for the operator. The init scripts
+# already start in the right state via install-platform.sh; this is just
+# a re-trigger of the gl-switch hook so a hardware switch toggle that
+# happened during the deploy is honoured immediately.
 router_ssh "
   switch_state=off
   if [ -f /lib/functions/gl_util.sh ]; then
     . /lib/functions/gl_util.sh
     switch_state=\$(get_switch_button_status 2>/dev/null || echo off)
   fi
-  /etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
-  /etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
   /etc/gl-switch.d/xray.sh \"\$switch_state\" >/dev/null 2>&1 || true
 "
 
