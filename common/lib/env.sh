@@ -38,6 +38,58 @@ require_vars() {
   done
 }
 
+# Persist `KEY=VALUE` into ENV_FILE: replace the line if present, append
+# otherwise. Used by the interactive prompt below so a one-time answer
+# survives subsequent installs.
+persist_env_value() {
+  local name="$1" value="$2" file="${ENV_FILE:-}"
+  [[ -n "$file" ]] || return 0
+  [[ -f "$file" ]] || return 0
+  if grep -q "^${name}=" "$file" 2>/dev/null; then
+    # Use a literal-safe replacement: build the new line via printf and
+    # let awk swap by exact key match so values containing /, &, | are
+    # preserved without sed quoting headaches.
+    awk -v key="$name" -v val="$value" '
+      BEGIN { OFS = "=" }
+      $0 ~ "^"key"=" { print key, val; next }
+      { print }
+    ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  else
+    printf '%s=%s\n' "$name" "$value" >> "$file"
+  fi
+}
+
+# ensure_input_var <name> <hint>
+# When the variable is empty or still a placeholder:
+#   - on a TTY: prompt the operator and persist the answer to ENV_FILE so
+#     they only have to enter it once.
+#   - off-TTY (CI, piped): fail loudly with the same hint so the missing
+#     value is visible in build logs.
+ensure_input_var() {
+  local name="$1" hint="$2" current value
+  current="${!name:-}"
+  if [[ -n "$current" ]] && ! is_placeholder_value "$current"; then
+    return 0
+  fi
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "Missing required variable: $name (${hint})" >&2
+    echo "Set it in $ENV_FILE or as an environment variable, then retry." >&2
+    exit 1
+  fi
+  printf '%s\n' "Required: $name — ${hint}" >&2
+  while true; do
+    printf '  Enter %s: ' "$name" >&2
+    read -r value || value=''
+    if [[ -n "$value" ]] && ! is_placeholder_value "$value"; then
+      break
+    fi
+    printf '  (value required and must not be a placeholder; try again)\n' >&2
+  done
+  printf -v "$name" '%s' "$value"
+  export "$name"
+  persist_env_value "$name" "$value"
+}
+
 is_placeholder_value() {
   local value="${1:-}"
 

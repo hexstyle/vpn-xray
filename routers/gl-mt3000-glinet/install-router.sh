@@ -58,6 +58,12 @@ fi
 if [[ -n "$ENV_ROUTER_HOST" ]]; then
   ROUTER_HOST="$ENV_ROUTER_HOST"
 fi
+
+# Prompt the operator for the values that cannot be derived from anywhere
+# else when running interactively. On a non-TTY (CI, scripted runs) these
+# fall through to the existing require_vars hard-fail check below.
+ensure_input_var ROUTER_SSH "Router SSH target, e.g. root@192.168.8.1"
+ensure_input_var VPS_SSH    "VPS SSH target,    e.g. root@203.0.113.10"
 if [[ -n "$ENV_ROUTER_LAN_IP" ]]; then
   ROUTER_LAN_IP="$ENV_ROUTER_LAN_IP"
 fi
