@@ -3,6 +3,30 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/common/lib/env.sh"
+# shellcheck disable=SC1091
+source "$ROOT_DIR/common/lib/install-progress.sh"
+
+# install_progress_init writes a workstation-side status file. The router-
+# side file under /tmp/vpn-xray-install-status.json is updated separately
+# by install-platform.sh once the bundle lands on the device.
+install_progress_init "$ROOT_DIR/tmp/install-status.json"
+
+# Mirror each step to the router so the UI banner can render live progress.
+# Override the per-step hook from install-progress.sh.
+ROUTER_INSTALL_STATUS_FILE='/tmp/vpn-xray-install-status.json'
+install_progress_after_update() {
+  # Hook called by install-progress.sh after every transition. Mirror the
+  # JSON to the router so the UI banner can render live progress. Failures
+  # are intentionally swallowed — telemetry must not break the install.
+  [ -n "${ROUTER_SSH:-}" ] || return 0
+  [ -n "${INSTALLER_KNOWN_HOSTS:-}" ] || return 0
+  [ -f "${_VX_PROGRESS_STATUS_FILE:-}" ] || return 0
+  ssh \
+    -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS" \
+    "$ROUTER_SSH" "cat > $ROUTER_INSTALL_STATUS_FILE.tmp && mv $ROUTER_INSTALL_STATUS_FILE.tmp $ROUTER_INSTALL_STATUS_FILE" \
+    < "$_VX_PROGRESS_STATUS_FILE" >/dev/null 2>&1 || true
+}
 
 ENV_FILE="${ENV_FILE:-$(default_install_env_file "$ROOT_DIR")}"
 PREFLIGHT_ONLY=0
@@ -344,6 +368,23 @@ if [[ "$PREFLIGHT_ONLY" == "1" ]]; then
   exit 0
 fi
 
+# All required parameters and the router preflight have already passed by
+# this point. Announce the plan so the operator (and the UI banner that
+# tails the status file) sees what is about to happen.
+install_progress_reset
+install_progress_plan \
+  "Resolve router profile and runtime context" \
+  "Render router config templates" \
+  "Stage source bundle on router" \
+  "Install router platform packages and runtime" \
+  "Validate Xray config and apply runtime" \
+  "Provision VPS profile for admin UI" \
+  "Reload router network" \
+  "Verify management plane reachable" \
+  "Verify selective routing health"
+
+install_progress_begin "Resolve router profile and runtime context"
+
 if [[ "${PRESERVE_XRAY_RULES_MODE:-1}" == "1" ]]; then
   current_mode="$(current_router_rules_mode || true)"
   case "$current_mode" in
@@ -447,6 +488,7 @@ json_cfg="$tmpdir/codex-xray.json"
 redsocks_cfg="$tmpdir/redsocks.conf"
 router_rules_cfg="$tmpdir/router-rules.config"
 
+install_progress_begin "Render router config templates"
 tar -C "$ROOT_DIR" -cf "$source_bundle" common routers vps
 render_template "$ROUTER_PROFILE_DIR/files/codex-xray.json.template" "$json_cfg"
 render_template "$ROUTER_PROFILE_DIR/files/redsocks.conf.template" "$redsocks_cfg"
@@ -486,6 +528,7 @@ sh $(shell_quote "$remote_source_root/routers/$ROUTER_PROFILE/install-platform.s
 EOF
 )
 
+install_progress_begin "Stage source bundle on router"
 router_ssh "rm -rf $remote_source_root && mkdir -p $remote_source_root"
 router_ssh "cat > $remote_source_tar" < "$source_bundle"
 router_ssh "tar -xf $remote_source_tar -C $remote_source_root && rm -f $remote_source_tar"
@@ -509,8 +552,10 @@ else
   router_ssh 'cat > /etc/config/router_rules && chmod 600 /etc/config/router_rules' < "$router_rules_cfg"
 fi
 
+install_progress_begin "Install router platform packages and runtime"
 router_ssh "$remote_platform_cmd"
 
+install_progress_begin "Validate Xray config and apply runtime"
 router_ssh "
   exec </dev/null
   /etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
@@ -546,6 +591,7 @@ if ! wait_for_router_runtime_ready; then
   echo "Warning: router runtime did not report ready before installer exit." >&2
 fi
 
+install_progress_begin "Provision VPS profile for admin UI"
 # Bootstrap VPS profile on the router so the admin panel VPS sync works
 # out of the box: create the xray_vps UCI config from the deployed xray
 # client config and register the router's managed SSH key on the VPS.
@@ -580,6 +626,7 @@ else
   echo "VPS_SSH is not configured; skipping admin panel VPS profile bootstrap."
 fi
 
+install_progress_begin "Reload router network"
 # Network reload is the last step — it drops all active SSH connections
 # to the router, so no SSH commands should follow it.
 if [[ "$NETWORK_RELOAD" == "1" ]]; then
@@ -590,11 +637,34 @@ if [[ "$NETWORK_RELOAD" == "1" ]]; then
   if wait_for_router_after_network_reload; then
     echo "Router is reachable again over SSH after network reload"
   else
-    echo "Router did not come back on $ROUTER_SSH after network reload." >&2
-    echo "Stop here and verify both wired and Wi-Fi management access before making more router changes." >&2
+    install_progress_fail "Router did not come back over SSH after network reload" "Verify both wired and Wi-Fi management access before re-running the install."
     exit 1
   fi
 fi
+
+install_progress_begin "Verify management plane reachable"
+if ! router_ssh_ready; then
+  install_progress_fail "Router SSH is not reachable after deploy" "Power-cycle the router and re-run the installer. If SSH still fails, restore the previous config from /etc/config backups."
+  exit 1
+fi
+
+install_progress_begin "Verify selective routing health"
+# Surface the live xray mode, ipset count, and last sync state so the
+# operator immediately sees whether selective is up or pulling failed.
+selective_health="$(router_ssh "
+  mode=\$(uci -q get router_rules.global.xray_mode 2>/dev/null)
+  ipset_n=\$(ipset list xray_selective_dst 2>/dev/null | sed -n 's/^Number of entries: //p')
+  last=\$(/usr/bin/router-rules status-json 2>/dev/null | sed -n 's/.*\"last_sync_status\":\"\\([^\"]*\\)\".*/\\1/p')
+  echo \"mode=\${mode:-unknown}\"
+  echo \"ipset=\${ipset_n:-0}\"
+  echo \"sync=\${last:-unknown}\"
+" || true)"
+selective_mode="$(printf '%s\n' "$selective_health" | sed -n 's/^mode=//p' | sed -n '1p')"
+selective_ipset="$(printf '%s\n' "$selective_health" | sed -n 's/^ipset=//p' | sed -n '1p')"
+selective_sync="$(printf '%s\n' "$selective_health" | sed -n 's/^sync=//p' | sed -n '1p')"
+echo "Routing mode: ${selective_mode:-unknown}, ipset entries: ${selective_ipset:-0}, last sync: ${selective_sync:-unknown}"
+
+install_progress_complete
 
 echo "Deployed to $ROUTER_HOST"
 echo "LAN proxy:  http://$ROUTER_LAN_IP:$PROXY_PORT"
