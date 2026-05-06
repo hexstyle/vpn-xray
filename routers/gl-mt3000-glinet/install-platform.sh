@@ -126,9 +126,11 @@ ensure_pkg_installed() {
 	local package="$1"
 
 	pkg_installed_exact "$package" && return 0
-	opkg install "$package" >/dev/null 2>&1 && return 0
 	install_bundled_opkg_single "$package" && return 0
-	fail "Could not install package '$package' with opkg or offline bundle. Check router internet access and package feeds."
+	if [ "${VPN_XRAY_ALLOW_NETWORK_PKG:-0}" = "1" ]; then
+		opkg install "$package" >/dev/null 2>&1 && pkg_installed_exact "$package" && return 0
+	fi
+	fail "Could not install package '$package' from the offline bundle. Add it to routers/gl-mt3000-glinet/packages/opkg/ or set VPN_XRAY_ALLOW_NETWORK_PKG=1."
 }
 
 ensure_cmd_via_package() {
@@ -145,13 +147,12 @@ try_pkg_install() {
 	local purpose="$2"
 
 	pkg_installed_exact "$package" && return 0
-	opkg install "$package" >/dev/null 2>&1 || {
-		install_bundled_opkg_single "$package" 2>/dev/null || {
-			warn "Could not install optional package '$package' for $purpose. The core VPN path can still work, but the related feature may stay unavailable."
-			return 1
-		}
-	}
-	return 0
+	install_bundled_opkg_single "$package" 2>/dev/null && return 0
+	if [ "${VPN_XRAY_ALLOW_NETWORK_PKG:-0}" = "1" ]; then
+		opkg install "$package" >/dev/null 2>&1 && pkg_installed_exact "$package" && return 0
+	fi
+	warn "Could not install optional package '$package' for $purpose. The core VPN path can still work, but the related feature may stay unavailable."
+	return 1
 }
 
 install_bundled_opkg_single() {
@@ -408,12 +409,22 @@ ensure_pkg_installed_or_fallback() {
 	local purpose="$2"
 
 	pkg_installed_exact "$package" && return 0
-	opkg install "$package" >/dev/null 2>&1 && return 0
+
+	# Air-gap default: serve only from the bundled offline payload that
+	# travels with the source tree. The workstation has no path to public
+	# package mirrors and the router's configured feeds are not trustworthy
+	# either, so external downloads are gated behind VPN_XRAY_ALLOW_NETWORK_PKG=1.
 	install_bundled_opkg_single "$package" && return 0
 
-	warn "Could not install package '$package' from configured feeds or offline bundle for $purpose. Trying the official OpenWrt 21.02.3 package mirror."
-	install_pkg_via_openwrt_fallback "$package" || fail "Could not install package '$package' for $purpose from opkg feeds, offline bundle, or the official OpenWrt package mirror."
-	pkg_installed_exact "$package" || fail "Package '$package' is still unavailable after fallback install."
+	if [ "${VPN_XRAY_ALLOW_NETWORK_PKG:-0}" = "1" ]; then
+		opkg install "$package" >/dev/null 2>&1 && pkg_installed_exact "$package" && return 0
+		warn "Could not install package '$package' from configured feeds or offline bundle for $purpose. Trying the official OpenWrt 21.02.3 package mirror."
+		install_pkg_via_openwrt_fallback "$package" || fail "Could not install package '$package' for $purpose from opkg feeds, offline bundle, or the official OpenWrt package mirror."
+		pkg_installed_exact "$package" || fail "Package '$package' is still unavailable after fallback install."
+		return 0
+	fi
+
+	fail "Package '$package' missing for $purpose. Add it to routers/gl-mt3000-glinet/packages/opkg/ (run scripts/harvest-opkg-packages.sh) or set VPN_XRAY_ALLOW_NETWORK_PKG=1 to allow online fallback."
 }
 
 git_sync_requested() {
@@ -677,7 +688,12 @@ stage_bundled_or_download() {
 		return 0
 	fi
 
-	ensure_file_sha256 "$target" "$url" "$expected"
+	if [ "${VPN_XRAY_ALLOW_NETWORK_PKG:-0}" = "1" ]; then
+		ensure_file_sha256 "$target" "$url" "$expected"
+		return 0
+	fi
+
+	fail "Bundled payload missing: ${bundled_path}. Add it to the router profile (or run scripts/harvest-opkg-packages.sh) or set VPN_XRAY_ALLOW_NETWORK_PKG=1 to allow downloading from $url."
 }
 
 escape_sed_replacement() {
@@ -937,11 +953,20 @@ install_platform() {
 	if ! is_done packages; then
 		info "Preparing router package manager..."
 		install_bundled_opkg_packages || true
-		if opkg update >/tmp/vpn-xray-opkg-update.log 2>&1; then
-			OPKG_UPDATE_OK='1'
+		# Air-gap default: rely on the bundled payload only. `opkg update`
+		# pulls package indexes from the configured feeds (typically
+		# fw.gl-inet.com) and counts as workstation-side network from the
+		# operator's vantage point, so gate it behind the same explicit flag
+		# as direct package downloads.
+		if [ "${VPN_XRAY_ALLOW_NETWORK_PKG:-0}" = "1" ]; then
+			if opkg update >/tmp/vpn-xray-opkg-update.log 2>&1; then
+				OPKG_UPDATE_OK='1'
+			else
+				warn "opkg update did not fully complete. Continuing with already-present commands and package lists."
+				warn "See /tmp/vpn-xray-opkg-update.log on the router for feed errors."
+			fi
 		else
-			warn "opkg update did not fully complete. Continuing with already-present commands and package lists."
-			warn "See /tmp/vpn-xray-opkg-update.log on the router for feed errors."
+			info "Skipping opkg update (air-gap default). Set VPN_XRAY_ALLOW_NETWORK_PKG=1 to refresh feeds."
 		fi
 		ensure_pkg_installed ca-bundle
 		ensure_pkg_installed ca-certificates
