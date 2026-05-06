@@ -88,6 +88,27 @@ if [[ -z "$RULES_GIT_SSH_PRIVATE_KEY" && -n "$RULES_GIT_SSH_PRIVATE_KEY_FILE" ]]
   }
   RULES_GIT_SSH_PRIVATE_KEY="$(cat "$RULES_GIT_SSH_PRIVATE_KEY_FILE")"
 fi
+
+# Auto-detect a local SSH key when nothing was specified explicitly. The user
+# wants the workstation key to be copied onto the router rather than having
+# the router invent its own key (which would then need a separate deploy-key
+# registration on GitHub). Try the common defaults; the first readable one
+# wins. Setting RULES_GIT_SSH_PRIVATE_KEY_FILE on the CLI still overrides.
+if [[ -z "$RULES_GIT_SSH_PRIVATE_KEY" && -z "$RULES_GIT_SSH_PRIVATE_KEY_FILE" ]]; then
+  for candidate in "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/id_ecdsa" "${HOME}/.ssh/id_rsa"; do
+    if [[ -r "$candidate" ]]; then
+      RULES_GIT_SSH_PRIVATE_KEY_FILE="$candidate"
+      RULES_GIT_SSH_PRIVATE_KEY="$(cat "$candidate")"
+      echo "Using local SSH key for router git access: $candidate"
+      # When the local key is auto-detected, default to ssh auth so the
+      # router actually uses the key for both pull and push.
+      if [[ "${RULES_GIT_AUTH_MODE:-auto}" == "auto" ]]; then
+        RULES_GIT_AUTH_MODE='ssh'
+      fi
+      break
+    fi
+  done
+fi
 RULES_GIT_SSH_PRIVATE_KEY_B64=''
 if [[ -n "$RULES_GIT_SSH_PRIVATE_KEY" ]]; then
   RULES_GIT_SSH_PRIVATE_KEY_B64="$(
@@ -479,7 +500,18 @@ router_ssh "sed -i 's/\r$//' $remote_source_root/routers/$ROUTER_PROFILE/install
 router_ssh 'mkdir -p /etc/xray /var/log/xray'
 router_ssh 'cat > /etc/xray/codex-xray.json && chmod 600 /etc/xray/codex-xray.json' < "$json_cfg"
 router_ssh 'cat > /etc/redsocks.conf && chmod 600 /etc/redsocks.conf' < "$redsocks_cfg"
-router_ssh 'cat > /etc/config/router_rules && chmod 600 /etc/config/router_rules' < "$router_rules_cfg"
+# Only seed /etc/config/router_rules from the rendered template when the file
+# is missing or empty. The template only enumerates a fixed set of options;
+# overwriting an existing file would wipe per-source enable flags
+# (external_source_<id>_enabled), the layout-version marker, and any other
+# state the UI / router-rules has stored. install-platform.sh then reconciles
+# the template-known options via `uci batch`, so the existing file gets the
+# desired values without losing user state.
+if router_ssh '[ -s /etc/config/router_rules ]'; then
+  echo "Existing /etc/config/router_rules detected; install-platform will reconcile via uci batch."
+else
+  router_ssh 'cat > /etc/config/router_rules && chmod 600 /etc/config/router_rules' < "$router_rules_cfg"
+fi
 
 router_ssh "$remote_platform_cmd"
 
@@ -495,7 +527,6 @@ router_ssh "
   chmod 600 /etc/xray/codex-xray.ready
   /etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
   /etc/init.d/codex-xray stop >/dev/null 2>&1 || true
-  /usr/bin/router-rules ensure-git-key >/dev/null 2>&1 || true
   /usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
   rm -rf $remote_source_root
 "

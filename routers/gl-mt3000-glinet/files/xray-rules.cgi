@@ -441,7 +441,7 @@ save_config_action() {
 
 	if request_has_key repo_fetch_url; then
 		fetch_url="$(request_value repo_fetch_url)"
-		if normalized_fetch="$(normalize_git_source_input "$fetch_url" 2>/dev/null || true)"; then
+		if normalized_fetch="$(normalize_git_source_input "$fetch_url" 2>/dev/null)"; then
 			fetch_url="$(printf '%s\n' "$normalized_fetch" | sed -n '1p')"
 			normalized_branch="$(printf '%s\n' "$normalized_fetch" | sed -n '2p')"
 			normalized_rules_relpath="$(printf '%s\n' "$normalized_fetch" | sed -n '3p')"

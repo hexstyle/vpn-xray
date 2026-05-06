@@ -423,13 +423,25 @@ git_sync_requested() {
 effective_xray_rules_mode() {
 	local existing
 
+	# Env wins when explicit. install-router.sh's PRESERVE_XRAY_RULES_MODE
+	# already preloads XRAY_RULES_MODE from current UCI when preservation is
+	# desired, so by the time we reach install-platform.sh the env already
+	# encodes the final intent: install.env value (override) or current UCI
+	# (preserve). Treat XRAY_RULES_MODE as authoritative if it is valid.
+	case "${XRAY_RULES_MODE:-}" in
+		full|selective)
+			printf '%s\n' "$XRAY_RULES_MODE"
+			return
+			;;
+	esac
+
 	existing="$(uci -q get router_rules.global.xray_mode 2>/dev/null || true)"
 	case "$existing" in
 		full|selective)
 			printf '%s\n' "$existing"
 			;;
 		*)
-			printf '%s\n' "${XRAY_RULES_MODE:-full}"
+			printf 'full\n'
 			;;
 	esac
 }
@@ -441,13 +453,20 @@ existing_router_rules_value() {
 effective_external_source_enabled() {
 	local existing
 
+	case "${RULES_EXTERNAL_SOURCE_ENABLED:-}" in
+		0|1)
+			printf '%s\n' "$RULES_EXTERNAL_SOURCE_ENABLED"
+			return
+			;;
+	esac
+
 	existing="$(existing_router_rules_value external_source_enabled)"
 	case "$existing" in
 		0|1)
 			printf '%s\n' "$existing"
 			;;
 		*)
-			printf '%s\n' "${RULES_EXTERNAL_SOURCE_ENABLED:-0}"
+			printf '0\n'
 			;;
 	esac
 }
@@ -482,12 +501,15 @@ effective_router_rules_text_value() {
 	local fallback="$2"
 	local existing
 
-	existing="$(existing_router_rules_value "$key")"
-	if [ -n "$existing" ]; then
-		printf '%s\n' "$existing"
-	else
+	# Env wins when explicit (non-empty). Preserve UCI only when env is empty.
+	# This makes install.env authoritative for things like repo URLs while
+	# still preserving UI-set values that have no env override.
+	if [ -n "$fallback" ]; then
 		printf '%s\n' "$fallback"
+		return
 	fi
+	existing="$(existing_router_rules_value "$key")"
+	printf '%s\n' "$existing"
 }
 
 effective_router_rules_bool_value() {
@@ -495,13 +517,20 @@ effective_router_rules_bool_value() {
 	local fallback="$2"
 	local existing
 
+	# Env wins when explicit (0 or 1). Preserve UCI only when env is unset.
+	case "$fallback" in
+		0|1)
+			printf '%s\n' "$fallback"
+			return
+			;;
+	esac
 	existing="$(existing_router_rules_value "$key")"
 	case "$existing" in
 		0|1)
 			printf '%s\n' "$existing"
 			;;
 		*)
-			printf '%s\n' "$fallback"
+			printf '0\n'
 			;;
 	esac
 }

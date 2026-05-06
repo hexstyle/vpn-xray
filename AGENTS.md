@@ -1,3 +1,29 @@
+## Install Contract
+
+The full install contract lives in [`docs/INSTALL-CONTRACT.md`](./docs/INSTALL-CONTRACT.md).
+Read it before changing any install path. Key invariants:
+
+- **Air-gap from the workstation**: the workstation reaches only the local
+  router and the VPS. No public package mirrors, no `raw.githubusercontent`,
+  no `codeload.github.com`, no `jsdelivr`, no `fw.gl-inet.com`. Bundle
+  every artifact the workstation hands to the router/VPS in the repo.
+- **Pre-install param validation**: missing or placeholder values prompt
+  the operator interactively; silent failures are a regression.
+- **Live step plan**: the installer prints the plan, advances `[N/total]`
+  per step, and mirrors state to `/tmp/vpn-xray-install-status.json` for
+  the UI.
+- **UI banner persists** across page refresh while install is running or
+  in a failed-but-recoverable state.
+- **Selective-mode fallback to FULL** when the rules repo is unreachable;
+  recovery cron retries each minute and removes itself once selective is
+  re-applied.
+- **No router-generated SSH keys for git**: the installer copies the
+  workstation's local SSH key to the router. Auto-detected from
+  `~/.ssh/id_ed25519` (then `id_ecdsa`, `id_rsa`) unless the operator
+  pins `RULES_GIT_SSH_PRIVATE_KEY_FILE` explicitly.
+- **End-to-end success check**: after install, probe `chatgpt.com` through
+  the router proxy and surface ✓/✗ in console + UI.
+
 ## Router Verification
 
 When changing router logic, UI, sync flow, proxy flow, firewalling, or runtime control paths, always verify internet reachability and the end-to-end routing scheme after the change.

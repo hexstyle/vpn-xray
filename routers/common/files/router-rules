@@ -89,7 +89,7 @@ repo_origin_url_from_clone() {
 }
 
 repo_fetch_url() {
-	local value
+	local value rest owner repo
 
 	value="$(cfg_get repo_fetch_url "$DEFAULT_REPO_FETCH_URL")"
 	if is_placeholder_value "$value"; then
@@ -97,6 +97,26 @@ repo_fetch_url() {
 	fi
 	if [ -z "$value" ]; then
 		value="$(repo_origin_url_from_clone || true)"
+	fi
+	# When auth mode is ssh, rewrite an HTTPS GitHub URL to its SSH form so
+	# `git fetch` actually uses the configured SSH key instead of falling
+	# through to anonymous HTTPS readonly. This mirrors what repo_push_url
+	# does and lets a single HTTPS URL in install.env work end-to-end once
+	# the user opts into SSH auth.
+	if [ -n "$value" ] && [ "$(git_auth_mode_raw)" = 'ssh' ]; then
+		case "$value" in
+			https://github.com/*)
+				rest="${value#https://github.com/}"
+				owner="${rest%%/*}"
+				rest="${rest#*/}"
+				repo="${rest%%.git*}"
+				repo="${repo%%/*}"
+				if [ -n "$owner" ] && [ -n "$repo" ]; then
+					printf 'git@github.com:%s/%s.git\n' "$owner" "$repo"
+					return 0
+				fi
+				;;
+		esac
 	fi
 	printf '%s\n' "$value"
 }

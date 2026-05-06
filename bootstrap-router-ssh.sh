@@ -2,88 +2,42 @@
 
 set -euo pipefail
 
-# Конфигурация
-REPO_SLUG="${VPN_XRAY_REPO_SLUG:-hexstyle/vpn-xray}"
-REPO_REF="${VPN_XRAY_REF:-main}"
-ROUTER_SSH="${1:-root@192.168.8.1}"
+# Local-checkout-only bootstrap. The whole repo is on the workstation, so
+# install-router.sh tars it and SCPs it onto the router — there is no need
+# to ever pull anything from GitHub from the workstation. The router itself
+# can still pull the rules repo at runtime, that is a separate concern.
 
-# ИСПРАВЛЕНО: Добавлены знаки $ перед переменными и правильные домены
-URL_GITHUB="https://raw.githubusercontent.com/${REPO_SLUG}/${REPO_REF}/bootstrap-router.sh"
-URL_JSDELIVR="https://raw.jsdelivr.net/${REPO_SLUG}@${REPO_REF}/bootstrap-router.sh"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-info() { printf '%s\n' "$*"; }
-
-if [ -z "${RULES_GIT_SSH_PRIVATE_KEY:-}" ] && [ -n "${RULES_GIT_SSH_PRIVATE_KEY_FILE:-}" ]; then
-    [ -r "${RULES_GIT_SSH_PRIVATE_KEY_FILE}" ] || {
-        printf 'ERROR: RULES_GIT_SSH_PRIVATE_KEY_FILE is not readable: %s\n' "${RULES_GIT_SSH_PRIVATE_KEY_FILE}" >&2
-        exit 1
-    }
-    RULES_GIT_SSH_PRIVATE_KEY="$(cat "${RULES_GIT_SSH_PRIVATE_KEY_FILE}")"
-fi
-RULES_GIT_SSH_PRIVATE_KEY_B64=''
-if [ -n "${RULES_GIT_SSH_PRIVATE_KEY:-}" ]; then
-    RULES_GIT_SSH_PRIVATE_KEY_B64="$(
-        printf '%s' "$RULES_GIT_SSH_PRIVATE_KEY" | python3 - <<'PY'
-import base64
-import sys
-
-sys.stdout.write(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))
-PY
-    )"
+if [[ ! -x "$ROOT_DIR/install.sh" || ! -f "$ROOT_DIR/routers/gl-mt3000-glinet/install-router.sh" ]]; then
+  printf 'ERROR: bootstrap-router-ssh.sh must be run from inside the vpn-xray checkout.\n' >&2
+  printf '       Expected install.sh next to this script at: %s\n' "$ROOT_DIR" >&2
+  exit 1
 fi
 
-info "Starting vpn-xray bootstrap on: $ROUTER_SSH ..."
+ROUTER_SSH_TARGET="${1:-${ROUTER_SSH:-root@192.168.8.1}}"
 
-# Передаем готовые URL внутрь SSH
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$ROUTER_SSH" "sh -s" <<REMOTE
-set -u
-# Здесь переменные подставляются локально перед отправкой команды
-URL1="$URL_GITHUB"
-URL2="$URL_JSDELIVR"
-TMP="/tmp/bootstrap.sh"
+printf 'Local checkout detected at %s — using autonomous install path.\n' "$ROOT_DIR"
+printf 'Target router: %s\n' "$ROUTER_SSH_TARGET"
 
-download_attempt() {
-    local url="\$1"
-    echo "  [Router]: Requesting URL: \$url"
+export ROUTER_SSH="$ROUTER_SSH_TARGET"
 
-    # Пробуем wget или curl (учитываем особенности BusyBox на роутерах)
-    if wget --no-check-certificate -q -O "\$TMP" "\$url" || curl -fkL -o "\$TMP" "\$url"; then
-        if [ -s "\$TMP" ]; then
-            return 0
-        fi
-    fi
-    return 1
-}
+# Forward rules-related env transparently so callers retain the same
+# semantics. install.env stays the source of truth when nothing is set on
+# the CLI.
+export \
+  RULES_GIT_SYNC_ENABLED="${RULES_GIT_SYNC_ENABLED:-}" \
+  RULES_REPO_FETCH_URL="${RULES_REPO_FETCH_URL:-}" \
+  RULES_REPO_PUSH_URL="${RULES_REPO_PUSH_URL:-}" \
+  RULES_REPO_BRANCH="${RULES_REPO_BRANCH:-}" \
+  RULES_GIT_AUTH_MODE="${RULES_GIT_AUTH_MODE:-}" \
+  RULES_GIT_HTTP_USERNAME="${RULES_GIT_HTTP_USERNAME:-}" \
+  RULES_GIT_HTTP_PASSWORD="${RULES_GIT_HTTP_PASSWORD:-}" \
+  RULES_GIT_SSH_PRIVATE_KEY="${RULES_GIT_SSH_PRIVATE_KEY:-}" \
+  RULES_GIT_SSH_PRIVATE_KEY_FILE="${RULES_GIT_SSH_PRIVATE_KEY_FILE:-}" \
+  RULES_DEVICE_ID="${RULES_DEVICE_ID:-}" \
+  RULES_ENABLE_PUSH="${RULES_ENABLE_PUSH:-}" \
+  RULES_SYNC_INTERVAL="${RULES_SYNC_INTERVAL:-}" \
+  XRAY_RULES_MODE="${XRAY_RULES_MODE:-}"
 
-# 1. Попытка скачивания
-if download_attempt "\$URL1"; then
-    echo "  [Router]: Success! (via GitHub)"
-elif download_attempt "\$URL2"; then
-    echo "  [Router]: Success! (via jsDelivr)"
-else
-    echo "  [Router]: ERROR - Could not download script."
-    exit 1
-fi
-
-# 2. Запуск
-echo "  [Router]: Executing bootstrap..."
-RULES_GIT_SYNC_ENABLED='${RULES_GIT_SYNC_ENABLED:-}' \
-RULES_REPO_FETCH_URL='${RULES_REPO_FETCH_URL:-}' \
-RULES_REPO_PUSH_URL='${RULES_REPO_PUSH_URL:-}' \
-RULES_REPO_BRANCH='${RULES_REPO_BRANCH:-main}' \
-RULES_GIT_AUTH_MODE='${RULES_GIT_AUTH_MODE:-auto}' \
-RULES_GIT_HTTP_USERNAME='${RULES_GIT_HTTP_USERNAME:-}' \
-RULES_GIT_HTTP_PASSWORD='${RULES_GIT_HTTP_PASSWORD:-}' \
-RULES_GIT_SSH_PRIVATE_KEY_B64='${RULES_GIT_SSH_PRIVATE_KEY_B64:-}' \
-RULES_DEVICE_ID='${RULES_DEVICE_ID:-gl-router}' \
-RULES_ENABLE_PUSH='${RULES_ENABLE_PUSH:-0}' \
-RULES_SYNC_INTERVAL='${RULES_SYNC_INTERVAL:-30}' \
-RULES_GIT_USER_NAME='${RULES_GIT_USER_NAME:-router-rules}' \
-RULES_GIT_USER_EMAIL='${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}' \
-RULES_DNS_RESOLVER='${RULES_DNS_RESOLVER:-9.9.9.9 208.67.222.222}' \
-XRAY_RULES_MODE='${XRAY_RULES_MODE:-full}' \
-sh "\$TMP"
-rm -f "\$TMP"
-REMOTE
-
-info "Done!"
+exec "$ROOT_DIR/routers/gl-mt3000-glinet/install-router.sh"
