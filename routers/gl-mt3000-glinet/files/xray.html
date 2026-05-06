@@ -377,6 +377,53 @@
       white-space: pre-line;
     }
 
+    /* Install banner — pinned across the top of the page. Visible while a
+       deploy is running or in a failed state so the operator can see what
+       broke without scrolling, and the message survives a refresh because
+       the source of truth is /tmp/vpn-xray-install-status.json on the
+       router. */
+    .install-banner {
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      width: 100%;
+      background: #ad1f1f;
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      border-bottom: 2px solid #7a1414;
+    }
+    .install-banner.running {
+      background: #145ea8;
+      border-bottom-color: #0d4377;
+    }
+    .install-banner.complete {
+      background: #1a7a3d;
+      border-bottom-color: #0f5226;
+    }
+    .install-banner-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 12px 18px;
+      font-size: 14px;
+    }
+    .install-banner-title {
+      font-weight: 800;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .install-banner-body {
+      font-size: 13px;
+      margin-top: 4px;
+    }
+    .install-banner-fix {
+      font-size: 12px;
+      margin-top: 6px;
+      padding: 6px 8px;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 6px;
+    }
+
     .external-source-grid {
       display: grid;
       gap: 12px;
@@ -620,6 +667,16 @@
   </style>
 </head>
 <body>
+  <!-- Install banner: pinned to top, visible across page refresh while a
+       deploy is running or in a failed-but-recoverable state. Poll loop
+       and rendering live in the JS section near the bottom of this file. -->
+  <div id="installBanner" class="install-banner" hidden>
+    <div class="install-banner-inner">
+      <div class="install-banner-title" id="installBannerTitle"></div>
+      <div class="install-banner-body" id="installBannerBody"></div>
+      <div class="install-banner-fix" id="installBannerFix" hidden></div>
+    </div>
+  </div>
   <div class="wrap">
     <section class="hero">
       <h1>Xray Path</h1>
@@ -3583,6 +3640,70 @@
       refreshAll(false, false).catch(() => {});
       refreshRules(false).catch(() => {});
     }, 15000);
+
+    // Install banner — polls /cgi-bin/xray-admin?action=install_status which
+    // returns the contents of /tmp/vpn-xray-install-status.json (written by
+    // common/lib/install-progress.sh during a deploy). Poll runs forever; a
+    // missing or empty status file resolves to state=idle and hides the
+    // banner. Failed state stays visible until the operator re-runs the
+    // install successfully.
+    async function refreshInstallBanner() {
+      const banner = document.getElementById("installBanner");
+      if (!banner) return;
+      let data;
+      try {
+        const resp = await fetch(`${runtimeApi}?action=install_status`, { cache: "no-store" });
+        data = await resp.json();
+      } catch (_err) {
+        // Network blip or CGI not reachable. Keep whatever is currently
+        // shown — the banner is meant to survive transient failures and
+        // page reloads.
+        return;
+      }
+      const state = (data && data.state) || "idle";
+      if (state === "idle") {
+        banner.hidden = true;
+        return;
+      }
+      banner.hidden = false;
+      banner.classList.remove("running", "complete");
+      const titleEl = document.getElementById("installBannerTitle");
+      const bodyEl = document.getElementById("installBannerBody");
+      const fixEl = document.getElementById("installBannerFix");
+      const stepIndex = data.step_index || 0;
+      const stepTotal = data.step_total || 0;
+      const stepName = data.step_name || "";
+      if (state === "running") {
+        banner.classList.add("running");
+        titleEl.textContent = "Install in progress";
+        bodyEl.textContent = stepTotal > 0
+          ? `Step ${stepIndex}/${stepTotal}: ${stepName}`
+          : "Working...";
+        fixEl.hidden = true;
+      } else if (state === "failed") {
+        titleEl.textContent = `Install failed at step ${stepIndex}/${stepTotal}: ${stepName}`;
+        bodyEl.textContent = data.error_cause || "An install step did not complete successfully.";
+        if (data.error_fix) {
+          fixEl.textContent = `Fix: ${data.error_fix}`;
+          fixEl.hidden = false;
+        } else {
+          fixEl.hidden = true;
+        }
+      } else if (state === "complete") {
+        banner.classList.add("complete");
+        titleEl.textContent = "Install complete";
+        bodyEl.textContent = `${stepTotal}/${stepTotal} steps OK`;
+        fixEl.hidden = true;
+        // Auto-hide success banners after 8 seconds — failures persist.
+        setTimeout(() => {
+          if (!banner.classList.contains("running")) {
+            banner.hidden = true;
+          }
+        }, 8000);
+      }
+    }
+    refreshInstallBanner();
+    setInterval(refreshInstallBanner, 5000);
   </script>
 </body>
 </html>

@@ -752,10 +752,33 @@ action_save() {
 
 REQUEST_DATA="$(load_request_data)"
 
+install_status_json() {
+	local payload=''
+
+	# /tmp/vpn-xray-install-status.json is written by install-router.sh and
+	# install-platform.sh through common/lib/install-progress.sh. The UI
+	# polls this endpoint to render a live banner while a deploy is in
+	# progress and to keep a failed-state banner visible until the install
+	# finishes successfully.
+	if [ -s /tmp/vpn-xray-install-status.json ]; then
+		payload="$(cat /tmp/vpn-xray-install-status.json 2>/dev/null || true)"
+	fi
+
+	if [ -z "$payload" ]; then
+		printf '{"schema":1,"state":"idle"}'
+	else
+		printf '%s' "$payload"
+	fi
+}
+
 case "$(request_value action)" in
 	''|status)
 		emit_header
 		status_json
+		;;
+	install_status)
+		emit_header
+		install_status_json
 		;;
 	sync)
 		action_sync
