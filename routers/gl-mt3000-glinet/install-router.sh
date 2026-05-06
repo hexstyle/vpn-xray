@@ -81,24 +81,15 @@ RULES_EXTERNAL_SOURCE_ENABLED="${RULES_EXTERNAL_SOURCE_ENABLED:-0}"
 RULES_EXTERNAL_SOURCE_URL="${RULES_EXTERNAL_SOURCE_URL:-}"
 RULES_EXTERNAL_SOURCE_INTERVAL="${RULES_EXTERNAL_SOURCE_INTERVAL:-86400}"
 
-if [[ -z "$RULES_GIT_SSH_PRIVATE_KEY" && -n "$RULES_GIT_SSH_PRIVATE_KEY_FILE" ]]; then
-  [[ -r "$RULES_GIT_SSH_PRIVATE_KEY_FILE" ]] || {
-    echo "RULES_GIT_SSH_PRIVATE_KEY_FILE is not readable: $RULES_GIT_SSH_PRIVATE_KEY_FILE" >&2
-    exit 1
-  }
-  RULES_GIT_SSH_PRIVATE_KEY="$(cat "$RULES_GIT_SSH_PRIVATE_KEY_FILE")"
-fi
-
 # Auto-detect a local SSH key when nothing was specified explicitly. The user
 # wants the workstation key to be copied onto the router rather than having
 # the router invent its own key (which would then need a separate deploy-key
 # registration on GitHub). Try the common defaults; the first readable one
 # wins. Setting RULES_GIT_SSH_PRIVATE_KEY_FILE on the CLI still overrides.
-if [[ -z "$RULES_GIT_SSH_PRIVATE_KEY" && -z "$RULES_GIT_SSH_PRIVATE_KEY_FILE" ]]; then
+if [[ -z "${RULES_GIT_SSH_PRIVATE_KEY:-}" && -z "${RULES_GIT_SSH_PRIVATE_KEY_FILE:-}" ]]; then
   for candidate in "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/id_ecdsa" "${HOME}/.ssh/id_rsa"; do
     if [[ -r "$candidate" ]]; then
       RULES_GIT_SSH_PRIVATE_KEY_FILE="$candidate"
-      RULES_GIT_SSH_PRIVATE_KEY="$(cat "$candidate")"
       echo "Using local SSH key for router git access: $candidate"
       # When the local key is auto-detected, default to ssh auth so the
       # router actually uses the key for both pull and push.
@@ -109,16 +100,21 @@ if [[ -z "$RULES_GIT_SSH_PRIVATE_KEY" && -z "$RULES_GIT_SSH_PRIVATE_KEY_FILE" ]]
     fi
   done
 fi
-RULES_GIT_SSH_PRIVATE_KEY_B64=''
-if [[ -n "$RULES_GIT_SSH_PRIVATE_KEY" ]]; then
-  RULES_GIT_SSH_PRIVATE_KEY_B64="$(
-    printf '%s' "$RULES_GIT_SSH_PRIVATE_KEY" | python3 - <<'PY'
-import base64
-import sys
 
-sys.stdout.write(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))
-PY
-  )"
+# Build RULES_GIT_SSH_PRIVATE_KEY_B64 directly from the key file (or from
+# RULES_GIT_SSH_PRIVATE_KEY) without going through `$(cat …)` — command
+# substitution strips trailing newlines, which would corrupt the key on the
+# router (`ssh-keygen -y` then refuses to load it). Reading the bytes via
+# python preserves the file exactly.
+RULES_GIT_SSH_PRIVATE_KEY_B64=''
+if [[ -n "${RULES_GIT_SSH_PRIVATE_KEY_FILE:-}" ]]; then
+  [[ -r "$RULES_GIT_SSH_PRIVATE_KEY_FILE" ]] || {
+    echo "RULES_GIT_SSH_PRIVATE_KEY_FILE is not readable: $RULES_GIT_SSH_PRIVATE_KEY_FILE" >&2
+    exit 1
+  }
+  RULES_GIT_SSH_PRIVATE_KEY_B64="$(python3 -c 'import base64, sys; sys.stdout.write(base64.b64encode(open(sys.argv[1], "rb").read()).decode("ascii"))' "$RULES_GIT_SSH_PRIVATE_KEY_FILE")"
+elif [[ -n "${RULES_GIT_SSH_PRIVATE_KEY:-}" ]]; then
+  RULES_GIT_SSH_PRIVATE_KEY_B64="$(printf '%s\n' "$RULES_GIT_SSH_PRIVATE_KEY" | python3 -c 'import base64, sys; sys.stdout.write(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))')"
 fi
 
 router_ssh() {

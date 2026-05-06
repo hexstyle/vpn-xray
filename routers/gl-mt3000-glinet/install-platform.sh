@@ -538,13 +538,23 @@ effective_router_rules_bool_value() {
 effective_git_auth_mode() {
 	local existing
 
+	# Env wins when explicit. Treat any valid mode in the env as authoritative
+	# so install.env (or auto-detect that promotes auto→ssh after copying the
+	# local workstation key) drives the final value.
+	case "${RULES_GIT_AUTH_MODE:-}" in
+		auto|none|readonly|https|ssh)
+			printf '%s\n' "$RULES_GIT_AUTH_MODE"
+			return
+			;;
+	esac
+
 	existing="$(existing_router_rules_value git_auth_mode)"
 	case "$existing" in
 		auto|none|readonly|https|ssh)
 			printf '%s\n' "$existing"
 			;;
 		*)
-			printf '%s\n' "${RULES_GIT_AUTH_MODE:-auto}"
+			printf 'auto\n'
 			;;
 	esac
 }
@@ -1019,8 +1029,11 @@ EOF
 	chmod 600 /etc/config/router_rules
 	if [ -n "${RULES_GIT_SSH_PRIVATE_KEY_B64:-}" ] || [ -n "${RULES_GIT_SSH_PRIVATE_KEY:-}" ]; then
 		if [ -n "${RULES_GIT_SSH_PRIVATE_KEY_B64:-}" ]; then
-			command -v base64 >/dev/null 2>&1 || fail "base64 is required to decode RULES_GIT_SSH_PRIVATE_KEY_B64."
-			if ! printf '%s' "$RULES_GIT_SSH_PRIVATE_KEY_B64" | base64 -d > /etc/router-rules/ssh/routerRules_ed25519 2>/dev/null; then
+			# Decode the b64-encoded private key. Busybox on this router has no
+			# `base64` applet, so use python3 (which is already required for the
+			# external rules importer) — same dependency, no extra package.
+			command -v python3 >/dev/null 2>&1 || fail "python3 is required to decode RULES_GIT_SSH_PRIVATE_KEY_B64."
+			if ! printf '%s' "$RULES_GIT_SSH_PRIVATE_KEY_B64" | python3 -c 'import base64, sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read()))' > /etc/router-rules/ssh/routerRules_ed25519 2>/dev/null; then
 				fail "Provided RULES_GIT_SSH_PRIVATE_KEY_B64 is invalid."
 			fi
 		else
