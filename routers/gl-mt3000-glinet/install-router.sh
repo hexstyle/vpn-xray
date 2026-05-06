@@ -655,14 +655,32 @@ selective_health="$(router_ssh "
   mode=\$(uci -q get router_rules.global.xray_mode 2>/dev/null)
   ipset_n=\$(ipset list xray_selective_dst 2>/dev/null | sed -n 's/^Number of entries: //p')
   last=\$(/usr/bin/router-rules status-json 2>/dev/null | sed -n 's/.*\"last_sync_status\":\"\\([^\"]*\\)\".*/\\1/p')
+  msg=\$(/usr/bin/router-rules status-json 2>/dev/null | sed -n 's/.*\"last_sync_message\":\"\\([^\"]*\\)\".*/\\1/p')
   echo \"mode=\${mode:-unknown}\"
   echo \"ipset=\${ipset_n:-0}\"
   echo \"sync=\${last:-unknown}\"
+  echo \"sync_msg=\${msg:-}\"
 " || true)"
 selective_mode="$(printf '%s\n' "$selective_health" | sed -n 's/^mode=//p' | sed -n '1p')"
 selective_ipset="$(printf '%s\n' "$selective_health" | sed -n 's/^ipset=//p' | sed -n '1p')"
 selective_sync="$(printf '%s\n' "$selective_health" | sed -n 's/^sync=//p' | sed -n '1p')"
+selective_sync_msg="$(printf '%s\n' "$selective_health" | sed -n 's/^sync_msg=//p' | sed -n '1p')"
 echo "Routing mode: ${selective_mode:-unknown}, ipset entries: ${selective_ipset:-0}, last sync: ${selective_sync:-unknown}"
+
+# Selective→FULL fallback: when install.env asked for selective but the
+# rules repo did not pull cleanly, drop into FULL temporarily so the
+# user keeps working internet, and let the router-rules-sync background
+# loop promote us back to selective the moment the network recovers.
+# Only activate when the request was selective; if XRAY_RULES_MODE=full,
+# nothing extra is needed.
+if [[ "${XRAY_RULES_MODE:-full}" == "selective" ]] \
+   && [[ "$selective_sync" != "ok" ]] \
+   && [[ -n "$selective_sync_msg" || "${selective_ipset:-0}" == "0" ]]; then
+  fallback_reason="${selective_sync_msg:-Initial rules sync failed: status=${selective_sync}}"
+  echo "Selective rules sync failed (${selective_sync}). Activating FULL fallback; background-tick will retry every sync interval."
+  echo "  Reason: $fallback_reason"
+  router_ssh "/usr/bin/router-rules enable-selective-fallback $(shell_quote "$fallback_reason") >/dev/null 2>&1; /usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true"
+fi
 
 install_progress_complete
 

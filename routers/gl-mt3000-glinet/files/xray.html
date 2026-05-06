@@ -1596,6 +1596,20 @@
       const phase = data?.sync_phase || "";
       const phaseMessage = data?.sync_phase_message || "";
       const cutoverRequired = !!data?.cutover_required;
+      const selectiveFallback = !!data?.selective_fallback_active;
+      const selectiveFallbackReason = data?.selective_fallback_reason || "";
+
+      // Selective→FULL fallback takes precedence: the user asked for
+      // selective routing, the install activated FULL temporarily because
+      // the rules repo was unreachable, and the background loop is now
+      // retrying. Surface that as a hard error until selective is back.
+      if (selectiveFallback) {
+        return {
+          chipClass: "bad",
+          label: "selective pending",
+          detail: `Selective routing requested but the rules repository is unreachable. Currently routing in FULL mode. Cause: ${selectiveFallbackReason || "rules sync failed"}. The router retries every sync interval and switches back automatically when the repository is reachable.`
+        };
+      }
 
       if (!gitSyncEnabled) {
         return { chipClass: "", label: "local-only", detail: "Git sync is disabled. The router is using only the local rules list." };
@@ -3660,8 +3674,25 @@
         // page reloads.
         return;
       }
-      const state = (data && data.state) || "idle";
-      if (state === "idle") {
+      const installState = (data && data.state) || "idle";
+      if (installState === "idle") {
+        // Even with no active install, surface selective fallback at the
+        // top of the page so the operator notices the temporary FULL
+        // state immediately. The page-level `state` global is shadowed
+        // here on purpose — read rules from window-level lookups.
+        const rulesData = (window.state && window.state.rules) || null;
+        const fallbackActive = !!(rulesData && rulesData.selective_fallback_active);
+        const fallbackReason = (rulesData && rulesData.selective_fallback_reason) || "rules sync failed";
+        if (fallbackActive) {
+          banner.hidden = false;
+          banner.classList.remove("running", "complete");
+          document.getElementById("installBannerTitle").textContent = "Selective routing pending";
+          document.getElementById("installBannerBody").textContent = "Currently in FULL mode because the rules repository is unreachable. The router retries every sync interval and switches back to selective automatically.";
+          const fixEl = document.getElementById("installBannerFix");
+          fixEl.textContent = `Cause: ${fallbackReason}`;
+          fixEl.hidden = false;
+          return;
+        }
         banner.hidden = true;
         return;
       }
@@ -3673,14 +3704,14 @@
       const stepIndex = data.step_index || 0;
       const stepTotal = data.step_total || 0;
       const stepName = data.step_name || "";
-      if (state === "running") {
+      if (installState === "running") {
         banner.classList.add("running");
         titleEl.textContent = "Install in progress";
         bodyEl.textContent = stepTotal > 0
           ? `Step ${stepIndex}/${stepTotal}: ${stepName}`
           : "Working...";
         fixEl.hidden = true;
-      } else if (state === "failed") {
+      } else if (installState === "failed") {
         titleEl.textContent = `Install failed at step ${stepIndex}/${stepTotal}: ${stepName}`;
         bodyEl.textContent = data.error_cause || "An install step did not complete successfully.";
         if (data.error_fix) {
@@ -3689,7 +3720,7 @@
         } else {
           fixEl.hidden = true;
         }
-      } else if (state === "complete") {
+      } else if (installState === "complete") {
         banner.classList.add("complete");
         titleEl.textContent = "Install complete";
         bodyEl.textContent = `${stepTotal}/${stepTotal} steps OK`;

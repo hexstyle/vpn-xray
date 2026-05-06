@@ -2323,8 +2323,64 @@ background_tick_internal() {
 		return 0
 	fi
 	quick_remote_probe_internal || true
+	# Try to recover from a selective-fallback temporary state on every tick.
+	# When the install switched the router to FULL because the rules repo
+	# was unreachable, this retry promotes us back to selective the moment
+	# the network is healthy again — no manual UI intervention required.
+	selective_fallback_retry_internal || true
 	status_set last_verified_at "$(date +%s)"
 	[ "$(status_get sync_phase)" = 'error' ] || set_sync_phase verified 'Remote probe completed within the loop budget'
+}
+
+selective_fallback_marker_path() { printf '%s\n' '/etc/router-rules/selective-fallback-pending'; }
+
+selective_fallback_active() {
+	[ -f "$(selective_fallback_marker_path)" ]
+}
+
+selective_fallback_reason() {
+	local path
+	path="$(selective_fallback_marker_path)"
+	[ -f "$path" ] || return 0
+	sed -n '1p' "$path"
+}
+
+enable_selective_fallback_internal() {
+	local reason="${1:-rules repository unreachable during install}"
+	local path
+	path="$(selective_fallback_marker_path)"
+	mkdir -p "$(dirname "$path")"
+	printf '%s\n' "$reason" > "$path"
+	chmod 600 "$path"
+	# Flip routing to FULL so the user still has working internet while the
+	# background loop keeps trying to bring selective back up. The intent
+	# (selective) is preserved in the marker file so we can restore it
+	# without depending on the workstation re-running the install.
+	set_xray_mode_internal full || true
+}
+
+clear_selective_fallback_internal() {
+	rm -f "$(selective_fallback_marker_path)"
+}
+
+selective_fallback_retry_internal() {
+	selective_fallback_active || return 0
+	repo_configured || return 1
+	# Probe the repo with the existing sync path. sync_repo_internal handles
+	# clone, fetch, and the failure recording, so we get the same
+	# behavior — and the same status fields — as a manual sync.
+	if sync_repo_internal; then
+		# Make sure the rules file actually exists; an empty pull means
+		# selective would route nothing and the user would still see no
+		# traffic. Stay in fallback in that case.
+		[ -s "$(repo_rules_path)" ] || return 1
+		set_xray_mode_internal selective || return 1
+		hard_cutover_xray_internal || return 1
+		clear_selective_fallback_internal
+		set_status_ok 'Selective routing restored; rules repository is reachable again'
+		return 0
+	fi
+	return 1
 }
 
 resolve_domain_ipv4() {
@@ -3389,6 +3445,8 @@ EOF
 	printf '"cutover_required":'; json_bool "$cutover_required"; printf ','
 	printf '"git_circuit_breaker_open":'; if git_circuit_open; then json_bool 1; else json_bool 0; fi; printf ','
 	printf '"git_consecutive_failures":"%s",' "$(json_escape "$(status_get git_consecutive_failures)")"
+	printf '"selective_fallback_active":'; if selective_fallback_active; then json_bool 1; else json_bool 0; fi; printf ','
+	printf '"selective_fallback_reason":"%s",' "$(json_escape "$(selective_fallback_reason)")"
 	printf '"rules_text":"%s"' "$(json_escape "$file_text")"
 	printf '}'
 }
@@ -3477,6 +3535,16 @@ case "$cmd" in
 		;;
 	background-tick)
 		with_lock background_tick_internal
+		;;
+	enable-selective-fallback)
+		shift
+		with_lock enable_selective_fallback_internal "${1:-rules repository unreachable during install}"
+		;;
+	clear-selective-fallback)
+		with_lock clear_selective_fallback_internal
+		;;
+	selective-fallback-retry)
+		with_lock selective_fallback_retry_internal
 		;;
 	preview-external-source)
 		shift
