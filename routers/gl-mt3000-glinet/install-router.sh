@@ -381,7 +381,8 @@ install_progress_plan \
   "Provision VPS profile for admin UI" \
   "Reload router network" \
   "Verify management plane reachable" \
-  "Verify selective routing health"
+  "Verify selective routing health" \
+  "End-to-end probe through router proxy"
 
 install_progress_begin "Resolve router profile and runtime context"
 
@@ -681,6 +682,71 @@ if [[ "${XRAY_RULES_MODE:-full}" == "selective" ]] \
   echo "  Reason: $fallback_reason"
   router_ssh "/usr/bin/router-rules enable-selective-fallback $(shell_quote "$fallback_reason") >/dev/null 2>&1; /usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true"
 fi
+
+install_progress_begin "End-to-end probe through router proxy"
+# Verify the data plane works the way the user actually consumes it.
+# Two-stage probe through the router HTTP-proxy port:
+#  1. Reachability: any HTTP response from chatgpt.com proves TCP+TLS+HTTP
+#     all completed end-to-end; antibot 4xx pages still count as "the
+#     proxy chain works". Only timeouts / connection refused are failures.
+#  2. Chain identity: query an IP echo endpoint and confirm the visible
+#     egress IP matches the VPS host, which is the only way to be sure
+#     traffic is actually leaving through xray and not, say, the router's
+#     direct WAN.
+e2e_target="${VPN_XRAY_E2E_TARGET:-https://chatgpt.com}"
+e2e_timeout="${VPN_XRAY_E2E_TIMEOUT:-15}"
+e2e_proxy="http://${ROUTER_LAN_IP}:${PROXY_PORT}"
+e2e_ip_target="${VPN_XRAY_E2E_IP_TARGET:-https://api.ipify.org}"
+
+set +e
+e2e_status=''
+e2e_curl_err=''
+if command -v curl >/dev/null 2>&1; then
+  e2e_curl_err="$(mktemp)"
+  e2e_status="$(curl --proxy "$e2e_proxy" -ksS -o /dev/null -m "$e2e_timeout" \
+    -w '%{http_code}' "$e2e_target" 2>"$e2e_curl_err" || true)"
+fi
+
+case "$e2e_status" in
+  '')
+    e2e_msg="$(sed -n '1p' "$e2e_curl_err" 2>/dev/null || true)"
+    install_progress_fail \
+      "Could not reach ${e2e_target} through ${e2e_proxy}${e2e_msg:+ (${e2e_msg})}" \
+      "Check that the router HTTP proxy on port ${PROXY_PORT} is listening and the VPS Xray endpoint is reachable. Run: ssh $ROUTER_SSH 'logread -e codex-xray | tail'"
+    e2e_ok=0
+    ;;
+  000)
+    install_progress_fail \
+      "Router proxy did not respond for ${e2e_target} (curl reported HTTP 000)" \
+      "Confirm xray-core is running and listening on ${PROXY_PORT}. Run: ssh $ROUTER_SSH 'pgrep -af codex-xray-core; netstat -ltn | grep ${PROXY_PORT}'"
+    e2e_ok=0
+    ;;
+  *)
+    echo "  Reachability: ${e2e_target} responded HTTP ${e2e_status} via ${e2e_proxy}"
+    e2e_ok=1
+    ;;
+esac
+[ -f "$e2e_curl_err" ] && rm -f "$e2e_curl_err"
+
+if [[ "${e2e_ok:-0}" == "1" ]]; then
+  e2e_egress_ip=''
+  if command -v curl >/dev/null 2>&1; then
+    e2e_egress_ip="$(curl --proxy "$e2e_proxy" -ksS -m "$e2e_timeout" \
+      "$e2e_ip_target" 2>/dev/null | tr -d '[:space:]')"
+  fi
+  if [[ -z "$e2e_egress_ip" ]]; then
+    echo "  Egress IP probe to ${e2e_ip_target} returned no data; chain identity not confirmed (proxy still answered ${e2e_target})."
+  elif [[ "$e2e_egress_ip" == "${XRAY_SERVER:-}" ]]; then
+    echo "✓ End-to-end OK: ${e2e_target} reachable and egress IP ${e2e_egress_ip} matches VPS ${XRAY_SERVER}"
+  else
+    install_progress_fail \
+      "Egress IP ${e2e_egress_ip} does not match VPS ${XRAY_SERVER:-unknown}" \
+      "Traffic answered the proxy but is not leaving through the VPS. Verify that xray-core's outbound is connecting to ${XRAY_SERVER}:${XRAY_PORT} and that the firewall allows it."
+    e2e_ok=0
+  fi
+fi
+set -e
+[[ "${e2e_ok:-0}" == "1" ]] || exit 1
 
 install_progress_complete
 
