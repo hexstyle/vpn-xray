@@ -99,10 +99,17 @@ helper_run_on() {
 		log "helper skipped on action because router config is not ready yet"
 		exit 0
 	fi
+	if xray_failsafe_hold_active; then
+		xray_failsafe_enable "recovery hold active: $(xray_failsafe_state_value reason "$VX_FAILSAFE_HOLD")"
+		log "helper skipped on action because fail-safe hold is active"
+		exit 1
+	fi
 	if runtime_path_active; then
+		xray_failsafe_disable
 		log "helper confirmed path already active"
 		exit 0
 	fi
+	xray_failsafe_enable 'switch on requested; waiting for Xray path to become active'
 
 	if ! xray_runtime_ready; then
 		/etc/init.d/codex-xray start >/dev/null 2>&1 || true
@@ -119,6 +126,7 @@ helper_run_on() {
 		fi
 	fi
 	if wait_for_runtime_state active "$WAIT_ACTIVE_SECONDS"; then
+		xray_failsafe_disable
 		log "helper confirmed path is active"
 		exit 0
 	fi
@@ -138,6 +146,11 @@ helper_run_off() {
 	/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
 	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
 	if wait_for_runtime_state inactive "$WAIT_INACTIVE_SECONDS"; then
+		if path_requested; then
+			xray_failsafe_enable 'Xray path stopped while switch still requests protection'
+		else
+			xray_failsafe_disable
+		fi
 		log "helper confirmed path is inactive"
 		exit 0
 	fi
@@ -175,15 +188,36 @@ case "$ACTION" in
 			log "path requested, but router config is not ready yet; waiting for VPS setup"
 			exit 0
 		fi
+		if xray_failsafe_hold_active; then
+			xray_failsafe_enable "recovery hold active: $(xray_failsafe_state_value reason "$VX_FAILSAFE_HOLD")"
+			log "path requested, but fail-safe hold is active; use recover to retry immediately"
+			exit 1
+		fi
 		if runtime_path_active; then
+			xray_failsafe_disable
 			log "path already active"
 			exit 0
 		fi
 		log "enabling codex-xray path"
 		run_async __run_on
 		;;
+	recover)
+		if ! config_ready; then
+			log "recover requested, but router config is not ready yet"
+			exit 1
+		fi
+		xray_failsafe_hold_clear
+		xray_failsafe_enable 'manual recovery requested; holding client traffic until Xray path is active'
+		log "manual recovery requested"
+		run_async __run_on
+		;;
 	off)
 		if runtime_path_inactive; then
+			if path_requested; then
+				xray_failsafe_enable 'Xray path inactive while switch still requests protection'
+			else
+				xray_failsafe_disable
+			fi
 			log "path already inactive"
 			exit 0
 		fi
@@ -191,7 +225,7 @@ case "$ACTION" in
 		run_async __run_off
 		;;
 	*)
-		echo "usage: $0 {on|off}" >&2
+		echo "usage: $0 {on|off|recover}" >&2
 		exit 1
 		;;
 esac

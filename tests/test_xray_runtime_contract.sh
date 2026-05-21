@@ -12,6 +12,8 @@ XRAY_UI="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
 ROUTER_RULES="$ROOT/routers/common/files/router-rules"
 SWITCH_HELPER="$ROOT/routers/gl-mt3000-glinet/files/gl-switch-xray.sh"
 WATCHDOG="$ROOT/routers/gl-mt3000-glinet/files/xray-switch-watchdog.init"
+HEALTH_MONITOR="$ROOT/routers/gl-mt3000-glinet/files/xray-health-monitor.init"
+LIB_COMMON="$ROOT/routers/common/files/lib-common.sh"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2
@@ -78,7 +80,7 @@ grep -q '"mux": {' "$VPS_CGI" \
 grep -q 'path_requested' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must gate boot startup behind switch/config readiness"
 
-grep -q 'path_requested || return 0' "$TRANSPROXY_INIT" \
+grep -q 'if ! path_requested; then' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must no-op when boot startup is not requested"
 
 grep -q 'wait_for_xray_runtime()' "$TRANSPROXY_INIT" \
@@ -134,6 +136,42 @@ grep -q 'QUERY_STRING=action=restart' "$WATCHDOG" \
 
 grep -q 'OPENAI_FAILURE_THRESHOLD=' "$WATCHDOG" \
 	|| fail "xray-switch-watchdog must tolerate transient OpenAI-only failures before restarting the runtime"
+
+grep -q 'xray_failsafe_enable()' "$LIB_COMMON" \
+	|| fail "lib-common must provide a shared client fail-safe kill switch"
+
+grep -q 'CODEX_XRAY_FAILSAFE' "$LIB_COMMON" \
+	|| fail "client fail-safe must use a dedicated forward-chain guard"
+
+grep -q "xray_failsafe_enable 'transproxy stopped while Xray path is requested'" "$TRANSPROXY_INIT" \
+	|| fail "codex-transproxy stop must fail closed when the switch still requests Xray"
+
+grep -q "xray_failsafe_disable" "$TRANSPROXY_INIT" \
+	|| fail "codex-transproxy must clear the fail-safe only after the path is active or switch is off"
+
+grep -q 'xray_failsafe_hold_active' "$WATCHDOG" \
+	|| fail "xray-switch-watchdog must honor fail-safe recovery holds"
+
+grep -q 'watchdog detected inactive Xray path while switch is on' "$WATCHDOG" \
+	|| fail "xray-switch-watchdog must block client forwarding before recovery when the path is inactive"
+
+grep -q 'GUARD_FAILSAFE_HOLD' "$HEALTH_MONITOR" \
+	|| fail "xray-health-monitor must fail closed under critical memory pressure"
+
+grep -q 'recover)' "$SWITCH_HELPER" \
+	|| fail "gl-switch-xray.sh must provide a manual recovery lever"
+
+grep -q 'action_recover()' "$ADMIN_CGI" \
+	|| fail "xray-admin.cgi must expose a manual recovery action"
+
+grep -q 'Recover Xray Path' "$XRAY_UI" \
+	|| fail "xray.html must expose the manual recovery lever"
+
+grep -q 'selective rules file is empty and recovery failed' "$ROUTER_RULES" \
+	|| fail "router-rules must fail closed when selective rules cannot be recovered"
+
+grep -q 'client internet is blocked by fail-safe' "$ROUTER_RULES" \
+	|| fail "router-rules must report fail-safe blocking when runtime recovery does not converge"
 
 grep -q '/etc/init.d/codex-xray enable' "$INSTALL_PLATFORM" \
 	|| fail "install-platform must enable codex-xray on boot for fast post-reboot restore"

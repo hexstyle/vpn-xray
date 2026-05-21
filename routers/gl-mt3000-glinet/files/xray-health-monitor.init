@@ -54,7 +54,11 @@ CRUMB_INT='"$BREADCRUMB_INTERVAL"'
 xpid_prev=""
 tick=0
 last_restart_tick=0
+last_failsafe_tick=0
 xray_down_streak=0
+FAILSAFE_HOLD_SECONDS=300
+
+. /usr/share/vpn-xray/lib-common.sh
 
 alert() {
 	echo "$(date +%s)	$*" >> "$ALERTS"
@@ -78,12 +82,28 @@ rotate() {
 guard_restart_xray() {
 	local reason="$1"
 	local cooldown=$((CRUMB_INT * 2))
+	xray_failsafe_hold_active && return 0
 	if [ $((tick - last_restart_tick)) -lt "$cooldown" ]; then
 		return 0
 	fi
 	alert "GUARD_RESTART reason=$reason"
 	/etc/init.d/codex-xray restart >/dev/null 2>&1 || true
 	last_restart_tick=$tick
+}
+
+guard_failsafe_hold() {
+	local reason="$1"
+	local cooldown=$((FAILSAFE_HOLD_SECONDS / INT))
+	[ "$cooldown" -ge 1 ] 2>/dev/null || cooldown=10
+	if [ $((tick - last_failsafe_tick)) -lt "$cooldown" ]; then
+		return 0
+	fi
+	alert "GUARD_FAILSAFE_HOLD reason=$reason hold=${FAILSAFE_HOLD_SECONDS}s"
+	xray_failsafe_enable "$reason"
+	xray_failsafe_hold_set "$reason" "$FAILSAFE_HOLD_SECONDS"
+	/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
+	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+	last_failsafe_tick=$tick
 }
 
 : > "$LOG"
@@ -129,9 +149,9 @@ while true; do
 	[ -n "$xpid_prev" ] && [ "$xpid" != "$xpid_prev" ] && alert "XRAY_RESTARTED old=$xpid_prev new=$xpid"
 
 	# --- Proactive guards (preventive) ---
-	# Guard 1: critically low memory — restart xray before OOM killer or kernel panic
-	if [ "$ma" -lt 50000 ] 2>/dev/null && [ "$xup" = "1" ]; then
-		guard_restart_xray "LOW_MEM_CRITICAL avail=${ma}kB"
+	# Guard 1: critically low memory — fail closed and stop the path before OOM.
+	if [ "$ma" -lt 50000 ] 2>/dev/null; then
+		guard_failsafe_hold "LOW_MEM_CRITICAL avail=${ma}kB"
 	fi
 
 	# Guard 2: xray RSS runaway — restart before it starves the system

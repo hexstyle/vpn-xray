@@ -7,6 +7,9 @@
 : "${VX_CONFIG_READY:=/etc/xray/codex-xray.ready}"
 : "${VX_CONFIG:=/etc/xray/codex-xray.json}"
 : "${VX_BIN:=/usr/local/bin/codex-xray-core}"
+: "${VX_FAILSAFE_CHAIN:=CODEX_XRAY_FAILSAFE}"
+: "${VX_FAILSAFE_STATE:=/var/run/codex-xray-failsafe}"
+: "${VX_FAILSAFE_HOLD:=/var/run/codex-xray-failsafe.hold}"
 
 # --- Hardware switch ---
 
@@ -144,6 +147,121 @@ lan_device() {
 			;;
 	esac
 	printf '%s\n' "$value"
+}
+
+# --- Client fail-safe kill switch ---
+
+xray_failsafe_state_value() {
+	local key="$1"
+	local file="${2:-$VX_FAILSAFE_STATE}"
+
+	sed -n "s/^${key}=//p" "$file" 2>/dev/null | sed -n '1p'
+}
+
+xray_failsafe_hold_clear() {
+	rm -f "$VX_FAILSAFE_HOLD"
+}
+
+xray_failsafe_hold_set() {
+	local reason="${1:-runtime unavailable}"
+	local seconds="${2:-300}"
+	local now until
+
+	case "$seconds" in
+		''|*[!0-9]*) seconds=300 ;;
+	esac
+	now="$(date +%s)"
+	until=$((now + seconds))
+	mkdir -p "$(dirname "$VX_FAILSAFE_HOLD")"
+	{
+		printf 'since=%s\n' "$now"
+		printf 'until=%s\n' "$until"
+		printf 'reason=%s\n' "$reason"
+	} > "$VX_FAILSAFE_HOLD"
+}
+
+xray_failsafe_hold_active() {
+	local until now
+
+	[ -f "$VX_FAILSAFE_HOLD" ] || return 1
+	until="$(xray_failsafe_state_value until "$VX_FAILSAFE_HOLD")"
+	case "$until" in
+		''|*[!0-9]*)
+			rm -f "$VX_FAILSAFE_HOLD"
+			return 1
+			;;
+	esac
+	now="$(date +%s)"
+	if [ "$now" -lt "$until" ] 2>/dev/null; then
+		return 0
+	fi
+	rm -f "$VX_FAILSAFE_HOLD"
+	return 1
+}
+
+xray_failsafe_enable() {
+	local reason="${1:-xray path unavailable}"
+	local lan_if
+
+	lan_if="$(lan_device)"
+	[ -n "$lan_if" ] || lan_if='br-lan'
+
+	iptables -N "$VX_FAILSAFE_CHAIN" 2>/dev/null || true
+	iptables -F "$VX_FAILSAFE_CHAIN" 2>/dev/null || true
+	iptables -A "$VX_FAILSAFE_CHAIN" -j REJECT --reject-with icmp-net-unreachable 2>/dev/null \
+		|| iptables -A "$VX_FAILSAFE_CHAIN" -j REJECT 2>/dev/null \
+		|| true
+	iptables -C FORWARD -i "$lan_if" -j "$VX_FAILSAFE_CHAIN" >/dev/null 2>&1 \
+		|| iptables -I FORWARD 1 -i "$lan_if" -j "$VX_FAILSAFE_CHAIN" 2>/dev/null \
+		|| true
+
+	ip6tables -N "$VX_FAILSAFE_CHAIN" 2>/dev/null || true
+	ip6tables -F "$VX_FAILSAFE_CHAIN" 2>/dev/null || true
+	ip6tables -A "$VX_FAILSAFE_CHAIN" -j REJECT 2>/dev/null || true
+	ip6tables -C FORWARD -i "$lan_if" -j "$VX_FAILSAFE_CHAIN" >/dev/null 2>&1 \
+		|| ip6tables -I FORWARD 1 -i "$lan_if" -j "$VX_FAILSAFE_CHAIN" 2>/dev/null \
+		|| true
+
+	mkdir -p "$(dirname "$VX_FAILSAFE_STATE")"
+	{
+		printf 'active=1\n'
+		printf 'since=%s\n' "$(date +%s)"
+		printf 'lan_if=%s\n' "$lan_if"
+		printf 'reason=%s\n' "$reason"
+	} > "$VX_FAILSAFE_STATE"
+	logger -t codex-xray-failsafe "enabled reason=$reason lan_if=$lan_if" 2>/dev/null || true
+}
+
+xray_failsafe_disable_for_iface() {
+	local lan_if="$1"
+
+	[ -n "$lan_if" ] || return 0
+	while iptables -D FORWARD -i "$lan_if" -j "$VX_FAILSAFE_CHAIN" >/dev/null 2>&1; do :; done
+	while ip6tables -D FORWARD -i "$lan_if" -j "$VX_FAILSAFE_CHAIN" >/dev/null 2>&1; do :; done
+}
+
+xray_failsafe_disable() {
+	local stored_if current_if
+
+	stored_if="$(xray_failsafe_state_value lan_if)"
+	current_if="$(lan_device)"
+	xray_failsafe_disable_for_iface "$stored_if"
+	xray_failsafe_disable_for_iface "$current_if"
+	xray_failsafe_disable_for_iface br-lan
+	iptables -F "$VX_FAILSAFE_CHAIN" 2>/dev/null || true
+	iptables -X "$VX_FAILSAFE_CHAIN" 2>/dev/null || true
+	ip6tables -F "$VX_FAILSAFE_CHAIN" 2>/dev/null || true
+	ip6tables -X "$VX_FAILSAFE_CHAIN" 2>/dev/null || true
+	rm -f "$VX_FAILSAFE_STATE"
+	logger -t codex-xray-failsafe 'disabled' 2>/dev/null || true
+}
+
+xray_failsafe_active() {
+	local lan_if
+
+	[ -f "$VX_FAILSAFE_STATE" ] && return 0
+	lan_if="$(lan_device)"
+	iptables -C FORWARD -i "$lan_if" -j "$VX_FAILSAFE_CHAIN" >/dev/null 2>&1
 }
 
 # --- Locking ---

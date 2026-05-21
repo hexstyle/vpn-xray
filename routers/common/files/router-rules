@@ -39,6 +39,8 @@ EXTERNAL_SCRIPT_MAX_TARGETS='5000'
 SCRIPTS_DIR_RELPATH='scripts'
 STATUS_FILE='/tmp/router-rules.status'
 EXTERNAL_SYNC_PID_FILE='/tmp/router-rules-external-sync.pid'
+DEFAULT_RULES_BACKUP_DIR='/etc/router-rules/backups'
+DEFAULT_RULES_BACKUP_KEEP='20'
 
 . "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}"
 
@@ -138,6 +140,8 @@ xray_dnsmasq_conf() { cfg_get xray_dnsmasq_conf "$DEFAULT_XRAY_DNSMASQ_CONF"; }
 xray_dnsmasq_server_conf() { cfg_get xray_dnsmasq_server_conf "$DEFAULT_XRAY_DNSMASQ_SERVER_CONF"; }
 sync_interval() { cfg_get sync_interval "$DEFAULT_SYNC_INTERVAL"; }
 external_source_interval() { cfg_get external_source_interval "$DEFAULT_EXTERNAL_SOURCE_INTERVAL"; }
+rules_backup_dir() { cfg_get rules_backup_dir "$DEFAULT_RULES_BACKUP_DIR"; }
+rules_backup_keep() { cfg_get rules_backup_keep "$DEFAULT_RULES_BACKUP_KEEP"; }
 pidfile_running() {
 	local pidfile="$1"
 	local pid=''
@@ -1016,7 +1020,7 @@ check_remote_rules_internal() {
 }
 
 quick_remote_probe_internal() {
-	local repo branch remote_head current_remote_head rc message update_available
+	local repo branch remote_head current_remote_head rc message update_available probe_out probe_err
 
 	if ! repo_configured; then
 		set_remote_probe_status disabled 'Git sync is disabled or the repository URL is not configured.' '' '0'
@@ -1026,7 +1030,15 @@ quick_remote_probe_internal() {
 	repo="$(repo_path)"
 	branch="$(repo_branch)"
 	rc=0
-	remote_head="$(run_with_timeout 5 git ls-remote "$(repo_fetch_url)" "refs/heads/${branch}" 2>/dev/null | awk 'NR==1 {print $1}')" || rc=$?
+	probe_out="$(rr_mktemp)"
+	probe_err="$(rr_mktemp)"
+	git_env_setup
+	if run_with_timeout 5 git ls-remote "$(repo_fetch_url)" "refs/heads/${branch}" >"$probe_out" 2>"$probe_err"; then
+		remote_head="$(awk 'NR==1 {print $1}' "$probe_out")"
+	else
+		rc=$?
+	fi
+	rm -f "$probe_out" "$probe_err"
 	if [ "$rc" -ne 0 ]; then
 		if [ "$rc" -eq 124 ]; then
 			message='Git remote probe timed out after 5 seconds.'
@@ -1417,6 +1429,152 @@ $(tracked_rules_relpaths)
 EOF
 }
 
+allow_empty_manual_rules_internal() {
+	[ "${ROUTER_RULES_ALLOW_EMPTY_MANUAL:-0}" = '1' ]
+}
+
+rules_backup_keep_count_internal() {
+	local keep
+
+	keep="$(rules_backup_keep)"
+	case "$keep" in
+		''|*[!0-9]*)
+			keep="$DEFAULT_RULES_BACKUP_KEEP"
+			;;
+	esac
+	[ "$keep" -ge 3 ] 2>/dev/null || keep="$DEFAULT_RULES_BACKUP_KEEP"
+	printf '%s\n' "$keep"
+}
+
+prune_rules_backups_internal() {
+	local backup_root keep count old
+
+	backup_root="$(rules_backup_dir)"
+	[ -d "$backup_root" ] || return 0
+	keep="$(rules_backup_keep_count_internal)"
+	count=0
+	for old in $(ls -1dt "$backup_root"/* 2>/dev/null); do
+		[ -d "$old" ] || continue
+		count=$((count + 1))
+		[ "$count" -le "$keep" ] && continue
+		rm -rf "$old"
+	done
+}
+
+backup_rules_tree_internal() {
+	local reason="${1:-unspecified}" backup_root backup_dir stamp repo head mode
+
+	backup_root="$(rules_backup_dir)"
+	repo="$(repo_path)"
+	mkdir -p "$backup_root"
+	stamp="$(date '+%Y%m%d-%H%M%S')-$$"
+	backup_dir="${backup_root}/${stamp}"
+	mkdir -p "${backup_dir}/tree"
+	if [ -d "$repo" ]; then
+		snapshot_rules_tree_from_worktree_internal "$repo" "${backup_dir}/tree" || true
+	fi
+	head=''
+	[ -d "$repo/.git" ] && head="$(git_cmd -C "$repo" rev-parse --verify HEAD 2>/dev/null || true)"
+	mode="$(xray_mode)"
+	{
+		printf 'epoch=%s\n' "$(date +%s)"
+		printf 'reason=%s\n' "$reason"
+		printf 'mode=%s\n' "$mode"
+		printf 'repo_head=%s\n' "$head"
+		printf 'rules_relpath=%s\n' "$(rules_relpath)"
+		printf 'signature=%s\n' "$(tracked_rules_signature)"
+	} > "${backup_dir}/meta"
+	prune_rules_backups_internal || true
+	printf '%s\n' "$backup_dir"
+}
+
+restore_manual_rules_from_origin_internal() {
+	local repo branch rel main_file tmp count
+
+	repo="$(repo_path)"
+	branch="$(repo_branch)"
+	rel="$(rules_relpath)"
+	main_file="$(repo_rules_path)"
+	[ -d "$repo/.git" ] || return 1
+	tmp="$(rr_mktemp)"
+	if ! git_cmd -C "$repo" show "origin/${branch}:${rel}" > "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		return 1
+	fi
+	count="$(rule_count "$tmp")"
+	if [ "${count:-0}" -le 0 ] 2>/dev/null; then
+		rm -f "$tmp"
+		return 1
+	fi
+	backup_rules_tree_internal 'before-restore-manual-from-origin' >/dev/null 2>&1 || true
+	mkdir -p "$(dirname "$main_file")"
+	cp "$tmp" "$main_file"
+	rm -f "$tmp"
+	status_trace_add sync_trace "rules recovered: restored $(rules_relpath) from origin/${branch}"
+	return 0
+}
+
+restore_manual_rules_from_latest_backup_internal() {
+	local backup_root rel main_file backup src count
+
+	backup_root="$(rules_backup_dir)"
+	rel="$(rules_relpath)"
+	main_file="$(repo_rules_path)"
+	[ -d "$backup_root" ] || return 1
+	for backup in $(ls -1dt "$backup_root"/* 2>/dev/null); do
+		src="${backup}/tree/${rel}"
+		[ -f "$src" ] || continue
+		count="$(rule_count "$src")"
+		[ "${count:-0}" -gt 0 ] 2>/dev/null || continue
+		mkdir -p "$(dirname "$main_file")"
+		cp "$src" "$main_file"
+		status_trace_add sync_trace "rules recovered: restored $(rules_relpath) from backup $(basename "$backup")"
+		return 0
+	done
+	return 1
+}
+
+recover_empty_manual_rules_internal() {
+	local reason="${1:-empty-manual-rules}" main_file count
+
+	allow_empty_manual_rules_internal && return 0
+	main_file="$(repo_rules_path)"
+	count="$(rule_count "$main_file")"
+	[ "${count:-0}" -eq 0 ] 2>/dev/null || return 0
+	restore_manual_rules_from_origin_internal && return 0
+	restore_manual_rules_from_latest_backup_internal && return 0
+	status_trace_add sync_trace "rules recovery skipped: $(rules_relpath) is empty and no non-empty origin/backup snapshot is available (${reason})"
+	return 1
+}
+
+guard_manual_rules_write_internal() {
+	local src="$1"
+	local dst="$2"
+	local reason="${3:-write}"
+	local src_count dst_count tmp remote_count
+
+	allow_empty_manual_rules_internal && return 0
+	src_count="$(rule_count "$src")"
+	[ "${src_count:-0}" -eq 0 ] 2>/dev/null || return 0
+
+	dst_count="$(rule_count "$dst")"
+	remote_count=0
+	if [ -d "$(repo_path)/.git" ]; then
+		tmp="$(rr_mktemp)"
+		if git_cmd -C "$(repo_path)" show "origin/$(repo_branch):$(rules_relpath)" > "$tmp" 2>/dev/null; then
+			remote_count="$(rule_count "$tmp")"
+		fi
+		rm -f "$tmp"
+	fi
+
+	if [ "${dst_count:-0}" -gt 0 ] 2>/dev/null || [ "${remote_count:-0}" -gt 0 ] 2>/dev/null; then
+		backup_rules_tree_internal "blocked-empty-manual-${reason}" >/dev/null 2>&1 || true
+		set_status_error "refusing to overwrite non-empty shared rules with an empty $(rules_relpath); set ROUTER_RULES_ALLOW_EMPTY_MANUAL=1 only for an intentional wipe"
+		return 1
+	fi
+	return 0
+}
+
 rule_count() {
 	local file="$1"
 
@@ -1634,6 +1792,7 @@ compose_effective_rules_internal() {
 	local manual_file combined_file out_file collapsed_file tracked_sig id label url path python_bin
 	local skip_collapse
 
+	recover_empty_manual_rules_internal 'compose-effective-rules' || true
 	manual_file="$(repo_rules_path)"
 	skip_collapse="${ROUTER_RULES_SKIP_EFFECTIVE_COLLAPSE:-0}"
 	tracked_sig="$(tracked_rules_signature)|collapse_skipped:${skip_collapse}"
@@ -1750,7 +1909,16 @@ maybe_migrate_external_repo_layout_internal() {
 
 	after_count="$(rule_count "$filtered_file")"
 	removed_count=$((before_count - after_count))
+	if [ "$before_count" -gt 0 ] 2>/dev/null \
+		&& [ "$after_count" -eq 0 ] 2>/dev/null \
+		&& ! allow_empty_manual_rules_internal; then
+		rm -f "$union_file" "$filtered_file"
+		backup_rules_tree_internal 'blocked-empty-manual-external-migration' >/dev/null 2>&1 || true
+		set_status_error "refusing to migrate $(rules_relpath) to an empty manual rules file; set ROUTER_RULES_ALLOW_EMPTY_MANUAL=1 only for an intentional wipe"
+		return 1
+	fi
 	if ! cmp -s "$main_file" "$filtered_file" 2>/dev/null; then
+		backup_rules_tree_internal 'before-external-layout-migration' >/dev/null 2>&1 || true
 		mv "$filtered_file" "$main_file"
 	else
 		rm -f "$filtered_file"
@@ -2668,8 +2836,8 @@ ensure_ipv4_only_dns_internal() {
 	/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 }
 
-save_last_known_good() {
-	local lkg='/etc/router-rules/last-known-good'
+save_last_known_good_dir_internal() {
+	local lkg="$1"
 	local gen_dir eff_file
 
 	gen_dir="$(generated_dir)"
@@ -2683,7 +2851,11 @@ save_last_known_good() {
 	[ -f "$(domain_file)" ] && cp "$(domain_file)" "${lkg}.tmp/"
 	[ -f "$(literal_file)" ] && cp "$(literal_file)" "${lkg}.tmp/"
 	[ -f "$(resolved_file)" ] && cp "$(resolved_file)" "${lkg}.tmp/"
+	mkdir -p "${lkg}.tmp/rules-tree"
+	snapshot_rules_tree_from_worktree_internal "$(repo_path)" "${lkg}.tmp/rules-tree" || true
 	printf '%s\n' "$(xray_mode)" > "${lkg}.tmp/mode"
+	printf '%s\n' "$(rules_relpath)" > "${lkg}.tmp/rules_relpath"
+	printf '%s\n' "$(tracked_rules_signature)" > "${lkg}.tmp/rules_signature"
 	date +%s > "${lkg}.tmp/timestamp"
 
 	rm -rf "${lkg}.old"
@@ -2692,10 +2864,27 @@ save_last_known_good() {
 	rm -rf "${lkg}.old"
 }
 
+save_last_known_good() {
+	local mode mode_lkg
+
+	mode="$(xray_mode)"
+	mode_lkg="/etc/router-rules/last-known-good-${mode}"
+	save_last_known_good_dir_internal "$mode_lkg"
+	save_last_known_good_dir_internal '/etc/router-rules/last-known-good'
+}
+
 restore_lkg_internal() {
 	local lkg='/etc/router-rules/last-known-good'
 	local gen_dir mode
 
+	mode="$(xray_mode)"
+	case "$mode" in
+		full|selective)
+			if [ -d "/etc/router-rules/last-known-good-${mode}" ]; then
+				lkg="/etc/router-rules/last-known-good-${mode}"
+			fi
+			;;
+	esac
 	[ -d "$lkg" ] || {
 		echo 'no last-known-good state found' >&2
 		return 1
@@ -2712,6 +2901,9 @@ restore_lkg_internal() {
 	[ -f "$lkg/domains.txt" ] && cp "$lkg/domains.txt" "$(domain_file)"
 	[ -f "$lkg/literals_ipv4.txt" ] && cp "$lkg/literals_ipv4.txt" "$(literal_file)"
 	[ -f "$lkg/resolved_ipv4.txt" ] && cp "$lkg/resolved_ipv4.txt" "$(resolved_file)"
+	if [ -d "$lkg/rules-tree" ]; then
+		restore_rules_tree_exact_local_internal "$lkg/rules-tree" "$(repo_path)"
+	fi
 	[ -f "$lkg/mode" ] && mode="$(cat "$lkg/mode")" || mode='full'
 	uci set router_rules.global.xray_mode="$mode"
 	uci commit router_rules
@@ -2723,6 +2915,16 @@ apply_xray_internal() {
 	local mode count setname signature resolved_sig need_restart last_mode final_rule conf lan_if
 
 	mode="$(xray_mode)"
+	if path_requested && xray_failsafe_hold_active; then
+		xray_failsafe_enable "recovery hold active: $(xray_failsafe_state_value reason "$VX_FAILSAFE_HOLD")"
+		set_status_error 'Xray recovery is on fail-safe hold; use manual recovery to retry immediately'
+		return 1
+	fi
+	if [ "$mode" = 'selective' ] && ! recover_empty_manual_rules_internal "apply-xray-${mode}"; then
+		xray_failsafe_enable "selective rules file is empty and recovery failed"
+		set_status_error "selective rules file is empty and no non-empty origin/backup snapshot is available"
+		return 1
+	fi
 	setname="$(xray_ipset)"
 	conf="$(xray_dnsmasq_conf)"
 	lan_if="$(lan_device)"
@@ -2758,6 +2960,14 @@ apply_xray_internal() {
 			/etc/init.d/codex-xray restart 9>&- >/dev/null 2>&1 || true
 		fi
 		ROUTER_RULES_SKIP_BUILD_IPSET=1 /etc/init.d/codex-transproxy restart 9>&- >/dev/null 2>&1 || true
+	fi
+	if path_requested; then
+		if ! xray_runtime_healthy || ! transproxy_runtime_healthy; then
+			xray_failsafe_enable "apply-xray did not converge to an active Xray path"
+			set_status_error 'Xray runtime did not converge; client internet is blocked by fail-safe'
+			return 1
+		fi
+		xray_failsafe_disable
 	fi
 	count="$(status_get xray_ipset_count)"
 	set_apply_status xray "mode=${mode} applied ${count} targets"
@@ -2921,6 +3131,8 @@ xray_needs_apply_internal() {
 	[ "$signature" = "$last_signature" ] || return 0
 
 	if path_requested; then
+		xray_failsafe_hold_active && return 1
+		xray_failsafe_active && return 0
 		xray_runtime_healthy || return 0
 		transproxy_runtime_healthy || return 0
 	fi
@@ -3112,6 +3324,8 @@ save_rules_file_internal() {
 
 	prepare_rules_file_for_local_edit_internal || return 1
 	dst="$(repo_rules_path)"
+	guard_manual_rules_write_internal "$src" "$dst" 'save-file' || return 1
+	backup_rules_tree_internal 'before-save-file' >/dev/null 2>&1 || true
 	cp "$src" "$dst"
 }
 
@@ -3484,6 +3698,7 @@ router-rules commands:
   save-file <path>
   set-xray-mode <full|selective>
   set-mode-cutover <full|selective>
+  recover-manual-rules
   restore-lkg
 EOF
 }
@@ -3606,6 +3821,9 @@ case "$cmd" in
 		shift
 		[ -n "${1:-}" ] || { usage >&2; exit 1; }
 		with_lock set_mode_cutover_internal "$1"
+		;;
+	recover-manual-rules)
+		with_lock recover_empty_manual_rules_internal 'operator-request'
 		;;
 	restore-lkg)
 		with_lock restore_lkg_internal

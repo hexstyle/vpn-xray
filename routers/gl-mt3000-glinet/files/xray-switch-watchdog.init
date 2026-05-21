@@ -112,6 +112,7 @@ smoke_openai_ok() {
 restart_runtime() {
 	local output=""
 
+	xray_failsafe_enable 'watchdog restarting Xray runtime'
 	record_timestamp "$LAST_RECOVERY_FILE"
 	if [ -x "'"$ADMIN_CGI"'" ]; then
 		output="$(timeout 30 env REQUEST_METHOD=GET QUERY_STRING=action=restart "'"$ADMIN_CGI"'" 2>/dev/null \
@@ -158,6 +159,7 @@ maybe_smoke_recover() {
 		if [ "$(seconds_since_file "$LAST_RECOVERY_FILE")" -lt "$HEAL_COOLDOWN" ]; then
 			return 0
 		fi
+		xray_failsafe_enable "severe smoke failure: $output"
 		log "attempting runtime restart after severe smoke failure"
 		restart_runtime >/dev/null 2>&1 || log "runtime restart failed after severe smoke failure"
 		reset_counter "$SEVERE_FAILURE_FILE"
@@ -182,19 +184,27 @@ maybe_smoke_recover() {
 while true; do
 	state="$(current_switch_state)"
 	if [ "$state" = on ]; then
+		if config_ready && xray_failsafe_hold_active; then
+			xray_failsafe_enable "recovery hold active: $(xray_failsafe_state_value reason "$VX_FAILSAFE_HOLD")"
+			sleep 10
+			continue
+		fi
 		if config_ready; then
 			/etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true
 		fi
 		if config_ready && ! path_active; then
+			xray_failsafe_enable 'watchdog detected inactive Xray path while switch is on'
 			record_timestamp "$LAST_RECOVERY_FILE"
 			reset_counter "$SEVERE_FAILURE_FILE"
 			reset_counter "$OPENAI_FAILURE_FILE"
 			/etc/gl-switch.d/xray.sh on >/dev/null 2>&1 || true
 		elif config_ready; then
+			xray_failsafe_disable
 			maybe_smoke_recover
 		fi
 	else
 		clear_health_state
+		xray_failsafe_disable
 		if path_active; then
 			/etc/gl-switch.d/xray.sh off >/dev/null 2>&1 || true
 		fi

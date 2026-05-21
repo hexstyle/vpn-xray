@@ -18,6 +18,7 @@ external_source_catalog() { printf '%s\n' 'cloudflare_ipv4|Cloudflare IPv4|https
 external_source_path() { printf '%s/%s\n' "$(repo_path)" "lists/external/$1.txt"; }
 external_source_repo_layout_version() { printf '0\n'; }
 status_trace_add() { :; }
+status_set() { :; }
 uci() { :; }
 
 mkdir -p "$(repo_path)/lists/external"
@@ -103,5 +104,27 @@ if grep -q '^203.0.113.0/24$' "$main_file"; then
 	printf 'FAIL: managed target stayed in the editable rules file after layout upgrade cleanup\n' >&2
 	exit 1
 fi
+
+cat > "$managed_file" <<'EOF'
+manual.example
+203.0.113.0/24
+EOF
+cat > "$main_file" <<'EOF'
+manual.example
+203.0.113.0/24
+EOF
+
+if maybe_migrate_external_repo_layout_internal >/dev/null 2>&1; then
+	printf 'FAIL: managed source cleanup must not silently wipe the editable rules file\n' >&2
+	exit 1
+fi
+grep -q '^manual.example$' "$main_file" || {
+	printf 'FAIL: blocked managed cleanup must preserve manual.example\n' >&2
+	exit 1
+}
+grep -q '^203.0.113.0/24$' "$main_file" || {
+	printf 'FAIL: blocked managed cleanup must preserve the previous editable file\n' >&2
+	exit 1
+}
 
 printf 'ok\n'

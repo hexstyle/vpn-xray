@@ -872,6 +872,7 @@
           <summary class="label" style="cursor:pointer;">Diagnostics</summary>
           <div class="form-actions" style="margin-top:12px;">
             <button class="primary" id="smokeBtn">Run Live Smoke Test</button>
+            <button class="warn-btn" id="recoverPathBtn">Recover Xray Path</button>
           </div>
           <pre id="smokeOutput" style="margin-top:12px;">No smoke test run yet.</pre>
         </details>
@@ -1959,6 +1960,10 @@
         pathEl.textContent = "idle";
         pathEl.className = "value warn";
         pathHint.textContent = "The client profile is ready, but the physical switch is OFF, so the path stays down on purpose.";
+      } else if (data.path_state === "failsafe") {
+        pathEl.textContent = "blocked";
+        pathEl.className = "value bad";
+        pathHint.textContent = `Client internet is blocked to prevent direct bypass while Xray is unavailable. ${data.failsafe_reason || data.failsafe_hold_reason || "Use Recover Xray Path after fixing the cause."}`;
       } else if (data.path_state === "degraded") {
         pathEl.textContent = "degraded";
         pathEl.className = "value bad";
@@ -1977,6 +1982,8 @@
           `HTTPS probe: ${data.last_smoke_https_ok ? "ok" : "failed"}`,
           `Egress probe: ${data.last_smoke_egress_ok ? "ok" : "failed"}`,
           `OpenAI probe: ${data.last_smoke_openai_ok ? "ok" : "failed"}`,
+          `Fail-safe: ${data.failsafe_active ? "active" : "inactive"}${data.failsafe_reason ? ` (${data.failsafe_reason})` : ""}`,
+          data.failsafe_hold_active ? `Recovery hold until: ${formatUnixTime(data.failsafe_hold_until)}` : "",
           "",
           data.last_smoke_message || "(no summary saved yet)"
         ].join("\n");
@@ -3392,6 +3399,25 @@
       }
     }
 
+    async function recoverPath(button) {
+      beginForegroundTask("Recovering Xray path...", 45000);
+      setBusy(button, true);
+      try {
+        const data = await callApi(runtimeApi, "recover", null, { timeoutMs: 45000 });
+        if (data.ok === false) {
+          throw new Error(data.error || "backend error");
+        }
+        state.runtime = data.status || data;
+        renderRuntime(state.runtime);
+        flash("Recovery requested. Client traffic stays blocked until the Xray path is active.", "good");
+      } catch (err) {
+        flash(`Recovery failed: ${err.message}`, "bad");
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
     async function selectProfile(profileId) {
       beginForegroundTask(`Switching to profile "${profileId}"...`, 10000);
       try {
@@ -3501,6 +3527,7 @@
     document.getElementById("logsBtn").addEventListener("click", loadLogs);
     document.getElementById("healthBtn").addEventListener("click", loadHealth);
     document.getElementById("smokeBtn").addEventListener("click", runSmoke);
+    document.getElementById("recoverPathBtn").addEventListener("click", (event) => recoverPath(event.currentTarget));
     document.getElementById("rulesSaveConfigBtn").addEventListener("click", (event) => saveRulesConfig(event.currentTarget));
     document.getElementById("rulesApplyBtn").addEventListener("click", (event) => applyRules(event.currentTarget));
     document.getElementById("rulesPullBtn").addEventListener("click", (event) => pullRules(event.currentTarget));

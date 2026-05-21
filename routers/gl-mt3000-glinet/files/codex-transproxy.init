@@ -24,6 +24,16 @@ xray_runtime_ready() {
 	return 0
 }
 
+transproxy_runtime_ready() {
+	local pid
+
+	pid="$(cat "$REDSOCKS_PID" 2>/dev/null || true)"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+	netstat -ltnp 2>/dev/null | grep -q ":$TCP_PORT " || return 1
+	iptables -t nat -S PREROUTING 2>/dev/null | grep -q "$TCP_CHAIN" || return 1
+	return 0
+}
+
 wait_for_xray_runtime() {
 	local tries=0
 
@@ -252,7 +262,11 @@ ensure_codex_xray() {
 }
 
 start() {
-	path_requested || return 0
+	if ! path_requested; then
+		xray_failsafe_disable
+		return 0
+	fi
+	xray_failsafe_enable 'transproxy starting while Xray path is requested'
 	ensure_codex_xray || return 1
 	[ -f "$REDSOCKS_CONF" ] || return 1
 	/usr/sbin/redsocks -t -c "$REDSOCKS_CONF" || return 1
@@ -261,9 +275,17 @@ start() {
 	cleanup_legacy_rules
 	add_nat_rules
 	add_filter_rules
+	if xray_runtime_ready && transproxy_runtime_ready; then
+		xray_failsafe_disable
+	fi
 }
 
 stop() {
+	if path_requested; then
+		xray_failsafe_enable 'transproxy stopped while Xray path is requested'
+	else
+		xray_failsafe_disable
+	fi
 	cleanup_legacy_rules
 	del_nat_rules
 	del_filter_rules
