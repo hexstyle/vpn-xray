@@ -16,29 +16,21 @@
         "decryption": "none"
       },
       "streamSettings": {
-        "network": "raw",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "target": "${XRAY_SERVER_NAME}:443",
-          "xver": 0,
-          "serverNames": [
-            "${XRAY_SERVER_NAME}"
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "${VPS_TLS_CERT_PATH}",
+              "keyFile": "${VPS_TLS_KEY_PATH}"
+            }
           ],
-          "privateKey": "${XRAY_PRIVATE_KEY}",
-          "shortIds": [
-            "${XRAY_SHORT_ID}"
-          ],
-          "limitFallbackUpload": {
-            "afterBytes": 1048576,
-            "bytesPerSec": 16384,
-            "burstBytesPerSec": 32768
-          },
-          "limitFallbackDownload": {
-            "afterBytes": 1048576,
-            "bytesPerSec": 16384,
-            "burstBytesPerSec": 32768
-          }
+          "alpn": ["h2", "http/1.1"],
+          "minVersion": "1.2"
+        },
+        "wsSettings": {
+          "path": "${XRAY_WS_PATH}",
+          "host": "${XRAY_SERVER_NAME}"
         }
       }
     }

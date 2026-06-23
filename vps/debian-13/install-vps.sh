@@ -139,6 +139,9 @@ export \
   XRAY_PRIVATE_KEY \
   XRAY_USER_FLOW_BLOCK \
   XRAY_CLIENT_FLOW_BLOCK \
+  XRAY_WS_PATH \
+  VPS_TLS_CERT_PATH \
+  VPS_TLS_KEY_PATH \
   VPS_REMOTE_META_PATH \
   VPS_XRAY_BINARY \
   VPS_XRAY_CONFIG_DIR \
@@ -396,3 +399,15 @@ PY
 EOF
 
 echo "Deployed Xray server config to $VPS_HOST using VPS profile $VPS_PROFILE"
+
+# Pull the VPS-side public certificate down to tmp/ so subsequent router
+# installs can pin it against the same VPS without operator action. The
+# private key stays on the VPS — we only fetch the cert.
+vps_cert_local="$ROOT_DIR/tmp/vps-server.crt"
+mkdir -p "$(dirname "$vps_cert_local")"
+if vps_ssh "cat $(shell_quote "$VPS_TLS_CERT_PATH") 2>/dev/null" > "$vps_cert_local.new" 2>/dev/null && [[ -s "$vps_cert_local.new" ]]; then
+  mv "$vps_cert_local.new" "$vps_cert_local"
+  echo "Fetched VPS TLS cert to $vps_cert_local"
+else
+  rm -f "$vps_cert_local.new"
+fi

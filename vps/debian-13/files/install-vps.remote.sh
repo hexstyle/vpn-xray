@@ -9,6 +9,9 @@ XRAY_LOG_DIR='${VPS_XRAY_LOG_DIR}'
 XRAY_SERVICE='${VPS_XRAY_SERVICE}'
 REMOTE_META_PATH='${VPS_REMOTE_META_PATH}'
 XRAY_PORT='${XRAY_PORT}'
+TLS_CERT_PATH='${VPS_TLS_CERT_PATH}'
+TLS_KEY_PATH='${VPS_TLS_KEY_PATH}'
+TLS_CN='${XRAY_SERVER_NAME}'
 
 service_user() {
   local user
@@ -60,6 +63,29 @@ ensure_xray_firewall_port() {
     ufw status 2>/dev/null | grep -q '^Status: active' || return 0
     ufw allow "${XRAY_PORT}/tcp" >/dev/null 2>&1
   fi
+}
+
+ensure_tls_cert() {
+  local user="$1"
+  local group="$2"
+  local cert_dir
+
+  cert_dir="$(dirname "$TLS_CERT_PATH")"
+  install -d -m 750 "$cert_dir"
+
+  if [ ! -s "$TLS_CERT_PATH" ] || [ ! -s "$TLS_KEY_PATH" ]; then
+    command -v openssl >/dev/null 2>&1 || {
+      apt-get update -qq >/dev/null 2>&1 || true
+      apt-get install -y -qq openssl >/dev/null 2>&1
+    }
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -keyout "$TLS_KEY_PATH" -out "$TLS_CERT_PATH" \
+      -subj "/CN=$TLS_CN" \
+      -addext "subjectAltName=DNS:$TLS_CN" >/dev/null 2>&1
+  fi
+  chmod 640 "$TLS_CERT_PATH"
+  chmod 600 "$TLS_KEY_PATH"
+  chown -R "$user:$group" "$cert_dir"
 }
 
 dump_xray_failure() {
@@ -130,6 +156,7 @@ systemctl daemon-reload >/dev/null 2>&1 || true
 runtime_user="$(service_user)"
 runtime_group="$(service_group "$runtime_user")"
 fix_runtime_permissions "$runtime_user" "$runtime_group"
+ensure_tls_cert "$runtime_user" "$runtime_group"
 "$XRAY_BIN" run -test -config /tmp/codex-router-vps-config.json >/dev/null 2>&1
 
 if command -v ufw >/dev/null 2>&1; then

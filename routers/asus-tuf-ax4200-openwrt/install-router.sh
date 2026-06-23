@@ -548,6 +548,16 @@ router_ssh "sed -i 's/\r$//' $remote_source_root/routers/$ROUTER_PROFILE/install
 router_ssh 'mkdir -p /etc/xray /var/log/xray'
 router_ssh 'cat > /etc/xray/codex-xray.json && chmod 600 /etc/xray/codex-xray.json' < "$json_cfg"
 router_ssh 'cat > /etc/redsocks.conf && chmod 600 /etc/redsocks.conf' < "$redsocks_cfg"
+# Push the VPS-side TLS cert fetched by install-vps.sh, falling back to
+# the cert bundled with the profile when no VPS install was run in this
+# session. install-platform.sh's copy_if_changed is the deeper fallback.
+vps_cert_local="$ROOT_DIR/tmp/vps-server.crt"
+profile_cert="$ROUTER_PROFILE_DIR/files/server.crt"
+if [[ -s "$vps_cert_local" ]]; then
+  router_ssh 'cat > /etc/xray/server.crt && chmod 644 /etc/xray/server.crt' < "$vps_cert_local"
+elif [[ -s "$profile_cert" ]]; then
+  router_ssh 'cat > /etc/xray/server.crt && chmod 644 /etc/xray/server.crt' < "$profile_cert"
+fi
 # Only seed /etc/config/router_rules from the rendered template when the file
 # is missing or empty. The template only enumerates a fixed set of options;
 # overwriting an existing file would wipe per-source enable flags
