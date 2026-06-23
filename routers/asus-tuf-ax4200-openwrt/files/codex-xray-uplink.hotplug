@@ -1,0 +1,42 @@
+#!/bin/sh
+
+PATH="/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
+TAG="codex-xray-uplink"
+CONFIG_READY_FILE="/etc/xray/codex-xray.ready"
+ROUTER_CONFIG="/etc/xray/codex-xray.json"
+
+relevant_iface() {
+	case "${INTERFACE:-}" in
+		wan|wwan)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+relevant_action() {
+	case "${ACTION:-}" in
+		ifup|ifupdate|ifdown)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+config_ready() {
+	[ -f "$CONFIG_READY_FILE" ] && [ -s "$ROUTER_CONFIG" ]
+}
+
+log() {
+	logger -t "$TAG" "$*"
+}
+
+relevant_iface || exit 0
+relevant_action || exit 0
+config_ready || exit 0
+
+if /etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1; then
+	log "refreshed VPS egress route after ${INTERFACE} ${ACTION}"
+else
+	log "failed to refresh VPS egress route after ${INTERFACE} ${ACTION}"
+fi

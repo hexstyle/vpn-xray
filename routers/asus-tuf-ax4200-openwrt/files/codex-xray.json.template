@@ -1,0 +1,99 @@
+{
+  "log": {
+    "loglevel": "info",
+    "access": "/var/log/xray/codex-xray-access.log",
+    "error": "/var/log/xray/codex-xray-error.log"
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": ${PROXY_PORT},
+      "protocol": "http",
+      "settings": {},
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": ${LOCAL_SOCKS_PORT},
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": false
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "transparent-udp",
+      "listen": "0.0.0.0",
+      "port": ${TPROXY_UDP_PORT},
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "udp",
+        "followRedirect": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "quic"
+        ]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "${XRAY_SERVER}",
+            "port": ${XRAY_PORT},
+            "users": [
+              {
+                "id": "${XRAY_UUID}",
+                "encryption": "none"${XRAY_USER_FLOW_BLOCK}
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${XRAY_SERVER_NAME}",
+          "alpn": ["h2", "http/1.1"],
+          "fingerprint": "chrome",
+          "certificates": [
+            {"usage": "verify", "certificateFile": "/etc/xray/server.crt"}
+          ]
+        },
+        "wsSettings": {
+          "path": "${XRAY_WS_PATH}",
+          "host": "${XRAY_SERVER_NAME}"
+        }
+      },
+      "mux": {
+        "enabled": true,
+        "concurrency": 8,
+        "xudpConcurrency": 16
+      }
+    }
+  ]
+}

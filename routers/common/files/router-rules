@@ -2742,11 +2742,18 @@ build_xray_ipset_internal() {
 	fi
 
 	: > "$tmp_conf"
-	if [ -f "$domains" ]; then
-		while IFS= read -r value || [ -n "$value" ]; do
-			[ -n "$value" ] || continue
-			printf 'ipset=/%s/%s\n' "$value" "$setname" >> "$tmp_conf"
-		done < "$domains"
+	# Some stock OpenWrt dnsmasq-full builds (e.g. 23.05.x mediatek/filogic) are
+	# compiled with no-ipset and crash on `ipset=...` directives. In that case
+	# skip writing the conf — the ipset is already populated by direct DNS
+	# resolution in the build script above, and the periodic sync keeps it
+	# fresh, so the runtime path stays correct.
+	if [ -f "$domains" ] && dnsmasq --help 2>&1 | grep -q -- '--ipset='; then
+		if ! dnsmasq -v 2>&1 | grep -q 'no-ipset'; then
+			while IFS= read -r value || [ -n "$value" ]; do
+				[ -n "$value" ] || continue
+				printf 'ipset=/%s/%s\n' "$value" "$setname" >> "$tmp_conf"
+			done < "$domains"
+		fi
 	fi
 
 	mkdir -p "$(dirname "$conf")"

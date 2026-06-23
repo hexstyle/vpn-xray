@@ -1,0 +1,372 @@
+#!/bin/sh /etc/rc.common
+
+START=96
+STOP=09
+
+REDSOCKS_CONF="/etc/redsocks.conf"
+REDSOCKS_PID="/var/run/redsocks.pid"
+XRAY_CONFIG="/etc/xray/codex-xray.json"
+TCP_CHAIN="CODEX_TRANSPROXY"
+TCP_PORT="12345"
+LEGACY_DNS_CHAIN="CODEX_DNS_LOCAL"
+LEGACY_DOT_CHAIN="CODEX_DOT_PROXY"
+
+VX_CONFIG="$XRAY_CONFIG"
+. "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}"
+
+xray_runtime_ready() {
+	local pid
+
+	pid="$(cat /var/run/codex-xray.pid 2>/dev/null || true)"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+	netstat -ltnp 2>/dev/null | grep -q ':1083 ' || return 1
+	netstat -ltnp 2>/dev/null | grep -q ':1084 ' || return 1
+	return 0
+}
+
+transproxy_runtime_ready() {
+	local pid
+
+	pid="$(cat "$REDSOCKS_PID" 2>/dev/null || true)"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+	netstat -ltnp 2>/dev/null | grep -q ":$TCP_PORT " || return 1
+	iptables -t nat -S PREROUTING 2>/dev/null | grep -q "$TCP_CHAIN" || return 1
+	return 0
+}
+
+wait_for_xray_runtime() {
+	local tries=0
+
+	while [ "$tries" -lt 8 ]; do
+		if xray_runtime_ready; then
+			return 0
+		fi
+		tries=$((tries + 1))
+		sleep 1
+	done
+
+	return 1
+}
+
+xray_rule_mode() {
+	uci -q get router_rules.global.xray_mode 2>/dev/null || echo full
+}
+
+xray_ipset_name() {
+	uci -q get router_rules.global.xray_ipset 2>/dev/null || echo xray_selective_dst
+}
+
+xray_dnsmasq_conf() {
+	uci -q get router_rules.global.xray_dnsmasq_conf 2>/dev/null || echo /tmp/dnsmasq.d/router-rules-xray-ipset.conf
+}
+
+rules_generated_dir() {
+	uci -q get router_rules.global.generated_dir 2>/dev/null || echo /etc/router-rules/generated
+}
+
+xray_domains_file() {
+	printf '%s/domains.txt\n' "$(rules_generated_dir)"
+}
+
+xray_source_bypass_file() {
+	uci -q get router_rules.global.xray_source_bypass_file 2>/dev/null || echo /etc/router-rules/generated/source-bypass.txt
+}
+
+xray_tproxy_udp_port() {
+	uci -q get router_rules.global.xray_tproxy_udp_port 2>/dev/null || echo 1086
+}
+
+xray_tproxy_fwmark() {
+	uci -q get router_rules.global.xray_tproxy_fwmark 2>/dev/null || echo 1
+}
+
+xray_tproxy_routing_table() {
+	uci -q get router_rules.global.xray_tproxy_table 2>/dev/null || echo 100
+}
+
+sanitize_source_bypass_entry() {
+	printf '%s' "${1:-}" | tr -d '\r' | sed 's/[[:space:]]*#.*$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+xray_dnsmasq_ready() {
+	local conf domains
+
+	conf="$(xray_dnsmasq_conf)"
+	domains="$(xray_domains_file)"
+
+	[ -f "$conf" ] || return 1
+	if [ -s "$domains" ]; then
+		[ -s "$conf" ] || return 1
+	fi
+	return 0
+}
+
+iptables_del() {
+	iptables "$@" 2>/dev/null || true
+}
+
+cleanup_legacy_rules() {
+	local lan_if
+
+	lan_if="$(lan_device)"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j "$LEGACY_DNS_CHAIN"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j "$LEGACY_DNS_CHAIN"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 5300
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
+	iptables_del -t nat -D OUTPUT -p tcp -j "$LEGACY_DOT_CHAIN"
+	iptables_del -t nat -F "$LEGACY_DNS_CHAIN"
+	iptables_del -t nat -X "$LEGACY_DNS_CHAIN"
+	iptables_del -t nat -F "$LEGACY_DOT_CHAIN"
+	iptables_del -t nat -X "$LEGACY_DOT_CHAIN"
+	iptables_del -D FORWARD -i "$lan_if" -p udp -j REJECT
+}
+
+resolve_vps_bypass() {
+	local addr resolved
+
+	addr="$(jsonfilter -i "$XRAY_CONFIG" -e '@.outbounds[0].settings.vnext[0].address' 2>/dev/null | sed -n '1p')"
+	[ -n "$addr" ] || return 0
+
+	case "$addr" in
+		*[!0-9.]*)
+			if command -v nslookup >/dev/null 2>&1; then
+				resolved="$(nslookup "$addr" 2>/dev/null | sed -n 's/^Address [0-9]*: //p' | grep -E '^[0-9]+(\.[0-9]+){3}$' | sed -n '1p')"
+			fi
+			;;
+		*)
+			resolved="$addr"
+			;;
+	esac
+
+	[ -n "$resolved" ] && printf '%s/32\n' "$resolved"
+}
+
+add_source_bypass_rules() {
+	local bypass_file source
+
+	bypass_file="$(xray_source_bypass_file)"
+	[ -f "$bypass_file" ] || return 0
+
+	while IFS= read -r source; do
+		source="$(sanitize_source_bypass_entry "$source")"
+		[ -n "$source" ] || continue
+		iptables -t nat -A "$TCP_CHAIN" -s "$source" -j RETURN
+	done < "$bypass_file"
+}
+
+del_source_bypass_filter_rules() {
+	local lan_if bypass_file source
+
+	lan_if="$1"
+	bypass_file="$(xray_source_bypass_file)"
+	[ -f "$bypass_file" ] || return 0
+
+	while IFS= read -r source; do
+		source="$(sanitize_source_bypass_entry "$source")"
+		[ -n "$source" ] || continue
+		iptables_del -D FORWARD -i "$lan_if" -s "$source" -p udp ! --dport 53 -j ACCEPT
+	done < "$bypass_file"
+}
+
+add_source_bypass_filter_rules() {
+	local lan_if bypass_file source
+
+	lan_if="$1"
+	bypass_file="$(xray_source_bypass_file)"
+	[ -f "$bypass_file" ] || return 0
+
+	while IFS= read -r source; do
+		source="$(sanitize_source_bypass_entry "$source")"
+		[ -n "$source" ] || continue
+		iptables -I FORWARD 1 -i "$lan_if" -s "$source" -p udp ! --dport 53 -j ACCEPT
+	done < "$bypass_file"
+}
+
+add_nat_rules() {
+	local bypass_target mode setname lan_if
+
+	lan_if="$(lan_device)"
+
+	iptables -t nat -N "$TCP_CHAIN" 2>/dev/null || true
+	iptables -t nat -F "$TCP_CHAIN"
+	add_source_bypass_rules
+
+	for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+		iptables -t nat -A "$TCP_CHAIN" -d "$net" -j RETURN
+	done
+
+	bypass_target="$(resolve_vps_bypass)"
+	[ -n "$bypass_target" ] && iptables -t nat -A "$TCP_CHAIN" -d "$bypass_target" -j RETURN
+	mode="$(xray_rule_mode)"
+	setname="$(xray_ipset_name)"
+
+	if [ "$mode" = "selective" ]; then
+		if ! ipset list "$setname" >/dev/null 2>&1 || ! xray_dnsmasq_ready; then
+			if [ "${ROUTER_RULES_SKIP_BUILD_IPSET:-0}" != '1' ]; then
+				ROUTER_RULES_USE_CACHED_RESOLVED=1 /usr/bin/router-rules build-xray-ipset >/dev/null 2>&1 || true
+			fi
+		fi
+		iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+		iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
+		iptables -t nat -I PREROUTING 1 -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+		iptables -t nat -I PREROUTING 1 -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
+		if ipset list "$setname" >/dev/null 2>&1; then
+			iptables -t nat -A "$TCP_CHAIN" -p tcp -m set --match-set "$setname" dst -j REDIRECT --to-ports "$TCP_PORT"
+		fi
+	else
+		iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+		iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
+		iptables -t nat -A "$TCP_CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
+	fi
+
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp -j "$TCP_CHAIN"
+	iptables -t nat -I PREROUTING 1 -i "$lan_if" -p tcp -j "$TCP_CHAIN"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 5300
+}
+
+del_nat_rules() {
+	local lan_if
+
+	lan_if="$(lan_device)"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp -j "$TCP_CHAIN"
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 5300
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
+	iptables_del -t nat -F "$TCP_CHAIN"
+	iptables_del -t nat -X "$TCP_CHAIN"
+}
+
+add_filter_rules() {
+	local lan_if mode setname
+
+	lan_if="$(lan_device)"
+	mode="$(xray_rule_mode)"
+	setname="$(xray_ipset_name)"
+
+	# UDP transparent forwarding goes through TPROXY into the xray
+	# dokodemo-door inbound (configured in add_tproxy_rules below).
+	# QUIC/UDP to selective destinations therefore takes the same Xray
+	# path as TCP — no direct WAN bypass, no destination-specific REJECT
+	# needed in selective mode.
+	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -m set --match-set "$setname" dst -j REJECT
+	if [ "$mode" != "selective" ]; then
+		# Full mode keeps the blanket REJECT as a safety net because
+		# everything is supposed to traverse Xray and direct UDP would
+		# imply a configuration error.
+		iptables -I FORWARD 1 -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	fi
+	del_source_bypass_filter_rules "$lan_if"
+	add_source_bypass_filter_rules "$lan_if"
+	ip6tables -D FORWARD -i "$lan_if" -j REJECT 2>/dev/null || true
+	ip6tables -I FORWARD 1 -i "$lan_if" -j REJECT 2>/dev/null || true
+}
+
+del_filter_rules() {
+	local lan_if setname
+
+	lan_if="$(lan_device)"
+	setname="$(xray_ipset_name)"
+	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -m set --match-set "$setname" dst -j REJECT
+	del_source_bypass_filter_rules "$lan_if"
+	ip6tables -D FORWARD -i "$lan_if" -j REJECT 2>/dev/null || true
+}
+
+add_tproxy_rules() {
+	local lan_if mode setname tproxy_port fwmark table
+
+	lan_if="$(lan_device)"
+	mode="$(xray_rule_mode)"
+	setname="$(xray_ipset_name)"
+	tproxy_port="$(xray_tproxy_udp_port)"
+	fwmark="$(xray_tproxy_fwmark)"
+	table="$(xray_tproxy_routing_table)"
+
+	# Only selective mode has a TPROXY UDP path; full mode currently
+	# does not redirect UDP to Xray.
+	[ "$mode" = "selective" ] || return 0
+	ipset list "$setname" >/dev/null 2>&1 || return 0
+
+	# Local routing rule so TPROXY can deliver packets to the local
+	# xray dokodemo-door inbound after marking them.
+	ip rule add fwmark "$fwmark" lookup "$table" 2>/dev/null || true
+	ip route add local default dev lo table "$table" 2>/dev/null || true
+
+	iptables -t mangle -N CODEX_TPROXY 2>/dev/null || true
+	iptables -t mangle -F CODEX_TPROXY
+	for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+		iptables -t mangle -A CODEX_TPROXY -d "$net" -j RETURN
+	done
+	iptables -t mangle -A CODEX_TPROXY -p udp -m set --match-set "$setname" dst \
+		-j TPROXY --tproxy-mark "$fwmark/$fwmark" --on-port "$tproxy_port"
+
+	iptables_del -t mangle -D PREROUTING -i "$lan_if" -p udp -j CODEX_TPROXY
+	iptables -t mangle -I PREROUTING 1 -i "$lan_if" -p udp -j CODEX_TPROXY
+}
+
+del_tproxy_rules() {
+	local lan_if fwmark table
+
+	lan_if="$(lan_device)"
+	fwmark="$(xray_tproxy_fwmark)"
+	table="$(xray_tproxy_routing_table)"
+
+	iptables_del -t mangle -D PREROUTING -i "$lan_if" -p udp -j CODEX_TPROXY
+	iptables_del -t mangle -F CODEX_TPROXY
+	iptables_del -t mangle -X CODEX_TPROXY
+	ip rule del fwmark "$fwmark" lookup "$table" 2>/dev/null || true
+	ip route flush table "$table" 2>/dev/null || true
+}
+
+ensure_codex_xray() {
+	if xray_runtime_ready; then
+		return 0
+	fi
+	/etc/init.d/codex-xray start >/dev/null 2>&1 || return 1
+	if wait_for_xray_runtime; then
+		return 0
+	fi
+	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+	return 1
+}
+
+start() {
+	if ! path_requested; then
+		xray_failsafe_disable
+		return 0
+	fi
+	xray_failsafe_enable 'transproxy starting while Xray path is requested'
+	ensure_codex_xray || return 1
+	[ -f "$REDSOCKS_CONF" ] || return 1
+	/usr/sbin/redsocks -t -c "$REDSOCKS_CONF" || return 1
+	/etc/init.d/redsocks stop >/dev/null 2>&1 || true
+	/etc/init.d/redsocks start >/dev/null 2>&1 || return 1
+	cleanup_legacy_rules
+	add_nat_rules
+	add_filter_rules
+	add_tproxy_rules
+	if xray_runtime_ready && transproxy_runtime_ready; then
+		xray_failsafe_disable
+	fi
+}
+
+stop() {
+	if path_requested; then
+		xray_failsafe_enable 'transproxy stopped while Xray path is requested'
+	else
+		xray_failsafe_disable
+	fi
+	cleanup_legacy_rules
+	del_nat_rules
+	del_filter_rules
+	del_tproxy_rules
+	/etc/init.d/redsocks stop >/dev/null 2>&1 || true
+}
+
+restart() {
+	stop
+	sleep 1
+	start
+}

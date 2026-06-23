@@ -1,0 +1,18 @@
+base {
+	log_debug = off;
+	log_info = on;
+	log = "syslog:local7";
+	daemon = on;
+	redirector = iptables;
+	rlimit_nofile = 8192;
+	redsocks_conn_max = 2048;
+	max_accept_backoff = 1000;
+}
+
+redsocks {
+	local_ip = 0.0.0.0;
+	local_port = ${REDSOCKS_PORT};
+	ip = 127.0.0.1;
+	port = ${LOCAL_SOCKS_PORT};
+	type = socks5;
+}

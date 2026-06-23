@@ -98,8 +98,8 @@ if [ ! -x "$XRAY_BIN" ]; then
       exit 1
     }
     rm -rf /tmp/xray-extract "$bundled"
-    if [ ! -f "/etc/systemd/system/${XRAY_SERVICE}.service" ]; then
-      cat > "/etc/systemd/system/${XRAY_SERVICE}.service" <<UNIT
+    if [ ! -f "/etc/systemd/system/$XRAY_SERVICE.service" ]; then
+      cat > "/etc/systemd/system/$XRAY_SERVICE.service" <<UNIT
 [Unit]
 Description=Xray Service
 After=network.target nss-lookup.target

@@ -17,7 +17,11 @@ current_switch_state() {
 	local model gpio status
 
 	if [ ! -f /proc/gl-hw-info/switch-button ] || [ ! -f /proc/gl-hw-info/model ]; then
-		echo unknown
+		# Non-GL.iNet hardware (vanilla OpenWrt) has no physical Xray
+		# switch — keep the path always requested. GL.iNet routers always
+		# expose /proc/gl-hw-info so this branch only triggers on stock
+		# devices where the switch concept does not apply.
+		echo on
 		return
 	fi
 

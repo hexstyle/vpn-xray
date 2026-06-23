@@ -1,0 +1,410 @@
+#!/bin/sh /etc/rc.common
+
+START=95
+STOP=10
+EXTRA_COMMANDS="status refresh_egress_route best_uplink"
+EXTRA_HELP="	status			Show runtime status
+	refresh_egress_route	Refresh VPS egress route for the active uplink
+	best_uplink		Show the preferred uplink interface for Xray egress"
+
+NAME="codex-xray"
+BIN="/usr/local/bin/codex-xray-core"
+CONFIG="/etc/xray/codex-xray.json"
+PIDFILE="/var/run/${NAME}.pid"
+MPTCP_STATE_FILE="/var/run/${NAME}.mptcp"
+LOG_DIR="/var/log/xray"
+LOCAL_MANGLE_CHAIN="CODEX_XRAY_LOCAL"
+SERVER_ROUTE_STATE_FILE="/var/run/${NAME}.server-routes"
+UPLINK_STATE_FILE="/var/run/${NAME}.uplink"
+OFFLOAD_STATE_DIR="/var/run/${NAME}.offload"
+OFFLOAD_WAN_FILE="/var/run/${NAME}.wan"
+
+VX_CONFIG="$CONFIG"
+. "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}"
+
+config_value() {
+	local expr="$1"
+
+	jsonfilter -i "$CONFIG" -e "$expr" 2>/dev/null | sed -n '1p'
+}
+
+server_port() {
+	config_value '@.outbounds[0].settings.vnext[0].port'
+}
+
+server_address() {
+	config_value '@.outbounds[0].settings.vnext[0].address'
+}
+
+resolve_server_ipv4s() {
+	local addr resolved
+
+	addr="$(server_address)"
+	[ -n "$addr" ] || return 0
+
+	case "$addr" in
+		*[!0-9.]*)
+			if command -v nslookup >/dev/null 2>&1; then
+				resolved="$(nslookup "$addr" 2>/dev/null | sed -n 's/^Address [0-9]*: //p' | grep -E '^[0-9]+(\.[0-9]+){3}$' | sort -u || true)"
+				[ -n "$resolved" ] && printf '%s\n' "$resolved"
+			fi
+			;;
+		*)
+			printf '%s\n' "$addr"
+			;;
+	esac
+}
+
+iface_status_value() {
+	local iface="$1"
+	local expr="$2"
+
+	ifstatus "$iface" 2>/dev/null | jsonfilter -e "$expr" 2>/dev/null | sed -n '1p'
+}
+
+iface_is_up() {
+	[ "$(iface_status_value "$1" '@.up')" = 'true' ]
+}
+
+iface_device() {
+	local value
+
+	value="$(iface_status_value "$1" '@.l3_device')"
+	[ -n "$value" ] || value="$(iface_status_value "$1" '@.device')"
+	printf '%s\n' "$value"
+}
+
+iface_gateway() {
+	iface_status_value "$1" '@.route[0].nexthop'
+}
+
+device_carrier_up() {
+	local dev="$1"
+	local carrier_path="/sys/class/net/$dev/carrier"
+
+	[ -n "$dev" ] || return 1
+	[ -f "$carrier_path" ] || return 0
+	[ "$(cat "$carrier_path" 2>/dev/null || true)" = '1' ]
+}
+
+preferred_uplink_iface() {
+	local iface dev
+
+	for iface in wan wwan; do
+		iface_is_up "$iface" || continue
+		dev="$(iface_device "$iface")"
+		[ -n "$dev" ] || continue
+		device_carrier_up "$dev" || continue
+		printf '%s\n' "$iface"
+		return 0
+	done
+
+	for iface in wan wwan; do
+		if iface_is_up "$iface"; then
+			printf '%s\n' "$iface"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+current_uplink_signature() {
+	local iface dev gateway
+
+	iface="$(preferred_uplink_iface || true)"
+	[ -n "$iface" ] || return 1
+	dev="$(iface_device "$iface")"
+	gateway="$(iface_gateway "$iface")"
+	printf '%s|%s|%s\n' "$iface" "$dev" "$gateway"
+}
+
+record_uplink_signature() {
+	local signature="$1"
+
+	if [ -n "$signature" ]; then
+		printf '%s\n' "$signature" > "$UPLINK_STATE_FILE"
+	else
+		rm -f "$UPLINK_STATE_FILE"
+	fi
+}
+
+clear_server_routes() {
+	if [ -f "$SERVER_ROUTE_STATE_FILE" ]; then
+		sed -n 's/^target=//p' "$SERVER_ROUTE_STATE_FILE" | while IFS= read -r target; do
+			[ -n "$target" ] || continue
+			ip -4 route del "$target" >/dev/null 2>&1 || true
+		done
+	fi
+	rm -f "$SERVER_ROUTE_STATE_FILE"
+}
+
+configure_server_routes() {
+	local iface dev gateway tmp addr added=0
+
+	iface="$(preferred_uplink_iface || true)"
+	dev=''
+	gateway=''
+	if [ -n "$iface" ]; then
+		dev="$(iface_device "$iface")"
+		gateway="$(iface_gateway "$iface")"
+	fi
+
+	clear_server_routes
+	[ -n "$dev" ] || return 0
+
+	tmp="$(mktemp)"
+	while IFS= read -r addr; do
+		[ -n "$addr" ] || continue
+		if [ -n "$gateway" ]; then
+			ip -4 route replace "$addr/32" via "$gateway" dev "$dev" >/dev/null 2>&1 \
+				|| ip -4 route replace "$addr/32" dev "$dev" >/dev/null 2>&1 \
+				|| true
+		else
+			ip -4 route replace "$addr/32" dev "$dev" >/dev/null 2>&1 || true
+		fi
+		printf 'target=%s/32\n' "$addr" >> "$tmp"
+		added=1
+	done <<EOF
+$(resolve_server_ipv4s || true)
+EOF
+
+	if [ "$added" = '1' ]; then
+		mv "$tmp" "$SERVER_ROUTE_STATE_FILE"
+	else
+		rm -f "$tmp"
+	fi
+
+	ip -4 route flush cache >/dev/null 2>&1 || true
+}
+
+is_running() {
+	[ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+}
+
+wan_device() {
+	local probe dev
+
+	probe="$(resolve_server_ipv4s | sed -n '1p')"
+	[ -n "$probe" ] || probe="$(server_address)"
+	[ -n "$probe" ] || return 0
+
+	if command -v ip >/dev/null 2>&1; then
+		dev="$(ip route get "$probe" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | sed -n '1p')"
+		[ -n "$dev" ] || dev="$(ip route 2>/dev/null | sed -n 's/^default .* dev \([^ ]*\).*/\1/p' | sed -n '1p')"
+	else
+		dev="$(route -n 2>/dev/null | awk '$1=="0.0.0.0"{print $8; exit}')"
+	fi
+
+	[ -n "$dev" ] && printf '%s\n' "$dev"
+}
+
+ethtool_feature_state() {
+	local dev="$1"
+	local name="$2"
+
+	ethtool -k "$dev" 2>/dev/null | sed -n "s/^${name}: \(on\|off\).*/\1/p" | sed -n '1p'
+}
+
+save_offload_state() {
+	local dev file state
+
+	command -v ethtool >/dev/null 2>&1 || return 0
+	dev="$(wan_device || true)"
+	[ -n "$dev" ] || return 0
+
+	mkdir -p "$OFFLOAD_STATE_DIR"
+	file="$OFFLOAD_STATE_DIR/$dev"
+
+	if [ ! -s "$file" ]; then
+		{
+			printf 'rx=%s\n' "$(ethtool_feature_state "$dev" 'rx-checksumming')"
+			printf 'tx=%s\n' "$(ethtool_feature_state "$dev" 'tx-checksumming')"
+			printf 'sg=%s\n' "$(ethtool_feature_state "$dev" 'scatter-gather')"
+			printf 'tso=%s\n' "$(ethtool_feature_state "$dev" 'tcp-segmentation-offload')"
+			printf 'gso=%s\n' "$(ethtool_feature_state "$dev" 'generic-segmentation-offload')"
+			printf 'gro=%s\n' "$(ethtool_feature_state "$dev" 'generic-receive-offload')"
+		} > "$file"
+	fi
+
+	printf '%s\n' "$dev" > "$OFFLOAD_WAN_FILE"
+	ethtool -K "$dev" rx off tx off sg off tso off gso off gro off >/dev/null 2>&1 || true
+}
+
+restore_offload_state() {
+	local dev file rx tx sg tso gso gro
+
+	command -v ethtool >/dev/null 2>&1 || return 0
+	[ -f "$OFFLOAD_WAN_FILE" ] || return 0
+
+	dev="$(cat "$OFFLOAD_WAN_FILE" 2>/dev/null || true)"
+	file="$OFFLOAD_STATE_DIR/$dev"
+	rm -f "$OFFLOAD_WAN_FILE"
+	[ -n "$dev" ] || return 0
+	[ -s "$file" ] || return 0
+
+	rx="$(sed -n 's/^rx=//p' "$file" | sed -n '1p')"
+	tx="$(sed -n 's/^tx=//p' "$file" | sed -n '1p')"
+	sg="$(sed -n 's/^sg=//p' "$file" | sed -n '1p')"
+	tso="$(sed -n 's/^tso=//p' "$file" | sed -n '1p')"
+	gso="$(sed -n 's/^gso=//p' "$file" | sed -n '1p')"
+	gro="$(sed -n 's/^gro=//p' "$file" | sed -n '1p')"
+
+	[ -n "$rx" ] && ethtool -K "$dev" rx "$rx" >/dev/null 2>&1 || true
+	[ -n "$tx" ] && ethtool -K "$dev" tx "$tx" >/dev/null 2>&1 || true
+	[ -n "$sg" ] && ethtool -K "$dev" sg "$sg" >/dev/null 2>&1 || true
+	[ -n "$tso" ] && ethtool -K "$dev" tso "$tso" >/dev/null 2>&1 || true
+	[ -n "$gso" ] && ethtool -K "$dev" gso "$gso" >/dev/null 2>&1 || true
+	[ -n "$gro" ] && ethtool -K "$dev" gro "$gro" >/dev/null 2>&1 || true
+
+	rm -f "$file"
+	rmdir "$OFFLOAD_STATE_DIR" 2>/dev/null || true
+}
+
+clear_local_tcpmss() {
+	iptables -t mangle -D POSTROUTING -j "$LOCAL_MANGLE_CHAIN" 2>/dev/null || true
+	iptables -t mangle -F "$LOCAL_MANGLE_CHAIN" 2>/dev/null || true
+	iptables -t mangle -X "$LOCAL_MANGLE_CHAIN" 2>/dev/null || true
+}
+
+configure_local_tcpmss() {
+	local port addr added=0
+
+	port="$(server_port)"
+	[ -n "$port" ] || return 0
+
+	iptables -t mangle -N "$LOCAL_MANGLE_CHAIN" 2>/dev/null || true
+	iptables -t mangle -F "$LOCAL_MANGLE_CHAIN"
+
+	while IFS= read -r addr; do
+		[ -n "$addr" ] || continue
+		iptables -t mangle -A "$LOCAL_MANGLE_CHAIN" \
+			-p tcp \
+			-d "$addr" \
+			--dport "$port" \
+			--tcp-flags SYN,RST SYN \
+			-j TCPMSS --clamp-mss-to-pmtu
+		added=1
+	done <<EOF
+$(resolve_server_ipv4s || true)
+EOF
+
+	if [ "$added" = '1' ]; then
+		iptables -t mangle -C POSTROUTING -j "$LOCAL_MANGLE_CHAIN" >/dev/null 2>&1 \
+			|| iptables -t mangle -I POSTROUTING 1 -j "$LOCAL_MANGLE_CHAIN"
+	else
+		clear_local_tcpmss
+	fi
+}
+
+save_mptcp_state() {
+	[ -r /proc/sys/net/mptcp/enabled ] || return 0
+	cat /proc/sys/net/mptcp/enabled > "$MPTCP_STATE_FILE"
+	echo 0 > /proc/sys/net/mptcp/enabled
+}
+
+restore_mptcp_state() {
+	[ -r /proc/sys/net/mptcp/enabled ] || return 0
+	if [ -f "$MPTCP_STATE_FILE" ]; then
+		cat "$MPTCP_STATE_FILE" > /proc/sys/net/mptcp/enabled 2>/dev/null || true
+		rm -f "$MPTCP_STATE_FILE"
+	fi
+}
+
+refresh_egress_route() {
+	local old_signature new_signature needs_refresh=0
+
+	old_signature="$(cat "$UPLINK_STATE_FILE" 2>/dev/null || true)"
+
+	if ! path_requested; then
+		clear_server_routes
+		clear_local_tcpmss
+		record_uplink_signature ''
+		return 0
+	fi
+
+	new_signature="$(current_uplink_signature || true)"
+	[ -f "$SERVER_ROUTE_STATE_FILE" ] || needs_refresh=1
+	[ "$old_signature" = "$new_signature" ] || needs_refresh=1
+
+	if [ "$needs_refresh" = '1' ]; then
+		configure_local_tcpmss
+		configure_server_routes
+	fi
+
+	record_uplink_signature "$new_signature"
+
+	if [ "$needs_refresh" = '1' ] && [ -n "$old_signature" ] && [ -n "$new_signature" ] && [ "$old_signature" != "$new_signature" ] && is_running; then
+		restart
+	fi
+}
+
+best_uplink() {
+	local iface dev gateway
+
+	iface="$(preferred_uplink_iface || true)"
+	[ -n "$iface" ] || return 1
+	dev="$(iface_device "$iface")"
+	gateway="$(iface_gateway "$iface")"
+	printf 'iface=%s dev=%s gateway=%s\n' "$iface" "$dev" "$gateway"
+}
+
+start() {
+	path_requested || return 0
+	[ -x "$BIN" ] || {
+		echo "$BIN missing"
+		return 1
+	}
+
+	mkdir -p "$LOG_DIR" /etc/xray /var/run
+
+	"$BIN" run -test -config "$CONFIG" >/dev/null 2>&1 || {
+		echo "config check failed"
+		return 1
+	}
+
+	refresh_egress_route
+	save_mptcp_state
+	save_offload_state
+
+	# Spread eth0 IRQs across both CPUs to reduce spinlock contention on CPU0
+	if [ -d /proc/irq ]; then
+		for d in /proc/irq/*/; do
+			action="$(cat "${d}actions" 2>/dev/null || true)"
+			case "$action" in
+				*eth0*)
+					echo 3 > "${d}smp_affinity" 2>/dev/null || true
+					;;
+			esac
+		done
+	fi
+
+	export GOMEMLIMIT=120MiB
+	export GOGC=50
+	start-stop-daemon -S -b -m -p "$PIDFILE" -x "$BIN" -- run -config "$CONFIG"
+}
+
+stop() {
+	start-stop-daemon -K -p "$PIDFILE" -x "$BIN" 2>/dev/null || true
+	rm -f "$PIDFILE"
+	clear_local_tcpmss
+	clear_server_routes
+	record_uplink_signature ''
+	restore_mptcp_state
+	restore_offload_state
+}
+
+restart() {
+	stop
+	sleep 1
+	start
+}
+
+status() {
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+		echo "$NAME running"
+		return 0
+	fi
+	echo "$NAME stopped"
+	return 1
+}

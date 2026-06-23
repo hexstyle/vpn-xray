@@ -123,12 +123,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [[ -n "${XRAY_FLOW:-}" ]]; then
+  printf -v XRAY_USER_FLOW_BLOCK ',\n                "flow": "%s"' "$XRAY_FLOW"
+  printf -v XRAY_CLIENT_FLOW_BLOCK ',\n            "flow": "%s"' "$XRAY_FLOW"
+else
+  XRAY_USER_FLOW_BLOCK=""
+  XRAY_CLIENT_FLOW_BLOCK=""
+fi
+
 export \
   XRAY_PORT \
   XRAY_UUID \
   XRAY_SERVER_NAME \
   XRAY_SHORT_ID \
   XRAY_PRIVATE_KEY \
+  XRAY_USER_FLOW_BLOCK \
+  XRAY_CLIENT_FLOW_BLOCK \
   VPS_REMOTE_META_PATH \
   VPS_XRAY_BINARY \
   VPS_XRAY_CONFIG_DIR \
