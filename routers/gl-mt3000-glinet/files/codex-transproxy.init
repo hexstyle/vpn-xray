@@ -72,6 +72,18 @@ xray_source_bypass_file() {
 	uci -q get router_rules.global.xray_source_bypass_file 2>/dev/null || echo /etc/router-rules/generated/source-bypass.txt
 }
 
+xray_tproxy_udp_port() {
+	uci -q get router_rules.global.xray_tproxy_udp_port 2>/dev/null || echo 1086
+}
+
+xray_tproxy_fwmark() {
+	uci -q get router_rules.global.xray_tproxy_fwmark 2>/dev/null || echo 1
+}
+
+xray_tproxy_routing_table() {
+	uci -q get router_rules.global.xray_tproxy_table 2>/dev/null || echo 100
+}
+
 sanitize_source_bypass_entry() {
 	printf '%s' "${1:-}" | tr -d '\r' | sed 's/[[:space:]]*#.*$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
@@ -226,14 +238,25 @@ del_nat_rules() {
 }
 
 add_filter_rules() {
-	local lan_if
+	local lan_if mode setname
 
 	lan_if="$(lan_device)"
-	# This stack only supports transparent TCP forwarding.
-	# Reject forwarded non-DNS UDP and IPv6 so client traffic cannot bypass
-	# the Xray path over QUIC/UDP or native IPv6 when the path is enabled.
+	mode="$(xray_rule_mode)"
+	setname="$(xray_ipset_name)"
+
+	# UDP transparent forwarding goes through TPROXY into the xray
+	# dokodemo-door inbound (configured in add_tproxy_rules below).
+	# QUIC/UDP to selective destinations therefore takes the same Xray
+	# path as TCP — no direct WAN bypass, no destination-specific REJECT
+	# needed in selective mode.
 	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -j REJECT
-	iptables -I FORWARD 1 -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -m set --match-set "$setname" dst -j REJECT
+	if [ "$mode" != "selective" ]; then
+		# Full mode keeps the blanket REJECT as a safety net because
+		# everything is supposed to traverse Xray and direct UDP would
+		# imply a configuration error.
+		iptables -I FORWARD 1 -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	fi
 	del_source_bypass_filter_rules "$lan_if"
 	add_source_bypass_filter_rules "$lan_if"
 	ip6tables -D FORWARD -i "$lan_if" -j REJECT 2>/dev/null || true
@@ -241,12 +264,60 @@ add_filter_rules() {
 }
 
 del_filter_rules() {
-	local lan_if
+	local lan_if setname
 
 	lan_if="$(lan_device)"
+	setname="$(xray_ipset_name)"
 	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -j REJECT
+	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -m set --match-set "$setname" dst -j REJECT
 	del_source_bypass_filter_rules "$lan_if"
 	ip6tables -D FORWARD -i "$lan_if" -j REJECT 2>/dev/null || true
+}
+
+add_tproxy_rules() {
+	local lan_if mode setname tproxy_port fwmark table
+
+	lan_if="$(lan_device)"
+	mode="$(xray_rule_mode)"
+	setname="$(xray_ipset_name)"
+	tproxy_port="$(xray_tproxy_udp_port)"
+	fwmark="$(xray_tproxy_fwmark)"
+	table="$(xray_tproxy_routing_table)"
+
+	# Only selective mode has a TPROXY UDP path; full mode currently
+	# does not redirect UDP to Xray.
+	[ "$mode" = "selective" ] || return 0
+	ipset list "$setname" >/dev/null 2>&1 || return 0
+
+	# Local routing rule so TPROXY can deliver packets to the local
+	# xray dokodemo-door inbound after marking them.
+	ip rule add fwmark "$fwmark" lookup "$table" 2>/dev/null || true
+	ip route add local default dev lo table "$table" 2>/dev/null || true
+
+	iptables -t mangle -N CODEX_TPROXY 2>/dev/null || true
+	iptables -t mangle -F CODEX_TPROXY
+	for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+		iptables -t mangle -A CODEX_TPROXY -d "$net" -j RETURN
+	done
+	iptables -t mangle -A CODEX_TPROXY -p udp -m set --match-set "$setname" dst \
+		-j TPROXY --tproxy-mark "$fwmark/$fwmark" --on-port "$tproxy_port"
+
+	iptables_del -t mangle -D PREROUTING -i "$lan_if" -p udp -j CODEX_TPROXY
+	iptables -t mangle -I PREROUTING 1 -i "$lan_if" -p udp -j CODEX_TPROXY
+}
+
+del_tproxy_rules() {
+	local lan_if fwmark table
+
+	lan_if="$(lan_device)"
+	fwmark="$(xray_tproxy_fwmark)"
+	table="$(xray_tproxy_routing_table)"
+
+	iptables_del -t mangle -D PREROUTING -i "$lan_if" -p udp -j CODEX_TPROXY
+	iptables_del -t mangle -F CODEX_TPROXY
+	iptables_del -t mangle -X CODEX_TPROXY
+	ip rule del fwmark "$fwmark" lookup "$table" 2>/dev/null || true
+	ip route flush table "$table" 2>/dev/null || true
 }
 
 ensure_codex_xray() {
@@ -275,6 +346,7 @@ start() {
 	cleanup_legacy_rules
 	add_nat_rules
 	add_filter_rules
+	add_tproxy_rules
 	if xray_runtime_ready && transproxy_runtime_ready; then
 		xray_failsafe_disable
 	fi
@@ -289,6 +361,7 @@ stop() {
 	cleanup_legacy_rules
 	del_nat_rules
 	del_filter_rules
+	del_tproxy_rules
 	/etc/init.d/redsocks stop >/dev/null 2>&1 || true
 }
 

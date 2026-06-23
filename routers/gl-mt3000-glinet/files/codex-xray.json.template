@@ -33,6 +33,27 @@
           "tls"
         ]
       }
+    },
+    {
+      "tag": "transparent-udp",
+      "listen": "0.0.0.0",
+      "port": ${TPROXY_UDP_PORT},
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "udp",
+        "followRedirect": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "quic"
+        ]
+      }
     }
   ],
   "outbounds": [
@@ -53,20 +74,25 @@
         ]
       },
       "streamSettings": {
-        "network": "raw",
-        "security": "reality",
-        "realitySettings": {
-          "fingerprint": "edge",
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
           "serverName": "${XRAY_SERVER_NAME}",
-          "publicKey": "${XRAY_PUBLIC_KEY}",
-          "shortId": "${XRAY_SHORT_ID}",
-          "spiderX": "/"
+          "alpn": ["h2", "http/1.1"],
+          "fingerprint": "chrome",
+          "certificates": [
+            {"usage": "verify", "certificateFile": "/etc/xray/server.crt"}
+          ]
+        },
+        "wsSettings": {
+          "path": "${XRAY_WS_PATH}",
+          "host": "${XRAY_SERVER_NAME}"
         }
       },
       "mux": {
         "enabled": true,
         "concurrency": 8,
-        "xudpConcurrency": -1
+        "xudpConcurrency": 16
       }
     }
   ]

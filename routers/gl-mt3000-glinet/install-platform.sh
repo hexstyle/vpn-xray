@@ -1072,6 +1072,12 @@ EOF
 	fi
 
 	mkdir -p /etc/hotplug.d/iface
+	# Pinned VPS cert used by VLESS+WS+TLS outbound (self-signed). Lives
+	# next to codex-xray.json so the runtime can verify the upstream pin.
+	if [ -f "$PROFILE_DIR/files/server.crt" ]; then
+		copy_if_changed "$PROFILE_DIR/files/server.crt" /etc/xray/server.crt
+		chmod 644 /etc/xray/server.crt
+	fi
 	copy_if_changed "$PROFILE_DIR/files/codex-xray.init" /etc/init.d/codex-xray
 	copy_if_changed "$PROFILE_DIR/files/codex-transproxy.init" /etc/init.d/codex-transproxy
 	copy_if_changed "$PROFILE_DIR/files/codex-xray-uplink.hotplug" /etc/hotplug.d/iface/95-codex-xray-uplink
