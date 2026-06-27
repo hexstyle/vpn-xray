@@ -1143,7 +1143,12 @@ EOF
 	uci -q delete dhcp.@dnsmasq[0].noresolv >/dev/null 2>&1 || true
 	uci set dhcp.@dnsmasq[0].resolvfile='/tmp/resolv.conf.d/resolv.conf.auto'
 	uci set dhcp.@dnsmasq[0].filter_aaaa='1'
+	# Reset the upstream list then add explicit public resolvers so dnsmasq
+	# has working DNS even when the WAN-provided resolv.conf is empty or
+	# slow. dnsmasq still consults resolvfile in parallel (noresolv is off).
 	uci -q delete dhcp.@dnsmasq[0].server >/dev/null 2>&1 || true
+	uci add_list dhcp.@dnsmasq[0].server='8.8.8.8'
+	uci add_list dhcp.@dnsmasq[0].server='8.8.4.4'
 	uci commit dhcp
 	uci set network.lan.ip6assign='0'
 	uci set stubby.global.enabled='0'

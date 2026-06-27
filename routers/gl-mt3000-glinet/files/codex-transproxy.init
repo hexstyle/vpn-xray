@@ -201,22 +201,25 @@ add_nat_rules() {
 	mode="$(xray_rule_mode)"
 	setname="$(xray_ipset_name)"
 
+	# Local DNS interception applies to both modes: plaintext DNS from LAN
+	# clients goes into the router's dnsmasq so the resolver stays under
+	# the path's control and clients cannot bypass it with an external
+	# nameserver.
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
+	iptables -t nat -I PREROUTING 1 -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+	iptables -t nat -I PREROUTING 1 -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
+
 	if [ "$mode" = "selective" ]; then
 		if ! ipset list "$setname" >/dev/null 2>&1 || ! xray_dnsmasq_ready; then
 			if [ "${ROUTER_RULES_SKIP_BUILD_IPSET:-0}" != '1' ]; then
 				ROUTER_RULES_USE_CACHED_RESOLVED=1 /usr/bin/router-rules build-xray-ipset >/dev/null 2>&1 || true
 			fi
 		fi
-		iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
-		iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
-		iptables -t nat -I PREROUTING 1 -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
-		iptables -t nat -I PREROUTING 1 -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
 		if ipset list "$setname" >/dev/null 2>&1; then
 			iptables -t nat -A "$TCP_CHAIN" -p tcp -m set --match-set "$setname" dst -j REDIRECT --to-ports "$TCP_PORT"
 		fi
 	else
-		iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
-		iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
 		iptables -t nat -A "$TCP_CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
 	fi
 
@@ -245,18 +248,13 @@ add_filter_rules() {
 	setname="$(xray_ipset_name)"
 
 	# UDP transparent forwarding goes through TPROXY into the xray
-	# dokodemo-door inbound (configured in add_tproxy_rules below).
-	# QUIC/UDP to selective destinations therefore takes the same Xray
-	# path as TCP — no direct WAN bypass, no destination-specific REJECT
-	# needed in selective mode.
+	# dokodemo-door inbound (configured in add_tproxy_rules below). Both
+	# selective and full modes carry UDP through Xray, so no blanket or
+	# destination-specific UDP REJECT belongs in FORWARD. We still scrub
+	# any REJECT left over from older builds so a stale rule cannot keep
+	# blocking client UDP after upgrade.
 	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -j REJECT
 	iptables_del -D FORWARD -i "$lan_if" -p udp ! --dport 53 -m set --match-set "$setname" dst -j REJECT
-	if [ "$mode" != "selective" ]; then
-		# Full mode keeps the blanket REJECT as a safety net because
-		# everything is supposed to traverse Xray and direct UDP would
-		# imply a configuration error.
-		iptables -I FORWARD 1 -i "$lan_if" -p udp ! --dport 53 -j REJECT
-	fi
 	del_source_bypass_filter_rules "$lan_if"
 	add_source_bypass_filter_rules "$lan_if"
 	ip6tables -D FORWARD -i "$lan_if" -j REJECT 2>/dev/null || true
@@ -284,10 +282,12 @@ add_tproxy_rules() {
 	fwmark="$(xray_tproxy_fwmark)"
 	table="$(xray_tproxy_routing_table)"
 
-	# Only selective mode has a TPROXY UDP path; full mode currently
-	# does not redirect UDP to Xray.
-	[ "$mode" = "selective" ] || return 0
-	ipset list "$setname" >/dev/null 2>&1 || return 0
+	# Selective mode needs the destination ipset to be populated to be
+	# useful; full mode forwards every non-bypassed UDP packet through
+	# Xray, so it has no such precondition.
+	if [ "$mode" = "selective" ]; then
+		ipset list "$setname" >/dev/null 2>&1 || return 0
+	fi
 
 	# Local routing rule so TPROXY can deliver packets to the local
 	# xray dokodemo-door inbound after marking them.
@@ -299,8 +299,13 @@ add_tproxy_rules() {
 	for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
 		iptables -t mangle -A CODEX_TPROXY -d "$net" -j RETURN
 	done
-	iptables -t mangle -A CODEX_TPROXY -p udp -m set --match-set "$setname" dst \
-		-j TPROXY --tproxy-mark "$fwmark/$fwmark" --on-port "$tproxy_port"
+	if [ "$mode" = "selective" ]; then
+		iptables -t mangle -A CODEX_TPROXY -p udp -m set --match-set "$setname" dst \
+			-j TPROXY --tproxy-mark "$fwmark/$fwmark" --on-port "$tproxy_port"
+	else
+		iptables -t mangle -A CODEX_TPROXY -p udp \
+			-j TPROXY --tproxy-mark "$fwmark/$fwmark" --on-port "$tproxy_port"
+	fi
 
 	iptables_del -t mangle -D PREROUTING -i "$lan_if" -p udp -j CODEX_TPROXY
 	iptables -t mangle -I PREROUTING 1 -i "$lan_if" -p udp -j CODEX_TPROXY
