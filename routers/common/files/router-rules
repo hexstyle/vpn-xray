@@ -2961,6 +2961,10 @@ apply_xray_internal() {
 	else
 		[ ! -e "$conf" ] || need_restart=1
 		printf '%s\n' "$final_rule" | grep -q -- "-p tcp -j REDIRECT --to-ports 12345" || need_restart=1
+		iptables -t nat -C PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || need_restart=1
+		iptables -t nat -C PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || need_restart=1
+		iptables -t mangle -C PREROUTING -i "$lan_if" -p udp -j CODEX_TPROXY >/dev/null 2>&1 || need_restart=1
+		iptables -t mangle -S CODEX_TPROXY 2>/dev/null | grep -q -- "-p udp -j TPROXY" || need_restart=1
 	fi
 	if [ "$need_restart" = '1' ]; then
 		if [ "${ROUTER_RULES_FORCE_XRAY_RESTART:-0}" = '1' ]; then

@@ -204,11 +204,11 @@ add_nat_rules() {
 	# Local DNS interception applies to both modes: plaintext DNS from LAN
 	# clients goes into the router's dnsmasq so the resolver stays under
 	# the path's control and clients cannot bypass it with an external
-	# nameserver.
-	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
-	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
-	iptables -t nat -I PREROUTING 1 -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
-	iptables -t nat -I PREROUTING 1 -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
+	# nameserver. In full mode CODEX_TRANSPROXY otherwise swallows every
+	# TCP packet before the per-port REDIRECT below has a chance to match,
+	# so we RETURN early from the chain for TCP :53 to let the redirect to
+	# dnsmasq win.
+	iptables -t nat -A "$TCP_CHAIN" -p tcp --dport 53 -j RETURN
 
 	if [ "$mode" = "selective" ]; then
 		if ! ipset list "$setname" >/dev/null 2>&1 || ! xray_dnsmasq_ready; then
@@ -223,6 +223,10 @@ add_nat_rules() {
 		iptables -t nat -A "$TCP_CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
 	fi
 
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
+	iptables -t nat -I PREROUTING 1 -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53
+	iptables -t nat -I PREROUTING 1 -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53
 	iptables_del -t nat -D PREROUTING -i "$lan_if" -p tcp -j "$TCP_CHAIN"
 	iptables -t nat -I PREROUTING 1 -i "$lan_if" -p tcp -j "$TCP_CHAIN"
 	iptables_del -t nat -D PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 5300
@@ -299,6 +303,12 @@ add_tproxy_rules() {
 	for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
 		iptables -t mangle -A CODEX_TPROXY -d "$net" -j RETURN
 	done
+	# Mangle runs before NAT, so without this RETURN every UDP DNS query
+	# would be TPROXY-marked into Xray's UDP inbound before the NAT-level
+	# REDIRECT to local dnsmasq has a chance to fire. Letting :53 fall
+	# through here is what makes the DNS REDIRECT in add_nat_rules
+	# actually take effect in full mode.
+	iptables -t mangle -A CODEX_TPROXY -p udp --dport 53 -j RETURN
 	if [ "$mode" = "selective" ]; then
 		iptables -t mangle -A CODEX_TPROXY -p udp -m set --match-set "$setname" dst \
 			-j TPROXY --tproxy-mark "$fwmark/$fwmark" --on-port "$tproxy_port"

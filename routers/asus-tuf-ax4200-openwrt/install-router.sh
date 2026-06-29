@@ -167,8 +167,11 @@ router_ssh() {
       continue
     fi
 
-    # Retry on transient connection failures (network reload, WiFi blip)
-    if grep -qiE 'Connection reset|Broken pipe|Connection refused|Connection timed out|No route to host' "$err" && (( attempt < max_retries )); then
+    # Retry on transient connection failures (network reload, WiFi blip,
+    # service restart on the router that briefly drops sshd). Match common
+    # variants from OpenSSH on macOS and Linux as well as the wording sshd
+    # produces when it tears the connection down during a reload.
+    if grep -qiE 'Connection reset|Broken pipe|Connection refused|Connection (timed out|closed)|Operation timed out|No route to host|kex_exchange_identification|port 22: (Operation|Connection)' "$err" && (( attempt < max_retries )); then
       echo "Router SSH attempt $attempt/$max_retries failed (transient). Retrying in 3s..." >&2
       rm -f "$err"
       sleep 3
