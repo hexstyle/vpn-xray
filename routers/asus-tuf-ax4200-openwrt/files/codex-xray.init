@@ -90,16 +90,25 @@ device_carrier_up() {
 preferred_uplink_iface() {
 	local iface dev
 
-	for iface in wan wwan; do
+	# Preference order: wired wan → wifi repeater (wwan) → USB tethering.
+	# First pass keeps a stricter definition of "usable" — netifd reports
+	# the interface up, the L3 device carries a link, and a default
+	# gateway is actually configured. An interface that satisfies all
+	# three is the one whose default route will accept packets.
+	for iface in wan wwan tethering; do
 		iface_is_up "$iface" || continue
 		dev="$(iface_device "$iface")"
 		[ -n "$dev" ] || continue
 		device_carrier_up "$dev" || continue
+		[ -n "$(iface_gateway "$iface")" ] || continue
 		printf '%s\n' "$iface"
 		return 0
 	done
 
-	for iface in wan wwan; do
+	# Softer fallback for the edge case where no interface has a live
+	# gateway yet but at least one is administratively up. Callers still
+	# get *some* answer instead of an empty one, matching prior behavior.
+	for iface in wan wwan tethering; do
 		if iface_is_up "$iface"; then
 			printf '%s\n' "$iface"
 			return 0

@@ -7,7 +7,7 @@ ROUTER_CONFIG="/etc/xray/codex-xray.json"
 
 relevant_iface() {
 	case "${INTERFACE:-}" in
-		wan|wwan)
+		wan|wwan|tethering)
 			return 0
 			;;
 	esac
