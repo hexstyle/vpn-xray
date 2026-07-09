@@ -59,23 +59,26 @@ grep -q '"sniffing": {' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.te
 grep -q '"destOverride": \[' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
 	|| fail "codex-xray.json template must override HTTP/TLS destinations for transparent traffic"
 
-grep -q '"fingerprint": "edge"' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
-	|| fail "router client templates must use an ARM-safe Reality fingerprint"
-
-grep -q '"mux": {' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
-	|| fail "router client templates must enable outbound mux to avoid Reality connection storms under browser load"
-
-grep -q '"fingerprint": "edge"' "$ADMIN_CGI" \
-	|| fail "xray-admin.cgi must render router configs with the ARM-safe Reality fingerprint"
-
-grep -q '"mux": {' "$ADMIN_CGI" \
-	|| fail "xray-admin.cgi must render router configs with outbound mux enabled"
-
-grep -q '"fingerprint": "edge"' "$VPS_CGI" \
-	|| fail "xray-vps.cgi must render router configs with the ARM-safe Reality fingerprint"
-
-grep -q '"mux": {' "$VPS_CGI" \
-	|| fail "xray-vps.cgi must render router configs with outbound mux enabled"
+# Transport parity (DIAGNOSTIC-TREE 8.5 / R.4): EVERY router-config
+# generator — the template and both CGI renderers — must emit the same
+# WS+TLS transport the VPS serves. A generator left on raw/reality
+# produces a config that cannot talk to the WS+TLS VPS; three separate
+# generators diverged this way and broke the router (2026-07-10). Assert
+# ws+tls, not the legacy reality fingerprint.
+for gen in \
+	"$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
+	"$ADMIN_CGI" \
+	"$VPS_CGI"; do
+	name="$(basename "$gen")"
+	grep -q '"network": "ws"' "$gen" \
+		|| fail "$name must render the router outbound as network=ws (transport parity, node 8.5)"
+	grep -q '"security": "tls"' "$gen" \
+		|| fail "$name must render the router outbound as security=tls (transport parity, node 8.5)"
+	grep -q '"security": "reality"' "$gen" \
+		&& fail "$name still renders reality — transport mismatch with the WS+TLS VPS (node 8.5)"
+	grep -q '"mux": {' "$gen" \
+		|| fail "$name must enable outbound mux to avoid connection storms under browser load"
+done
 
 grep -q 'path_requested' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must gate boot startup behind switch/config readiness"

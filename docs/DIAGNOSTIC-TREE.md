@@ -384,11 +384,14 @@ it is its own node.
   dial address (the IP) as the TLS reference name; the cert (CN=a hostname,
   no IP SAN) then fails validation and every dial dies. Passes `xray -test`.
   Guard at the producer: refuse to render/apply when serverName would be
-  empty (node 8.2 guard). Also two independent router-config generators
-  diverged in *transport* — `render_router_config` (CGI) emitted
-  `raw`/`reality` while the template + VPS were `ws`/`tls`; if the CGI path
-  ever applied, the router could not talk to the VPS (node 8.5). Both now
-  emit WS+TLS. Keep the router config generators transport-identical.
+  empty (node 8.2 guard). There are **three** router-config generators —
+  the `codex-xray.json.template` (install path), `render_router_config`
+  (xray-vps.cgi), and `build_config_file` (xray-admin.cgi) — and two of the
+  three had drifted to `raw`/`reality` while the template + VPS were
+  `ws`/`tls`; applying either broke the tunnel (node 8.5). All three now
+  emit WS+TLS and `test_xray_runtime_contract.sh` enforces transport parity
+  across all three. Rule: any new router-config generator must match the
+  template's transport, and the contract test must include it.
 
 **Probes**: `grep -n '\${[A-Z_][A-Z0-9_]*}' <rendered-output>` must return
 nothing; diff the substitution key sets of the two renderers against the
@@ -444,14 +447,13 @@ field: implement, then move it up into the tree body.
 - **G6**: key-algorithm rejection (5.1c) is diagnose-only; the managed key is
   RSA. No automated switch to ed25519, and no probe that checks the server's
   `PubkeyAcceptedAlgorithms` before blaming ownership/credentials.
-- **G7**: **profile parity.** All repair code — `diagnose_repair`, the
-  render fixes, the ownership self-heal, the progress UI — lives in the
-  `gl-mt3000-glinet` profile only. The `asus-tuf-ax4200-openwrt`
-  `xray-vps.cgi`/`xray.html` never received the `diagnose_repair` action and
-  still carry the pre-refactor buttons and the render bugs (empty TLS path,
-  literal WS path). An asus repair today would re-corrupt `/root`. Must port
-  nodes 5.1b, 6.5, 6.6, R and the UI safety before the asus profile is used
-  for repair.
+- **G7**: **profile parity. CLOSED.** The `asus-tuf-ax4200-openwrt`
+  `xray-vps.cgi`, `xray.html`, and `xray-admin.cgi` are now byte-identical
+  to `gl-mt3000-glinet` (the CGIs and UI are profile-independent — no
+  hardcoded paths, ports, or names differ). asus now carries `diagnose_repair`,
+  the render/ownership/transport fixes, and the progress UI. Re-diff on any
+  future gl change to keep them in sync (a `diff -q` check would be a cheap
+  CI guard — see G12).
 - **G8**: transport mismatch (8.5) has no automated detector — nothing compares
   router `streamSettings.network`+`security` against the VPS inbound. Drift is
   found only by a failed proxy probe. A cheap status-time check would catch it.
@@ -478,3 +480,9 @@ field: implement, then move it up into the tree body.
   deliberately NOT added to the boot/hotplug path yet — it needs live
   testing and the boot path is high-blast-radius (broke the router twice in
   this cycle). Tracked for a tested follow-up.
+- **G12**: profile-parity is maintained by hand. `xray-vps.cgi`,
+  `xray-admin.cgi`, and `xray.html` are identical across the two router
+  profiles but nothing enforces it — a future edit to one profile silently
+  diverges the other (which is how G7 opened). `test_profile_parity.sh`
+  now diffs the shared, profile-independent files; keep new such files in
+  its list.

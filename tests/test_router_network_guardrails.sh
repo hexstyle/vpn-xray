@@ -55,8 +55,20 @@ if grep -q '\-i br-lan' "$TRANSPROXY"; then
 	fail "codex-transproxy must not hardcode br-lan in firewall rules"
 fi
 
-grep -q 'iptables -I FORWARD 1 -i "\$lan_if" -p udp ! --dport 53 -j REJECT' "$TRANSPROXY" \
-	|| fail "codex-transproxy must still reject forwarded non-DNS UDP while the Xray path is active"
+# Full-mode UDP is routed THROUGH Xray via TPROXY, not blanket-rejected
+# (commit 13c3954 / DIAGNOSTIC-TREE 4.4). The old blanket UDP REJECT broke
+# QUIC/WebRTC/etc. So the contract is now: DNS :53 returns early and all
+# other UDP is TPROXY'd into the Xray UDP inbound. Assert the new shape
+# and assert the old REJECT is GONE.
+grep -q -- '-p udp --dport 53 -j RETURN' "$TRANSPROXY" \
+	|| fail "codex-transproxy CODEX_TPROXY must RETURN DNS :53 before the blanket UDP TPROXY (DNS stays on local dnsmasq)"
+
+grep -q -- '-j TPROXY --tproxy-mark' "$TRANSPROXY" \
+	|| fail "codex-transproxy must TPROXY non-DNS UDP into the Xray inbound (not reject it)"
+
+if grep -q 'iptables -I FORWARD 1 -i "\$lan_if" -p udp ! --dport 53 -j REJECT' "$TRANSPROXY"; then
+	fail "codex-transproxy must NOT blanket-reject forwarded non-DNS UDP — that breaks QUIC/WebRTC; UDP goes through TPROXY now (commit 13c3954)"
+fi
 
 grep -q 'ip6tables -I FORWARD 1 -i "\$lan_if" -j REJECT' "$TRANSPROXY" \
 	|| fail "codex-transproxy must still reject forwarded IPv6 while the IPv4-only Xray path is active"

@@ -92,8 +92,14 @@ build_config_file() {
 	local flow="${10}"
 	local access_log="${11}"
 	local error_log="${12}"
-	local user_flow_line
+	local user_flow_line ws_path
 
+	# WS+TLS transport (matches the VPS + codex-xray.json.template). The
+	# public_key/short_id params are legacy Reality fields, now unused in
+	# the rendered output — kept in the signature so callers do not change.
+	# ws_path defaults to the stack default; the admin form has no ws-path
+	# field, and the whole stack uses /cdn.
+	ws_path='/cdn'
 	user_flow_line=''
 	if [ -n "$flow" ]; then
 		user_flow_line="$(printf ',\n                "flow": "%s"' "$flow")"
@@ -155,20 +161,25 @@ build_config_file() {
         ]
       },
       "streamSettings": {
-        "network": "raw",
-        "security": "reality",
-        "realitySettings": {
-          "fingerprint": "edge",
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
           "serverName": "${server_name}",
-          "publicKey": "${public_key}",
-          "shortId": "${short_id}",
-          "spiderX": "/"
+          "alpn": ["h2", "http/1.1"],
+          "fingerprint": "chrome",
+          "certificates": [
+            {"usage": "verify", "certificateFile": "/etc/xray/server.crt"}
+          ]
+        },
+        "wsSettings": {
+          "path": "${ws_path}",
+          "host": "${server_name}"
         }
       },
       "mux": {
         "enabled": true,
         "concurrency": 8,
-        "xudpConcurrency": -1
+        "xudpConcurrency": 16
       }
     }
   ]
@@ -204,13 +215,16 @@ validate_candidate() {
 	[ -n "$server_address" ] || { echo 'Server address is required.'; return 1; }
 	[ -n "$server_name" ] || { echo 'Server name (SNI) is required.'; return 1; }
 	[ -n "$uuid" ] || { echo 'UUID is required.'; return 1; }
-	[ -n "$public_key" ] || { echo 'Reality public key is required.'; return 1; }
+	# public_key/short_id are legacy Reality fields — not required for the
+	# WS+TLS transport this stack uses. Validate only if present.
 
 	validate_pattern "$server_address" '^[A-Za-z0-9._:-]+$' || { echo 'Server address contains unsupported characters.'; return 1; }
 	validate_port "$server_port" || { echo 'Server port must be a number from 1 to 65535.'; return 1; }
 	validate_pattern "$server_name" '^[A-Za-z0-9.-]+$' || { echo 'Server name contains unsupported characters.'; return 1; }
 	validate_pattern "$uuid" '^[A-Za-z0-9-]+$' || { echo 'UUID contains unsupported characters.'; return 1; }
-	validate_pattern "$public_key" '^[A-Za-z0-9_-]+$' || { echo 'Public key contains unsupported characters.'; return 1; }
+	if [ -n "$public_key" ]; then
+		validate_pattern "$public_key" '^[A-Za-z0-9_-]+$' || { echo 'Public key contains unsupported characters.'; return 1; }
+	fi
 	if [ -n "$short_id" ]; then
 		validate_pattern "$short_id" '^[A-Za-z0-9]*$' || { echo 'Short ID contains unsupported characters.'; return 1; }
 	fi
@@ -391,7 +405,11 @@ status_json() {
 
 	server_address="$(config_value '@.outbounds[0].settings.vnext[0].address')"
 	server_port="$(config_value '@.outbounds[0].settings.vnext[0].port')"
-	server_name="$(config_value '@.outbounds[0].streamSettings.realitySettings.serverName')"
+	# WS+TLS transport: serverName lives in tlsSettings. Fall back to
+	# realitySettings for a config still on the legacy transport so an
+	# in-place upgrade reads the old value before re-rendering as WS+TLS.
+	server_name="$(config_value '@.outbounds[0].streamSettings.tlsSettings.serverName')"
+	[ -n "$server_name" ] || server_name="$(config_value '@.outbounds[0].streamSettings.realitySettings.serverName')"
 	public_key="$(config_value '@.outbounds[0].streamSettings.realitySettings.publicKey')"
 	short_id="$(config_value '@.outbounds[0].streamSettings.realitySettings.shortId')"
 	flow="$(config_value '@.outbounds[0].settings.vnext[0].users[0].flow')"
