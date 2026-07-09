@@ -38,6 +38,11 @@ restore_from_backup() {
 	local bak sn
 	for bak in $(ls -1t "${CONFIG}".bak.* 2>/dev/null); do
 		[ -f "$bak" ] || continue
+		# Require the correct transport: a raw/reality backup is exactly the
+		# broken state we are recovering from, so skip it even if it has a
+		# hostname serverName.
+		grep -q '"security" *: *"tls"' "$bak" || continue
+		grep -q '"network" *: *"ws"' "$bak" || continue
 		sn="$(sed -n 's/.*"serverName" *: *"\([^"]*\)".*/\1/p' "$bak" | head -1)"
 		case "$sn" in
 			''|*[0-9].[0-9]*.[0-9]*.[0-9]*) continue ;;  # empty or looks like an IP
@@ -45,54 +50,62 @@ restore_from_backup() {
 		# Validate before trusting it.
 		if /usr/local/bin/codex-xray-core run -test -config "$bak" >/dev/null 2>&1; then
 			cp "$bak" "$CONFIG"
-			log "restored good backup: $bak (serverName=$sn)"
+			log "restored good WS+TLS backup: $bak (serverName=$sn)"
 			return 0
 		fi
 	done
 	return 1
 }
 
-# 3) Otherwise patch the live config in place: set every serverName and the
-#    wsSettings host to the correct SNI. Handles both ws/tls and
-#    raw/reality shapes; only rewrites the string fields, nothing else.
+# 3) Otherwise rebuild the outbound in place. This is the important part:
+#    the breakage is often not just an empty serverName but a wrong
+#    TRANSPORT (the router left on raw/reality while the VPS serves
+#    ws/tls — 2026-07-10). Patching serverName on a reality outbound
+#    changes nothing. So we force the outbound to WS+TLS, preserving the
+#    endpoint identity (address/port/uuid/flow) already present in the
+#    config's vnext, and set serverName/host to the cert SNI, ws path to
+#    /cdn (the stack default) or whatever the config already had.
 patch_in_place() {
-	if command -v python3 >/dev/null 2>&1; then
-		python3 - "$CONFIG" "$SNI" <<'PY'
-import json, sys
+	command -v python3 >/dev/null 2>&1 || {
+		log "python3 missing — cannot rebuild config safely; leaving as-is"
+		return 1
+	}
+	WS_PATH_DEFAULT='/cdn' python3 - "$CONFIG" "$SNI" <<'PY'
+import json, os, sys
 path, sni = sys.argv[1], sys.argv[2]
+ws_default = os.environ.get("WS_PATH_DEFAULT", "/cdn")
 with open(path) as f:
     cfg = json.load(f)
-changed = 0
 for ob in cfg.get("outbounds", []):
-    ss = ob.get("streamSettings") or {}
-    for key in ("tlsSettings", "realitySettings"):
-        s = ss.get(key)
-        if isinstance(s, dict) and s.get("serverName", "") != sni:
-            s["serverName"] = sni; changed += 1
-    ws = ss.get("wsSettings")
-    if isinstance(ws, dict):
-        host = (ws.get("headers") or {}).get("Host")
-        if ws.get("host", "") not in ("", sni):
-            ws["host"] = sni; changed += 1
-        elif "host" in ws and ws["host"] != sni:
-            ws["host"] = sni; changed += 1
-        else:
-            ws["host"] = sni
+    if ob.get("protocol") != "vless":
+        continue
+    ss = ob.setdefault("streamSettings", {})
+    # keep an existing ws path if one is set, else default
+    ws_path = ((ss.get("wsSettings") or {}).get("path")) or ws_default
+    ss.clear()
+    ss["network"] = "ws"
+    ss["security"] = "tls"
+    ss["tlsSettings"] = {
+        "serverName": sni,
+        "alpn": ["h2", "http/1.1"],
+        "fingerprint": "chrome",
+        "certificates": [
+            {"usage": "verify", "certificateFile": "/etc/xray/server.crt"}
+        ],
+    }
+    ss["wsSettings"] = {"path": ws_path, "host": sni}
+    ob["mux"] = {"enabled": True, "concurrency": 8, "xudpConcurrency": 16}
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
-print("patched fields:", changed)
+print("rebuilt outbound as WS+TLS (serverName=%s)" % sni)
 PY
-		return 0
-	fi
-	# Fallback without python: blunt sed on serverName + host.
-	sed -i "s/\"serverName\" *: *\"[^\"]*\"/\"serverName\": \"$SNI\"/g; s/\"host\" *: *\"[^\"]*\"/\"host\": \"$SNI\"/g" "$CONFIG"
 }
 
 if restore_from_backup; then
 	:
 else
-	log "no usable backup; patching serverName/host in place to $SNI"
-	patch_in_place
+	log "no usable backup; rebuilding outbound as WS+TLS (serverName=$SNI)"
+	patch_in_place || { log "in-place rebuild failed"; exit 1; }
 fi
 
 # 3b) Sync the pinned verify certificate to whatever the VPS actually

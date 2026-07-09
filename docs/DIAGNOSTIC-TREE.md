@@ -459,4 +459,22 @@ field: implement, then move it up into the tree body.
   CGI, `render_template` installer) cover the same placeholder set for the
   shared templates, nor that a rendered artifact is placeholder-free. R.1/R.3
   regressions would pass CI today. A contract test should render both and
-  `grep` for residual `${…}` and diff the key sets.
+  `grep` for residual `${…}` and diff the key sets. **(closed by
+  `test_vps_render_placeholder_contract.sh`.)**
+- **G10**: cert served ≠ cert on disk. The VPS can regenerate
+  `/usr/local/etc/xray/certs/server.crt` while a running xray keeps serving
+  the cert it loaded at start (observed 2026-07-10: disk 65:9D…, served
+  93:FE…). The router pins the *disk* cert (fetched via SSH/openssl), so it
+  mismatches the *served* cert until xray is restarted. The repair runtime
+  step (6.8) restarts xray, which reloads the disk cert, so a full repair
+  self-heals it — but a bare cert regen without restart leaves a silent
+  mismatch. No detector for the divergence yet; `revive-router.sh` sidesteps
+  it by re-pinning from what the VPS *serves* (openssl s_client) and the
+  operator restarting the VPS xray.
+- **G11**: no automatic router cert re-sync between installs. `install.sh`
+  fetches and pins the live VPS cert, but drift that happens afterward (a
+  reprovision, a cert regen) is only fixed by re-running install or
+  `revive-router.sh`. An on-uplink-change or periodic re-pin was
+  deliberately NOT added to the boot/hotplug path yet — it needs live
+  testing and the boot path is high-blast-radius (broke the router twice in
+  this cycle). Tracked for a tested follow-up.

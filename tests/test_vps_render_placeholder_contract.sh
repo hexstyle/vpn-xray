@@ -78,4 +78,15 @@ apply_fn="$(sed -n '/^apply_profile_to_router_internal()/,/^}/p' "$CGI")"
 printf '%s' "$apply_fn" | grep -q 'refusing to overwrite the working router config' \
 	|| fail "apply_profile_to_router_internal must refuse an incomplete profile (empty server_name/address/uuid/port) before overwriting the router config (node 8.2)"
 
+# Recovery: revive-router.sh must rebuild the outbound as WS+TLS (the real
+# breakage was a transport left on raw/reality), and must not restore a
+# raw/reality backup as "good" (node 8.5 / R.4).
+REVIVE="$ROOT/scripts/revive-router.sh"
+if [ -f "$REVIVE" ]; then
+	grep -q 'ss\["network"\] = "ws"' "$REVIVE" \
+		|| fail "revive-router.sh must rebuild the outbound as WS+TLS, not just patch serverName (node 8.5)"
+	grep -q 'grep -q .\{1,4\}"network" \*: \*"ws". "\$bak"' "$REVIVE" \
+		|| fail "revive-router.sh restore_from_backup must require a WS+TLS backup, skipping raw/reality (node 8.5)"
+fi
+
 printf 'ok\n'
