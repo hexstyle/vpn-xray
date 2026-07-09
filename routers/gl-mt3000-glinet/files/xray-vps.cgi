@@ -2141,6 +2141,22 @@ run_repair_pipeline() {
 	rm -rf "$stage"; rm -f "$bundle_tar"
 	log_step "repair pipeline finished with exit=$ssh_rc"
 
+	# If no report came back after all retries, the remote script never
+	# ran (SSH could not be established, or the tar extraction failed on
+	# the VPS) — a transport/reach failure, not a repair-step failure.
+	# Set REPAIR_FATAL so the caller reports a clear "could not reach the
+	# VPS" instead of an empty steps list that reads like the repair ran
+	# and everything silently failed. The raw log carries the exact SSH
+	# error.
+	if [ ! -s "$report_local" ]; then
+		REPAIR_FATAL='Could not reach the VPS to run the repair after 3 attempts — a transient uplink timeout or the VPS is unreachable. See the raw log for the exact SSH error.'
+		REPAIR_REPORT='[]'
+		REPAIR_RAW_LOG_PATH="$raw_log_file"
+		unset SSH_RAW_LOG_PATH
+		rm -f "$rendered" "$meta" "$rendered_install" "$report_local"
+		return 1
+	fi
+
 	# Fold the JSONL report into a JSON array. Each non-empty line should
 	# already be a valid JSON object.
 	REPAIR_REPORT='['
