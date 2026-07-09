@@ -782,8 +782,6 @@
         </div>
         <div class="form-actions" style="margin-top:12px;">
           <button id="createProfileBtn" type="button">New VPS</button>
-          <button class="primary" id="checkProfileBtn">Read VPS And Update Profile</button>
-          <button class="warn-btn" id="applyProfileBtn">Sync Router + VPS</button>
         </div>
         <div id="setupNotice" class="readonly-pane" style="margin-top:12px;display:none;">
           <div class="label">First-Time Setup</div>
@@ -791,10 +789,6 @@
             The router platform is installed, but there is no active VPS path yet. Fill the VPS SSH details above and click
             <strong>Diagnose &amp; Repair</strong>. The router will configure the selected server and then apply the client profile locally.
           </div>
-        </div>
-        <div class="readonly-pane" style="margin-top:12px;">
-          <div class="label">Last VPS Read Result</div>
-          <pre id="checkResultOutput">No check run yet.</pre>
         </div>
         <details class="readonly-pane" style="margin-top:12px;">
           <summary class="label" style="cursor:pointer;">Advanced Xray Settings</summary>
@@ -904,10 +898,15 @@
           </div>
         </details>
         <details class="readonly-pane" style="margin-top:12px;">
-          <summary class="label" style="cursor:pointer;">Diagnostics</summary>
+          <summary class="label" style="cursor:pointer;">Router Runtime Diagnostics</summary>
+          <div class="hint" style="margin-top:12px;">
+            Router-side tools. Smoke test drives a request through this router's transparent proxy end-to-end.
+            Restart Xray Runtime kicks the local xray daemon and its transparent-proxy chain — use it when the VPS is
+            healthy but this router's client stopped responding. For anything VPS-related, use <strong>Diagnose &amp; Repair</strong> above.
+          </div>
           <div class="form-actions" style="margin-top:12px;">
             <button class="primary" id="smokeBtn">Run Live Smoke Test</button>
-            <button class="warn-btn" id="recoverPathBtn">Recover Xray Path</button>
+            <button class="warn-btn" id="recoverPathBtn">Restart Xray Runtime</button>
           </div>
           <pre id="smokeOutput" style="margin-top:12px;">No smoke test run yet.</pre>
         </details>
@@ -931,8 +930,6 @@
         </div>
         <div class="button-wrap" style="margin-top:0;">
           <button id="rulesApplyBtn">Apply Local Rules</button>
-          <button class="warn-btn" id="rulesPullBtn">Pull From Git</button>
-          <button class="warn-btn" id="rulesPushBtn">Push To Git</button>
         </div>
       </div>
       <div class="field field-full" style="margin-top:12px;">
@@ -1031,6 +1028,10 @@
           <summary class="label" style="cursor:pointer;">Current Router SSH Public Key</summary>
           <pre id="rulesGitSshPublicKey" style="margin-top:12px;">No router SSH key yet.</pre>
         </details>
+        <div class="button-wrap" style="margin-top:12px;">
+          <button class="warn-btn" id="rulesPullBtn">Pull From Git</button>
+          <button class="warn-btn" id="rulesPushBtn">Push To Git</button>
+        </div>
         </div>
       </details>
       <details class="readonly-pane" style="margin-top:12px;">
@@ -1269,8 +1270,6 @@
         "profileSelect",
         "vpsProfile",
         "createProfileBtn",
-        "checkProfileBtn",
-        "applyProfileBtn",
         "diagnoseRepairBtn",
         "smokeBtn",
         "logsBtn",
@@ -1309,8 +1308,6 @@
         "profileSelect",
         "vpsProfile",
         "createProfileBtn",
-        "checkProfileBtn",
-        "applyProfileBtn",
         "diagnoseRepairBtn",
         "smokeBtn",
         "rulesModeToggle",
@@ -2068,26 +2065,12 @@
       document.getElementById("managedPubkeyOutput").textContent = profile.managed_pubkey || "(managed key not generated yet)";
     }
 
-    function renderCheckSummary(profile) {
-      const remote = profile.remote_cache || {};
-      const routerDiff = parseDiffList(profile.router_diff);
-      const remoteDiff = parseDiffList(profile.remote_diff);
-      const lines = [
-        `Router platform: ${state.runtime?.config_ready ? "client profile ready" : "waiting for first router apply"}`,
-        `Last read: ${remote.status || profile.last_inspect_status || "never"}${profile.last_inspect_at ? ` at ${formatUnixTime(profile.last_inspect_at)}` : ""}`,
-        `SSH access from router: ${remote.ssh_ok === "1" ? "ok" : "not confirmed"}`,
-        `Install support: ${remote.install_supported === "1" ? "supported" : "not supported"}`,
-        remote.install_notes ? `Install notes: ${remote.install_notes}` : "",
-        `Remote Xray: ${remote.xray_present === "1" ? "installed" : "not installed"}`,
-        remote.xray_version ? `Remote Xray version: ${remote.xray_version}` : "",
-        remote.server_port ? `Remote Xray config port: ${remote.server_port}` : "",
-        `Remote listener on selected port: ${remote.listener_port ? "present" : "not detected"}`,
-        remote.public_ip ? `Remote public IP: ${remote.public_ip}` : "",
-        remote.pretty_name ? `Remote OS: ${remote.pretty_name}` : "",
-        routerDiff.length ? `Router drift vs selected profile: ${routerDiff.join(", ")}` : "Router drift vs selected profile: none",
-        remoteDiff.length ? `VPS drift vs selected profile: ${remoteDiff.join(", ")}` : "VPS drift vs selected profile: none"
-      ].filter(Boolean);
-      document.getElementById("checkResultOutput").textContent = lines.join("\n");
+    // The dedicated "Last VPS Read Result" pane was removed in favor of
+    // the Diagnose & Repair pipeline's raw_log. Live State cards and
+    // Remote Info still render the same numbers, so this helper is now
+    // a no-op we keep only so existing callers don't need edits.
+    function renderCheckSummary(_profile) {
+      /* intentionally empty */
     }
 
     function renderRemoteInfo(profile) {
@@ -3497,66 +3480,9 @@
       }
     }
 
-    async function checkProfile(button) {
-      if (!state.uiReady) {
-        return;
-      }
-      const useDirtyForm = state.formDirty;
-      const action = useDirtyForm ? "check_profile" : "adopt_vps";
-      const payload = useDirtyForm ? formPayload() : null;
-      beginForegroundTask("Reading VPS over SSH and comparing live settings...", 25000);
-      setBusy(button, true);
-      document.getElementById("checkResultOutput").textContent = useDirtyForm
-        ? "Testing the edited connection settings, then reading live server-side Xray settings..."
-        : "Reading live server-side Xray settings from the selected VPS...";
-      try {
-        const data = await callApi(vpsApi, action, payload, { timeoutMs: 25000 });
-        if (data.ok === false) {
-          throw new Error(data.error || "backend error");
-        }
-        if (data.status) {
-          state.vps = data.status;
-        }
-        clearDirty();
-        renderAll(true);
-        flash(
-          useDirtyForm
-            ? "VPS read complete. The edited connection settings worked and live server-side settings were adopted."
-            : "VPS read complete. Live server-side settings were adopted into the selected profile.",
-          "good"
-        );
-      } catch (err) {
-        flash(`VPS read failed: ${err.message}`, "bad");
-        document.getElementById("checkResultOutput").textContent = `VPS read failed: ${err.message}`;
-      } finally {
-        setBusy(button, false);
-        endForegroundTask();
-      }
-    }
-
-    async function applyProfile(button) {
-      beginForegroundTask("Syncing selected profile to VPS and router...", 35000);
-      setBusy(button, true);
-      document.getElementById("checkResultOutput").textContent = "Applying selected profile to VPS and router...";
-      try {
-        const data = await callApi(vpsApi, "apply_profile", formPayload(), { timeoutMs: 45000 });
-        if (data.ok === false) {
-          throw new Error(data.error || "backend error");
-        }
-        if (data.status) {
-          state.vps = data.status;
-        }
-        clearDirty();
-        await refreshAll(false, true, true);
-        flash("Selected profile synced to both VPS and router.", "good");
-      } catch (err) {
-        flash(`Apply failed: ${err.message}`, "bad");
-        document.getElementById("checkResultOutput").textContent = `Apply failed: ${err.message}`;
-      } finally {
-        setBusy(button, false);
-        endForegroundTask();
-      }
-    }
+    // checkProfile/applyProfile were replaced by diagnose_repair — the
+    // read-only inspection is done by refresh_remote_cache inside the
+    // pipeline, and the full apply/sync is the pipeline itself.
 
     // Render the JSON step report from the diagnose_repair backend action
     // into the #repairSteps list. Icons: ok=OK, fixed=FIX, failed=FAIL.
@@ -3670,8 +3596,6 @@
       await runDiagnoseRepairOnce(button, null);
     }
 
-    document.getElementById("checkProfileBtn").addEventListener("click", (event) => checkProfile(event.currentTarget));
-    document.getElementById("applyProfileBtn").addEventListener("click", (event) => applyProfile(event.currentTarget));
     document.getElementById("createProfileBtn").addEventListener("click", (event) => createProfile(event.currentTarget));
     document.getElementById("diagnoseRepairBtn").addEventListener("click", (event) => diagnoseRepair(event.currentTarget));
     document.getElementById("repairCredsCancel").addEventListener("click", () => {
