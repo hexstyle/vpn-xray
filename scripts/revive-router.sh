@@ -95,6 +95,39 @@ else
 	patch_in_place
 fi
 
+# 3b) Sync the pinned verify certificate to whatever the VPS actually
+#     presents now. VLESS here is encryption:none — the TLS layer IS the
+#     encryption — so we must verify, but the router pins a self-signed
+#     cert at /etc/xray/server.crt. If the VPS cert was regenerated (a
+#     reprovision, an early repair) the pinned copy no longer matches and
+#     every dial fails with "certificate signed by unknown authority".
+#     Fetch the leaf cert the VPS serves on the dialed address:port and
+#     re-pin it. This is trust-on-first-use against our own VPS.
+sync_pinned_cert() {
+	local addr port fetched
+	addr="$(sed -n 's/.*"address" *: *"\([^"]*\)".*/\1/p' "$CONFIG" | head -1)"
+	port="$(sed -n 's/.*"port" *: *\([0-9]*\).*/\1/p' "$CONFIG" | grep -vE '^(1083|1084|1086|12345)$' | head -1)"
+	[ -n "$addr" ] || { log "cannot determine VPS address from config; skipping cert sync"; return 1; }
+	[ -n "$port" ] || port=443
+	command -v openssl >/dev/null 2>&1 || { log "no openssl; cannot sync cert"; return 1; }
+
+	fetched="$(echo | openssl s_client -connect "${addr}:${port}" -servername "$SNI" 2>/dev/null \
+		| openssl x509 2>/dev/null)"
+	if [ -z "$fetched" ]; then
+		log "could not fetch the VPS cert from ${addr}:${port} (is the VPS up?)"
+		return 1
+	fi
+	if [ -f "$CERT" ] && printf '%s\n' "$fetched" | cmp -s - "$CERT"; then
+		log "pinned cert already matches the VPS ($CERT)"
+		return 0
+	fi
+	printf '%s\n' "$fetched" > "$CERT"
+	chmod 600 "$CERT" 2>/dev/null || true
+	log "re-pinned $CERT to the cert the VPS currently serves"
+	return 0
+}
+sync_pinned_cert || log "cert sync skipped/failed — if you still see 'unknown authority', the VPS cert is unreachable"
+
 # 4) Validate the resulting config before restarting.
 if ! /usr/local/bin/codex-xray-core run -test -config "$CONFIG" >/dev/null 2>&1; then
 	log "ERROR: config still invalid after repair:"
