@@ -78,17 +78,23 @@ router_live_value() {
 }
 
 router_current_json() {
-	local ready _rc_sa _rc_sp _rc_sn _rc_uu _rc_pk _rc_si _rc_fl
+	local ready _rc_sa _rc_sp _rc_sn _rc_snr _rc_uu _rc_pk _rc_si _rc_fl _rc_net _rc_sec
 	router_config_ready && ready=1 || ready=0
 	eval "$(jsonfilter -i "$ROUTER_CONFIG" \
 		-e '_rc_sa=@.outbounds[0].settings.vnext[0].address' \
 		-e '_rc_sp=@.outbounds[0].settings.vnext[0].port' \
-		-e '_rc_sn=@.outbounds[0].streamSettings.realitySettings.serverName' \
+		-e '_rc_sn=@.outbounds[0].streamSettings.tlsSettings.serverName' \
+		-e '_rc_snr=@.outbounds[0].streamSettings.realitySettings.serverName' \
 		-e '_rc_uu=@.outbounds[0].settings.vnext[0].users[0].id' \
 		-e '_rc_pk=@.outbounds[0].streamSettings.realitySettings.publicKey' \
 		-e '_rc_si=@.outbounds[0].streamSettings.realitySettings.shortId' \
 		-e '_rc_fl=@.outbounds[0].settings.vnext[0].users[0].flow' \
+		-e '_rc_net=@.outbounds[0].streamSettings.network' \
+		-e '_rc_sec=@.outbounds[0].streamSettings.security' \
 		2>/dev/null)" 2>/dev/null || true
+	# serverName lives in tlsSettings for WS+TLS; fall back to the legacy
+	# reality field so an unconverted config still reports something.
+	[ -n "${_rc_sn:-}" ] || _rc_sn="${_rc_snr:-}"
 	printf '{'
 	printf '"config_ready":'; json_bool "$ready"; printf ','
 	printf '"server_address":"%s",' "$(json_escape "${_rc_sa:-}")"
@@ -97,6 +103,8 @@ router_current_json() {
 	printf '"uuid":"%s",' "$(json_escape "${_rc_uu:-}")"
 	printf '"public_key":"%s",' "$(json_escape "${_rc_pk:-}")"
 	printf '"short_id":"%s",' "$(json_escape "${_rc_si:-}")"
+	printf '"transport_net":"%s",' "$(json_escape "${_rc_net:-}")"
+	printf '"transport_sec":"%s",' "$(json_escape "${_rc_sec:-}")"
 	printf '"flow":"%s"' "$(json_escape "${_rc_fl:-}")"
 	printf '}'
 }
@@ -843,18 +851,18 @@ install_command_for_profile() {
 remote_cache_json() {
 	local cache_path="$1"
 	if [ ! -f "$cache_path" ]; then
-		printf '{"status":"","ssh_ok":"","hostname":"","fqdn":"","kernel":"","arch":"","pretty_name":"","os_id":"","os_version":"","virt":"","systemd":"","pkg_mgr":"","install_profile":"","install_label":"","install_supported":"","install_notes":"","memory":"","disk_root":"","uptime":"","public_ip":"","ipinfo_json":"","xray_present":"","xray_version":"","xray_service":"","listener_port":"","listener_443":"","managed_meta":"","server_port":"","server_name":"","uuid":"","public_key":"","short_id":"","flow":""}'
+		printf '{"status":"","ssh_ok":"","hostname":"","fqdn":"","kernel":"","arch":"","pretty_name":"","os_id":"","os_version":"","virt":"","systemd":"","pkg_mgr":"","install_profile":"","install_label":"","install_supported":"","install_notes":"","memory":"","disk_root":"","uptime":"","public_ip":"","ipinfo_json":"","xray_present":"","xray_version":"","xray_service":"","listener_port":"","listener_443":"","managed_meta":"","server_port":"","server_name":"","uuid":"","public_key":"","short_id":"","flow":"","transport_net":"","transport_sec":""}'
 		return 0
 	fi
 	awk '
 	BEGIN {
 		FS="="
 		ORS=""
-		split("REMOTE_STATUS status REMOTE_SSH_OK ssh_ok REMOTE_HOSTNAME hostname REMOTE_FQDN fqdn REMOTE_KERNEL kernel REMOTE_ARCH arch REMOTE_PRETTY_NAME pretty_name REMOTE_OS_ID os_id REMOTE_OS_VERSION os_version REMOTE_VIRT virt REMOTE_SYSTEMD systemd REMOTE_PKG_MGR pkg_mgr REMOTE_INSTALL_PROFILE install_profile REMOTE_INSTALL_LABEL install_label REMOTE_INSTALL_SUPPORTED install_supported REMOTE_INSTALL_NOTES install_notes REMOTE_MEMORY memory REMOTE_DISK_ROOT disk_root REMOTE_UPTIME uptime REMOTE_PUBLIC_IP public_ip REMOTE_IPINFO_JSON ipinfo_json REMOTE_XRAY_PRESENT xray_present REMOTE_XRAY_VERSION xray_version REMOTE_XRAY_SERVICE xray_service REMOTE_LISTENER_PORT listener_port REMOTE_LISTENER_443 listener_443 REMOTE_MANAGED_META managed_meta REMOTE_server_port server_port REMOTE_server_name server_name REMOTE_uuid uuid REMOTE_public_key public_key REMOTE_short_id short_id REMOTE_flow flow", pairs, " ")
+		split("REMOTE_STATUS status REMOTE_SSH_OK ssh_ok REMOTE_HOSTNAME hostname REMOTE_FQDN fqdn REMOTE_KERNEL kernel REMOTE_ARCH arch REMOTE_PRETTY_NAME pretty_name REMOTE_OS_ID os_id REMOTE_OS_VERSION os_version REMOTE_VIRT virt REMOTE_SYSTEMD systemd REMOTE_PKG_MGR pkg_mgr REMOTE_INSTALL_PROFILE install_profile REMOTE_INSTALL_LABEL install_label REMOTE_INSTALL_SUPPORTED install_supported REMOTE_INSTALL_NOTES install_notes REMOTE_MEMORY memory REMOTE_DISK_ROOT disk_root REMOTE_UPTIME uptime REMOTE_PUBLIC_IP public_ip REMOTE_IPINFO_JSON ipinfo_json REMOTE_XRAY_PRESENT xray_present REMOTE_XRAY_VERSION xray_version REMOTE_XRAY_SERVICE xray_service REMOTE_LISTENER_PORT listener_port REMOTE_LISTENER_443 listener_443 REMOTE_MANAGED_META managed_meta REMOTE_server_port server_port REMOTE_server_name server_name REMOTE_uuid uuid REMOTE_public_key public_key REMOTE_short_id short_id REMOTE_flow flow REMOTE_TRANSPORT_NET transport_net REMOTE_TRANSPORT_SEC transport_sec", pairs, " ")
 		for (i = 1; i in pairs; i += 2) {
 			key_map[pairs[i]] = pairs[i+1]
 		}
-		order_str = "status ssh_ok hostname fqdn kernel arch pretty_name os_id os_version virt systemd pkg_mgr install_profile install_label install_supported install_notes memory disk_root uptime public_ip ipinfo_json xray_present xray_version xray_service listener_port listener_443 managed_meta server_port server_name uuid public_key short_id flow"
+		order_str = "status ssh_ok hostname fqdn kernel arch pretty_name os_id os_version virt systemd pkg_mgr install_profile install_label install_supported install_notes memory disk_root uptime public_ip ipinfo_json xray_present xray_version xray_service listener_port listener_443 managed_meta server_port server_name uuid public_key short_id flow transport_net transport_sec"
 		n = split(order_str, order, " ")
 		for (i = 1; i <= n; i++) vals[order[i]] = ""
 	}
@@ -1097,6 +1105,29 @@ remote_public_key=''
 remote_private_key=''
 remote_short_id=''
 remote_flow=''
+remote_transport_net=''
+remote_transport_sec=''
+
+# Always read the live transport the VPS serves from its config, even when
+# meta.env supplies the identity fields — meta.env does not carry the
+# transport, and the transport is what we compare against the router
+# (DIAGNOSTIC-TREE 8.5 / G8).
+if [ -f "$REMOTE_CONFIG_PATH" ] && command -v python3 >/dev/null 2>&1; then
+	eval "$(REMOTE_CONFIG_PATH="$REMOTE_CONFIG_PATH" python3 - <<'PYT'
+import json, os, shlex
+try:
+    with open(os.environ['REMOTE_CONFIG_PATH'], encoding='utf-8') as fh:
+        cfg = json.load(fh)
+    ib = (cfg.get('inbounds') or [{}])[0]
+    st = ib.get('streamSettings') or {}
+    print("remote_transport_net=%s" % shlex.quote(str(st.get('network') or '')))
+    print("remote_transport_sec=%s" % shlex.quote(str(st.get('security') or '')))
+except Exception:
+    print("remote_transport_net=''")
+    print("remote_transport_sec=''")
+PYT
+)"
+fi
 
 if [ -f "$REMOTE_META_PATH" ]; then
 	managed_meta_v='1'
@@ -1126,11 +1157,22 @@ clients = settings.get('clients') or [{}]
 client = clients[0] if clients else {}
 stream = inbound.get('streamSettings') or {}
 reality = stream.get('realitySettings') or {}
+tls = stream.get('tlsSettings') or {}
+ws = stream.get('wsSettings') or {}
 
-server_name = ''
-target = reality.get('target') or reality.get('dest') or ''
-if target:
-    server_name = str(target).split(':')[0]
+# Transport the VPS actually serves (DIAGNOSTIC-TREE 8.5 / G8). Compared
+# against the router's outbound transport so a divergence (VPS ws/tls vs
+# router raw/reality) is flagged before the tunnel silently fails.
+net = stream.get('network') or ''
+sec = stream.get('security') or ''
+
+# serverName across transports: WS+TLS carries it in tlsSettings; the
+# legacy reality shape used serverNames/target.
+server_name = tls.get('serverName') or ''
+if not server_name:
+    target = reality.get('target') or reality.get('dest') or ''
+    if target:
+        server_name = str(target).split(':')[0]
 if not server_name:
     names = reality.get('serverNames') or []
     if names:
@@ -1150,6 +1192,8 @@ emit('remote_uuid', client.get('id', ''))
 emit('remote_private_key', reality.get('privateKey', ''))
 emit('remote_short_id', short_id)
 emit('remote_flow', client.get('flow', ''))
+emit('remote_transport_net', net)
+emit('remote_transport_sec', sec)
 PY
 )"
 	else
@@ -1206,6 +1250,8 @@ line REMOTE_public_key "$remote_public_key"
 line REMOTE_private_key "$remote_private_key"
 line REMOTE_short_id "$remote_short_id"
 line REMOTE_flow "$remote_flow"
+line REMOTE_TRANSPORT_NET "$remote_transport_net"
+line REMOTE_TRANSPORT_SEC "$remote_transport_sec"
 EOF
 }
 

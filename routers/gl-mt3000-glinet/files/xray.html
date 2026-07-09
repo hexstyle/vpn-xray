@@ -2072,12 +2072,33 @@
         : inspectStatus;
       document.getElementById("summaryInspect").textContent = inspectText;
       document.getElementById("summaryInspect").className = `value ${inspectStatus === "ok" ? "ok" : "warn"}`;
-      if (!runtime.config_ready) {
-        document.getElementById("summaryDrift").textContent = "waiting for first apply";
-        document.getElementById("summaryDrift").className = "value warn";
+      // Transport mismatch (DIAGNOSTIC-TREE 8.5 / G8) is more severe than
+      // field drift: if the router dials one transport (e.g. raw/reality)
+      // while the VPS serves another (ws/tls), the tunnel cannot come up
+      // at all, even though identity fields may match. Surface it loudly
+      // and above the normal drift text, since identity-diff can read
+      // "in sync" while the transport silently disagrees.
+      const router = state.vps?.router_current || {};
+      const rNet = (router.transport_net || "").toLowerCase();
+      const rSec = (router.transport_sec || "").toLowerCase();
+      const vNet = (remote.transport_net || "").toLowerCase();
+      const vSec = (remote.transport_sec || "").toLowerCase();
+      const transportKnown = rNet && rSec && vNet && vSec;
+      const transportMismatch = transportKnown && (rNet !== vNet || rSec !== vSec);
+
+      const driftEl = document.getElementById("summaryDrift");
+      if (transportMismatch) {
+        driftEl.textContent = `transport mismatch: router ${rNet}/${rSec} vs VPS ${vNet}/${vSec}`;
+        driftEl.className = "value bad";
+        driftEl.title = "The router and VPS use different transports — the tunnel will not connect. Re-run install.sh from one source, or run scripts/revive-router.sh.";
+      } else if (!runtime.config_ready) {
+        driftEl.textContent = "waiting for first apply";
+        driftEl.className = "value warn";
+        driftEl.title = "";
       } else {
-        document.getElementById("summaryDrift").textContent = drift ? "needs sync" : "in sync";
-        document.getElementById("summaryDrift").className = `value ${drift ? "warn" : "ok"}`;
+        driftEl.textContent = drift ? "needs sync" : "in sync";
+        driftEl.className = `value ${drift ? "warn" : "ok"}`;
+        driftEl.title = "";
       }
     }
 

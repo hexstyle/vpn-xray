@@ -454,9 +454,14 @@ field: implement, then move it up into the tree body.
   the render/ownership/transport fixes, and the progress UI. Re-diff on any
   future gl change to keep them in sync (a `diff -q` check would be a cheap
   CI guard — see G12).
-- **G8**: transport mismatch (8.5) has no automated detector — nothing compares
-  router `streamSettings.network`+`security` against the VPS inbound. Drift is
-  found only by a failed proxy probe. A cheap status-time check would catch it.
+- **G8**: transport mismatch (8.5) detector — **CLOSED.** The remote
+  inspection now reads the VPS inbound `streamSettings.network`+`security`
+  (`REMOTE_TRANSPORT_NET/SEC`), `router_current_json` exposes the router's
+  outbound transport, and the UI's Live State compares them and shows a red
+  "transport mismatch: router X/Y vs VPS A/B" the moment they diverge —
+  before the operator notices no internet. Identity-diff can read "in sync"
+  while the transport silently disagrees, so this is a separate, louder
+  signal.
 - **G9**: no test asserts the two renderers (`render_vps_profile_template`
   CGI, `render_template` installer) cover the same placeholder set for the
   shared templates, nor that a rendered artifact is placeholder-free. R.1/R.3

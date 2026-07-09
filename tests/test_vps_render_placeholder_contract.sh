@@ -14,6 +14,7 @@ PROFILE="$ROOT/routers/gl-mt3000-glinet"
 CONFIG_TEMPLATE="$ROOT/vps/debian-13/files/xray-vps-config.template.json"
 REMOTE_INSTALL="$ROOT/vps/debian-13/files/install-vps.remote.sh"
 CGI="$PROFILE/files/xray-vps.cgi"
+UI="$PROFILE/files/xray.html"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2
@@ -77,6 +78,18 @@ printf '%s' "$router_cfg" | grep -q '"security": "reality"' \
 apply_fn="$(sed -n '/^apply_profile_to_router_internal()/,/^}/p' "$CGI")"
 printf '%s' "$apply_fn" | grep -q 'refusing to overwrite the working router config' \
 	|| fail "apply_profile_to_router_internal must refuse an incomplete profile (empty server_name/address/uuid/port) before overwriting the router config (node 8.2)"
+
+# G8 transport-mismatch detector: xray-vps.cgi must expose the transport
+# of BOTH sides (router outbound + VPS inbound) so a divergence can be
+# flagged in status before the tunnel silently fails. router_current must
+# carry transport_net/transport_sec, and the remote inspection must emit
+# REMOTE_TRANSPORT_NET/SEC.
+grep -q '"transport_net":"%s"' "$CGI" \
+	|| fail "router_current_json must expose the router outbound transport_net (G8)"
+grep -q 'REMOTE_TRANSPORT_NET' "$CGI" \
+	|| fail "remote inspection must emit the VPS inbound transport for the mismatch detector (G8)"
+grep -q 'transportMismatch' "$UI" \
+	|| fail "the UI must compare router vs VPS transport and warn on mismatch (G8)"
 
 # Recovery: revive-router.sh must rebuild the outbound as WS+TLS (the real
 # breakage was a transport left on raw/reality), and must not restore a
