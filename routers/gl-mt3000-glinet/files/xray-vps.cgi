@@ -2025,55 +2025,32 @@ run_repair_pipeline() {
 	render_remote_meta "$meta" "$profile_id"
 	render_vps_profile_template "$profile_id" "$install_script_path" "$rendered_install"
 
-	log_step "uploading rendered xray config to VPS"
-	if ! ssh_stdin_cmd "$profile_id" 'cat > /tmp/codex-router-vps-config.json' "$rendered" >/dev/null; then
-		log_step "FAILED to upload rendered xray config"
+	# Single-round-trip upload (DIAGNOSTIC-TREE 3.4 resilience): the old
+	# path opened 3-6 separate SSH connections (config, meta, script, an
+	# xray-present test, a uname, then execute). On a rate-limited WiFi
+	# repeater uplink the later connections in that burst get refused, so
+	# the whole repair failed even though the VPS was fine. We now stage
+	# the three files under the exact names the remote script expects,
+	# tar them, and hand the tar to a single SSH that extracts and runs
+	# the pipeline in one session (see the execute step below). Result:
+	# one connection instead of many, well within the burst limit.
+	local stage="/tmp/codex-repair-stage.$$"
+	local bundle_tar="/tmp/codex-repair-bundle.$$.tar"
+	rm -rf "$stage"; mkdir -p "$stage"
+	cp "$rendered" "$stage/codex-router-vps-config.json"
+	cp "$meta" "$stage/codex-router-meta.env"
+	cp "$rendered_install" "$stage/install-vps.remote.sh"
+	if ! tar -C "$stage" -cf "$bundle_tar" . 2>/dev/null; then
+		log_step "FAILED to build the upload bundle tar"
 		REPAIR_REPORT='[]'
-		REPAIR_FATAL='Failed to upload rendered xray config to the VPS.'
+		REPAIR_FATAL='Failed to stage the repair upload bundle on the router.'
 		REPAIR_RAW_LOG_PATH="$raw_log_file"
-		rm -f "$rendered" "$meta" "$rendered_install" "$report_local"
-		unset SSH_RAW_LOG_PATH
-		return 1
-	fi
-	log_step "uploading router meta.env to VPS"
-	if ! ssh_stdin_cmd "$profile_id" 'cat > /tmp/codex-router-meta.env' "$meta" >/dev/null; then
-		log_step "FAILED to upload router meta.env"
-		REPAIR_REPORT='[]'
-		REPAIR_FATAL='Failed to upload router meta.env to the VPS.'
-		REPAIR_RAW_LOG_PATH="$raw_log_file"
-		rm -f "$rendered" "$meta" "$rendered_install" "$report_local"
-		unset SSH_RAW_LOG_PATH
-		return 1
-	fi
-	log_step "uploading repair script to VPS"
-	if ! ssh_stdin_cmd "$profile_id" 'cat > /tmp/install-vps.remote.sh && chmod 755 /tmp/install-vps.remote.sh' "$rendered_install" >/dev/null; then
-		log_step "FAILED to upload repair script"
-		REPAIR_REPORT='[]'
-		REPAIR_FATAL='Failed to upload the repair script to the VPS.'
-		REPAIR_RAW_LOG_PATH="$raw_log_file"
-		rm -f "$rendered" "$meta" "$rendered_install" "$report_local"
+		rm -rf "$stage"; rm -f "$bundle_tar" "$rendered" "$meta" "$rendered_install" "$report_local"
 		unset SSH_RAW_LOG_PATH
 		return 1
 	fi
 
-	# Ship a bundled xray archive iff the remote xray binary is missing.
-	# The repair script picks it up automatically via extract_bundled_xray.
-	if ! ssh_cmd "$profile_id" 'test -x /usr/local/bin/xray' >/dev/null 2>&1; then
-		local vps_arch bundled_xray vps_pkg_dir
-		vps_arch="$(ssh_cmd "$profile_id" 'uname -m' 2>/dev/null || true)"
-		vps_pkg_dir="/usr/share/vpn-xray/vps/${vps_profile}/packages"
-		bundled_xray=''
-		case "$vps_arch" in
-			x86_64|amd64)  bundled_xray="${vps_pkg_dir}/Xray-linux-64.zip" ;;
-			aarch64|arm64) bundled_xray="${vps_pkg_dir}/Xray-linux-arm64-v8a.zip" ;;
-		esac
-		if [ -n "$bundled_xray" ] && [ -f "$bundled_xray" ]; then
-			log_step "shipping bundled xray archive for arch $vps_arch"
-			ssh_stdin_cmd "$profile_id" 'cat > /tmp/xray-bundled.zip' "$bundled_xray" >/dev/null 2>&1 || true
-		fi
-	fi
-
-	log_step "executing repair pipeline on VPS"
+	log_step "executing repair pipeline on VPS (single-session upload+run)"
 	local ssh_rc=0
 	# Wrap the remote script in `timeout 90` so a hanging step on the
 	# VPS never leaves this CGI (and its fcgiwrap worker) blocked
@@ -2084,11 +2061,38 @@ run_repair_pipeline() {
 	# the whole CGI silently before we get to record it. Guard with an
 	# if-block so a failed repair pipeline surfaces as a proper report
 	# rather than a truncated response with no body.
-	if ssh_cmd "$profile_id" "rm -f $report_remote; VPS_REMOTE_META_PATH='$remote_meta_path' REPAIR_REPORT_PATH='$report_remote' timeout 90 sh /tmp/install-vps.remote.sh >/dev/null 2>&1; ec=\$?; cat $report_remote 2>/dev/null; exit \$ec" > "$report_local"; then
-		ssh_rc=0
-	else
-		ssh_rc=$?
-	fi
+	#
+	# Resilience (DIAGNOSTIC-TREE 3.4): the pipeline is the longest single
+	# SSH op and lands after three uploads, so on a rate-limited repeater
+	# uplink it is the most likely to hit a transient "Operation timed
+	# out". A bare failure here would report a whole broken pipeline when
+	# the VPS is actually fine. Retry the execute step up to 2 times, but
+	# ONLY when the report file came back empty (a transport failure) —
+	# never when the remote script actually ran and produced a report
+	# (that exit code is real repair data, not a transport fault).
+	# The remote command reads the staged tar from stdin, extracts the
+	# three files to /tmp, then runs the repair pipeline and cats the
+	# report. All in one SSH session fed by the bundle tar.
+	local exec_cmd exec_try=0
+	exec_cmd="cd /tmp && tar -xf - && chmod 755 /tmp/install-vps.remote.sh && rm -f $report_remote; VPS_REMOTE_META_PATH='$remote_meta_path' REPAIR_REPORT_PATH='$report_remote' timeout 90 sh /tmp/install-vps.remote.sh >/dev/null 2>&1; ec=\$?; cat $report_remote 2>/dev/null; exit \$ec"
+	while [ "$exec_try" -lt 3 ]; do
+		if ssh_stdin_cmd "$profile_id" "$exec_cmd" "$bundle_tar" > "$report_local"; then
+			ssh_rc=0
+		else
+			ssh_rc=$?
+		fi
+		# If we got a non-empty report back, the remote script ran — done,
+		# regardless of ssh_rc (that is the real repair verdict).
+		if [ -s "$report_local" ]; then
+			break
+		fi
+		exec_try=$((exec_try + 1))
+		if [ "$exec_try" -lt 3 ]; then
+			log_step "no report yet (likely a transient SSH timeout on the repeater uplink); retrying in 6s"
+			sleep 6
+		fi
+	done
+	rm -rf "$stage"; rm -f "$bundle_tar"
 	log_step "repair pipeline finished with exit=$ssh_rc"
 
 	# Fold the JSONL report into a JSON array. Each non-empty line should
