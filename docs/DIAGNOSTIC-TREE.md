@@ -471,20 +471,24 @@ field: implement, then move it up into the tree body.
 - **G10**: cert served ≠ cert on disk. The VPS can regenerate
   `/usr/local/etc/xray/certs/server.crt` while a running xray keeps serving
   the cert it loaded at start (observed 2026-07-10: disk 65:9D…, served
-  93:FE…). The router pins the *disk* cert (fetched via SSH/openssl), so it
-  mismatches the *served* cert until xray is restarted. The repair runtime
-  step (6.8) restarts xray, which reloads the disk cert, so a full repair
-  self-heals it — but a bare cert regen without restart leaves a silent
-  mismatch. No detector for the divergence yet; `revive-router.sh` sidesteps
-  it by re-pinning from what the VPS *serves* (openssl s_client) and the
-  operator restarting the VPS xray.
-- **G11**: no automatic router cert re-sync between installs. `install.sh`
-  fetches and pins the live VPS cert, but drift that happens afterward (a
-  reprovision, a cert regen) is only fixed by re-running install or
-  `revive-router.sh`. An on-uplink-change or periodic re-pin was
-  deliberately NOT added to the boot/hotplug path yet — it needs live
-  testing and the boot path is high-blast-radius (broke the router twice in
-  this cycle). Tracked for a tested follow-up.
+  93:FE…). Recovery scripts re-pin from what the VPS *serves* (openssl
+  s_client), so they are immune to this; the repair runtime step (6.8)
+  restarts xray which reconciles served=disk. Remaining sharp edge: a bare
+  cert regen on the VPS without an xray restart there leaves the VPS serving
+  a stale cert — an operator VPS-side concern, not the router's.
+- **G11**: automatic router cert re-sync — **CLOSED (self-healing).** Cert-pin
+  drift presents as a severe smoke failure (path up, egress dead), which the
+  `xray-switch-watchdog` already detects. `vpn-xray-repin-cert` (a bounded,
+  best-effort, idempotent helper; see `docs/BOOT-PATH-DESIGN.md`) is invoked
+  by the watchdog in its severe-failure branch, *before* the restart it was
+  already going to do, so the restart reloads the corrected cert. Chosen over
+  a periodic cron because the watchdog already runs and only acts when the
+  path is actually broken. **The boot path (`codex-xray.init`) is NOT
+  touched.** Uncovered and fixed a pre-existing bug along the way: the
+  watchdog daemon had never actually run (literal single quotes truncated its
+  procd `sh -c` command); it runs now. Verified end-to-end: a deliberately
+  drifted cert self-heals in ~80 s with no manual step; healthy path shows no
+  churn.
 - **G12**: profile-parity is maintained by hand. `xray-vps.cgi`,
   `xray-admin.cgi`, and `xray.html` are identical across the two router
   profiles but nothing enforces it — a future edit to one profile silently

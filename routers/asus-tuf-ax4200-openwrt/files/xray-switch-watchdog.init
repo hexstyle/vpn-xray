@@ -112,7 +112,7 @@ smoke_openai_ok() {
 restart_runtime() {
 	local output=""
 
-	xray_failsafe_enable 'watchdog restarting Xray runtime'
+	xray_failsafe_enable "watchdog restarting Xray runtime"
 	record_timestamp "$LAST_RECOVERY_FILE"
 	if [ -x "'"$ADMIN_CGI"'" ]; then
 		output="$(timeout 30 env REQUEST_METHOD=GET QUERY_STRING=action=restart "'"$ADMIN_CGI"'" 2>/dev/null \
@@ -160,6 +160,18 @@ maybe_smoke_recover() {
 			return 0
 		fi
 		xray_failsafe_enable "severe smoke failure: $output"
+		# Cert-pin drift (BOOT-PATH-DESIGN §2) presents exactly as a severe
+		# smoke failure — path up, egress dead — and a plain restart cannot
+		# fix it (the pinned cert is still wrong, so it would restart-loop
+		# forever). Re-pin the cert to what the VPS serves BEFORE the
+		# restart the watchdog was already going to do; the restart then
+		# reloads the corrected cert. Best-effort and bounded: on a healthy
+		# cert this is a no-op (exit 0), on an unreachable VPS it keeps the
+		# existing pin (exit 0), and any failure degrades to a plain restart.
+		if [ -x /usr/bin/vpn-xray-repin-cert ]; then
+			/usr/bin/vpn-xray-repin-cert
+			[ "$?" -eq 10 ] && log "re-pinned drifted VPS cert before restart"
+		fi
 		log "attempting runtime restart after severe smoke failure"
 		restart_runtime >/dev/null 2>&1 || log "runtime restart failed after severe smoke failure"
 		reset_counter "$SEVERE_FAILURE_FILE"
@@ -193,7 +205,7 @@ while true; do
 			/etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true
 		fi
 		if config_ready && ! path_active; then
-			xray_failsafe_enable 'watchdog detected inactive Xray path while switch is on'
+			xray_failsafe_enable "watchdog detected inactive Xray path while switch is on"
 			record_timestamp "$LAST_RECOVERY_FILE"
 			reset_counter "$SEVERE_FAILURE_FILE"
 			reset_counter "$OPENAI_FAILURE_FILE"

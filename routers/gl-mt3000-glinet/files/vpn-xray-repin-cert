@@ -1,0 +1,54 @@
+#!/bin/sh
+# vpn-xray-repin-cert — re-pin the router's TLS verify certificate to the
+# leaf cert the VPS currently serves. Bounded, best-effort, idempotent.
+# Does NOT restart anything — the caller owns restart.
+#
+# Contract (see docs/BOOT-PATH-DESIGN.md §4):
+#   exit 0  = no change (already correct, or could not decide safely)
+#   exit 10 = cert re-pinned; caller should restart xray to reload it
+#   exit 1  = hard error (no openssl / no config); caller ignores
+#
+# Never restarts a service, never blocks long, never deletes anything,
+# never acts on an empty/failed fetch (a wrong-but-present pin is
+# recoverable; an empty one is not).
+
+CONFIG=/etc/xray/codex-xray.json
+CERT=/etc/xray/server.crt
+FETCH_TIMEOUT=8
+
+log() { logger -t vpn-xray-repin-cert "$*" 2>/dev/null || true; }
+
+[ -f "$CONFIG" ] || exit 0
+command -v jsonfilter >/dev/null 2>&1 || exit 1
+command -v openssl >/dev/null 2>&1 || exit 1
+
+addr="$(jsonfilter -i "$CONFIG" -e '@.outbounds[0].settings.vnext[0].address' 2>/dev/null)"
+port="$(jsonfilter -i "$CONFIG" -e '@.outbounds[0].settings.vnext[0].port' 2>/dev/null)"
+sni="$(jsonfilter -i "$CONFIG" -e '@.outbounds[0].streamSettings.tlsSettings.serverName' 2>/dev/null)"
+
+# Nothing to do if we cannot identify the endpoint — never guess.
+[ -n "$addr" ] || exit 0
+case "$port" in ''|*[!0-9]*) port=443 ;; esac
+[ -n "$sni" ] || sni=www.cloudflare.com
+
+# Fetch the leaf cert the VPS presents right now. Bounded by timeout so a
+# hung/unreachable VPS cannot stall the caller (the watchdog's 10s loop).
+fetched="$(echo | timeout "$FETCH_TIMEOUT" openssl s_client -connect "${addr}:${port}" -servername "$sni" 2>/dev/null | openssl x509 2>/dev/null)"
+
+# Empty fetch = VPS down/unreachable. Keep the existing pin (recoverable),
+# never blank it.
+[ -n "$fetched" ] || exit 0
+
+# Already correct? No write, no restart.
+if [ -f "$CERT" ] && printf '%s\n' "$fetched" | cmp -s - "$CERT"; then
+	exit 0
+fi
+
+# Re-pin atomically (write temp, move) so a partial write can't leave a
+# truncated cert.
+tmp="${CERT}.repin.$$"
+printf '%s\n' "$fetched" > "$tmp" || { rm -f "$tmp"; exit 1; }
+chmod 600 "$tmp" 2>/dev/null || true
+mv "$tmp" "$CERT" || { rm -f "$tmp"; exit 1; }
+log "re-pinned $CERT to the cert ${addr}:${port} now serves"
+exit 10
