@@ -556,7 +556,7 @@ write_cache() {
 render_router_config() {
 	local path="$1"
 	local profile_id="$2"
-	local server_address server_port server_name uuid public_key short_id flow user_flow_line
+	local server_address server_port server_name uuid public_key short_id flow user_flow_line ws_path
 
 	server_address="$(profile_get "$profile_id" server_address)"
 	server_port="$(profile_get "$profile_id" server_port)"
@@ -565,6 +565,8 @@ render_router_config() {
 	public_key="$(profile_get "$profile_id" public_key)"
 	short_id="$(profile_get "$profile_id" short_id)"
 	flow="$(profile_get "$profile_id" flow)"
+	ws_path="$(profile_get "$profile_id" ws_path)"
+	[ -n "$ws_path" ] || ws_path='/cdn'
 	user_flow_line=''
 	if [ -n "$flow" ]; then
 		user_flow_line="$(printf ',\n                "flow": "%s"' "$flow")"
@@ -626,20 +628,25 @@ render_router_config() {
         ]
       },
       "streamSettings": {
-        "network": "raw",
-        "security": "reality",
-        "realitySettings": {
-          "fingerprint": "edge",
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
           "serverName": "${server_name}",
-          "publicKey": "${public_key}",
-          "shortId": "${short_id}",
-          "spiderX": "/"
+          "alpn": ["h2", "http/1.1"],
+          "fingerprint": "chrome",
+          "certificates": [
+            {"usage": "verify", "certificateFile": "/etc/xray/server.crt"}
+          ]
+        },
+        "wsSettings": {
+          "path": "${ws_path}",
+          "host": "${server_name}"
         }
       },
       "mux": {
         "enabled": true,
         "concurrency": 8,
-        "xudpConcurrency": -1
+        "xudpConcurrency": 16
       }
     }
   ]
@@ -1695,6 +1702,24 @@ apply_profile_to_router_internal() {
 	ensure_profile_material "$profile_id"
 	uci commit "$PROFILE_PACKAGE"
 
+	# GUARD (DIAGNOSTIC-TREE node R / 8.4): never render a router config
+	# from a profile missing TLS-critical fields. An empty server_name
+	# makes xray validate the VPS cert against the dial IP, which has no
+	# IP SAN, so every tunnel dial fails ("x509 doesn't contain any IP
+	# SANs", 2026-07-09). An empty server_address/uuid/port is equally
+	# unusable. Refuse rather than overwrite a working config with a
+	# broken render. `xray -test` does NOT catch this — an empty
+	# serverName is valid config syntax.
+	local sa sn su sp
+	sa="$(profile_get "$profile_id" server_address)"
+	sn="$(profile_get "$profile_id" server_name)"
+	su="$(profile_get "$profile_id" uuid)"
+	sp="$(profile_get "$profile_id" server_port)"
+	if [ -z "$sa" ] || [ -z "$sn" ] || [ -z "$su" ] || [ -z "$sp" ]; then
+		APPLY_ROUTER_ERROR="profile is missing required fields (server_address='$sa' server_name='$sn' uuid set='$([ -n "$su" ] && echo yes || echo no)' port='$sp'); refusing to overwrite the working router config"
+		return 2
+	fi
+
 	rendered='/tmp/codex-xray.profile.json'
 	render_router_config "$rendered" "$profile_id"
 	test_output="$("$ROUTER_XRAY_BIN" run -test -config "$rendered" 2>&1 || true)"
@@ -1724,8 +1749,9 @@ apply_profile_to_router_action() {
 	local profile_id backup
 
 	profile_id="$(active_profile_id)"
+	APPLY_ROUTER_ERROR=''
 	backup="$(apply_profile_to_router_internal "$profile_id")" || {
-		emit_error apply_router 'Rendered router config failed validation or could not be applied.'
+		emit_error apply_router "${APPLY_ROUTER_ERROR:-Rendered router config failed validation or could not be applied.}"
 		return 0
 	}
 
@@ -2289,27 +2315,24 @@ diagnose_repair_action() {
 	# live VPS identity into the profile. UCI-only, risk class `safe`, so
 	# it may run synchronously. Only when the profile has no public_key of
 	# its own; an operator-authored profile is never overwritten (8.4).
-	local router_apply='in_sync'
 	if [ "$repair_rc" -eq 0 ] && [ -z "$(profile_get "$profile_id" public_key)" ]; then
 		adopt_remote_into_profile "$profile_id" >/dev/null 2>&1 || true
 	fi
 
-	# DIAGNOSTIC-TREE 8.2: router stale vs profile. Applying performs a
-	# hard cutover of the transparent path (stops codex-transproxy and
-	# codex-xray) — risk class `disruptive`, which must NEVER run inside
-	# this CGI request: the request itself may ride the path being cut,
-	# which hung the router until reboot on 2026-07-09. Instead we
-	# schedule a detached background job and report its status file.
-	if [ "$repair_rc" -eq 0 ]; then
-		if [ ! -s "$ROUTER_CONFIG" ] || [ -n "$(profile_diff_fields "$profile_id" router)" ]; then
-			if schedule_router_apply_job "$profile_id"; then
-				router_apply='scheduled'
-			else
-				router_apply='schedule_failed'
-			fi
-		fi
-	else
-		router_apply='skipped'
+	# DIAGNOSTIC-TREE 8.2 / meta-rule 5: diagnose_repair repairs the VPS.
+	# It MUST NOT touch the router's live client config. An earlier build
+	# auto-scheduled a router apply whenever the profile differed from the
+	# router — which rendered a config from an incomplete profile (empty
+	# server_name) and left the router dialing the VPS with an empty TLS
+	# serverName, so the cert validated against the IP and every tunnel
+	# dial failed (x509 "doesn't contain any IP SANs", 2026-07-09). The
+	# router's working config is never overwritten as a side effect of a
+	# VPS repair. We only *report* drift so the operator can decide; the
+	# apply is a separate, explicit action. router_apply is always
+	# 'not_touched' here.
+	local router_apply='not_touched'
+	if [ "$repair_rc" -eq 0 ] && [ -n "$(profile_diff_fields "$profile_id" router)" ]; then
+		router_apply='drift_detected'
 	fi
 
 	if [ "$repair_rc" -eq 0 ]; then

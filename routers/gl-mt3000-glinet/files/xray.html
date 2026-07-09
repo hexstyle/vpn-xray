@@ -2903,7 +2903,12 @@
       btn.disabled = true;
       btn.textContent = "Loading...";
       try {
-        const data = await callApi(runtimeApi, "health", null, { timeoutMs: 6000 });
+        // 20s, not 6s: when the router is degraded (e.g. a broken client
+        // config makes xray retry-storm the VPS and peg the CPU) the health
+        // CGI — which only reads local files — can still be slow to be
+        // scheduled. A short timeout fails exactly when you most need the
+        // data. On timeout we say why, rather than a bare "Failed".
+        const data = await callApi(runtimeApi, "health", null, { timeoutMs: 20000 });
         const samples = data.samples || [];
         const alerts = data.alerts || [];
         const memTotalMb = (data.mem_total_kb || 491388) / 1024;
@@ -2996,7 +3001,11 @@
           guardDiv.innerHTML = "";
         }
       } catch (err) {
-        document.getElementById("healthEmpty").textContent = `Failed: ${err.message}`;
+        const isTimeout = /timeout|abort/i.test(err.message || "");
+        document.getElementById("healthEmpty").style.display = "";
+        document.getElementById("healthEmpty").textContent = isTimeout
+          ? "Health timed out. The router is likely under heavy load — a broken client config makes xray retry-storm the VPS. Run Diagnose & Repair, or revive the router config, then retry."
+          : `Failed: ${err.message}`;
       } finally {
         btn.disabled = false;
         btn.textContent = "Load Health";
@@ -3671,16 +3680,30 @@
           document.getElementById("repairCredsForm").style.display = "none";
           document.getElementById("repairSshPassword").value = "";
           await refreshAll(false, true, true);
-          if (data.router_apply === "scheduled") {
-            flash("VPS repaired. Router config apply is running in the background — the path will blip for a few seconds, then Live State refreshes.", "good");
-          } else if (data.router_apply === "schedule_failed") {
-            flash("VPS repaired, but the background router apply could not be scheduled. Use Restart Xray Runtime after checking Live State.", "bad");
+          if (data.router_apply === "drift_detected") {
+            flash("VPS repaired. The router client config differs from the profile — review it before applying; the repair does NOT change the router config automatically.", "warn");
           } else {
             flash("Diagnose & repair completed successfully.", "good");
           }
         } else {
-          const reason = data.reason || data.error || "one or more steps failed";
-          flash(`Repair finished with issues: ${reason}`, "bad");
+          // Show the step tree AND auto-expand the raw log so the operator
+          // sees exactly which node failed and why, instead of a bare
+          // "one or more steps failed". Name the failed steps in the flash.
+          const failed = (data.steps || []).filter((s) => s.status === "failed");
+          const failedNames = failed.map((s) => s.id).join(", ");
+          const rawWrap = document.getElementById("repairRawWrap");
+          if (rawWrap && (data.raw_log || "").length) {
+            rawWrap.open = true;
+          }
+          let reason;
+          if (data.error === "pipeline_setup_failed") {
+            reason = `could not start the repair pipeline: ${data.reason || "unknown"}`;
+          } else if (failedNames) {
+            reason = `failed step(s): ${failedNames}. See the report and raw log below.`;
+          } else {
+            reason = data.reason || data.error || "one or more steps failed — see the report and raw log below.";
+          }
+          flash(`Repair finished with issues — ${reason}`, "bad");
         }
       } catch (err) {
         flash(`Repair failed: ${err.message}`, "bad");

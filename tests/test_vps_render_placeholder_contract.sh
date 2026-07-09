@@ -61,4 +61,21 @@ grep -q 'case "$TLS_CERT_PATH" in' "$REMOTE_INSTALL" \
 grep -q "grep -q '\[\$\]\[{\]\[A-Z_\]\[A-Z0-9_\]\*\[}\]' \"\$staged\"" "$REMOTE_INSTALL" \
 	|| fail "step_config must reject a staged config containing an unsubstituted placeholder (node 6.6)"
 
+# Node R.4 / 8.5: the CGI router-config generator must emit the same
+# transport the VPS serves (WS+TLS), not the legacy raw/reality — else an
+# apply produces a config that cannot talk to the VPS.
+router_cfg="$(sed -n '/^render_router_config()/,/^}/p' "$CGI")"
+printf '%s' "$router_cfg" | grep -q '"network": "ws"' \
+	|| fail "render_router_config must emit network=ws to match the VPS + template transport (node 8.5)"
+printf '%s' "$router_cfg" | grep -q '"security": "tls"' \
+	|| fail "render_router_config must emit security=tls to match the VPS + template transport (node 8.5)"
+printf '%s' "$router_cfg" | grep -q '"security": "reality"' \
+	&& fail "render_router_config still emits reality — transport mismatch with the WS+TLS VPS (node 8.5)"
+
+# Node 8.2 guard: applying a router config must refuse when TLS-critical
+# profile fields are empty (empty serverName → cert validated against the IP).
+apply_fn="$(sed -n '/^apply_profile_to_router_internal()/,/^}/p' "$CGI")"
+printf '%s' "$apply_fn" | grep -q 'refusing to overwrite the working router config' \
+	|| fail "apply_profile_to_router_internal must refuse an incomplete profile (empty server_name/address/uuid/port) before overwriting the router config (node 8.2)"
+
 printf 'ok\n'

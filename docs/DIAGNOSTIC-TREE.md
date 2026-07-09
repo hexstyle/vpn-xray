@@ -309,11 +309,24 @@ non-empty; or router dials wrong port/SNI (4.5).
 - 8.2 **Profile authoritative, router stale**: rendering
   `/etc/xray/codex-xray.json` + runtime restart —
   `apply_profile_to_router_internal`. **`disruptive`** (hard cutover of the
-  transparent path). From the UI this must run as a **deferred background
-  job**: the CGI schedules it detached (`start-stop-daemon`/`nohup` + status
-  file), returns immediately, and the UI polls the status file. Running it
-  synchronously inside the CGI request hung the router on 2026-07-09
-  (the request rode the path being cut; fcgiwrap worker never returned).
+  transparent path). **A VPS repair NEVER applies this as a side effect**
+  (meta-rule 5). An earlier build auto-scheduled the apply whenever the
+  profile differed from the router; the profile had an empty `server_name`,
+  the render produced a config with an empty TLS `serverName`, and the
+  router then validated the VPS cert against the dial IP — which has no IP
+  SAN — so every tunnel dial failed (`x509: cannot validate certificate for
+  <IP> because it doesn't contain any IP SANs`, 2026-07-10) and clients lost
+  internet; reboot did not help because the broken config persisted.
+  `diagnose_repair` now only *reports* drift (`router_apply=drift_detected`);
+  the apply is a separate, explicit operator action. Two hard guards were
+  added: (a) `apply_profile_to_router_internal` refuses when
+  `server_name`/`server_address`/`uuid`/`server_port` are empty — `xray
+  -test` does not catch an empty serverName (it is valid syntax); (b) when
+  the apply *is* run explicitly, it stays a deferred background job (never
+  synchronous in a CGI request — that hung the router on 2026-07-09).
+  Recovery when already broken: `scripts/revive-router.sh` (restores the
+  newest good backup or patches `serverName`/`host` to the cert CN, then
+  restarts). See also node R.4.
 - 8.3 **Profile authoritative, VPS stale**: `config` step of the repair
   pipeline installs the staged render (6.6). Guarded: never replaces a valid
   live config with an invalid render.
@@ -366,6 +379,16 @@ it is its own node.
   **comment** of a templated script is still substituted by the naive
   installer renderer and crashes on an unknown key (`KeyError: PLACEHOLDER`,
   2026-07-09). Do not write `${...}` tokens in comments of rendered files.
+- R.4 **Empty TLS serverName → cert validated against the IP.** A router/VPS
+  config rendered with an empty `serverName` makes xray fall back to the
+  dial address (the IP) as the TLS reference name; the cert (CN=a hostname,
+  no IP SAN) then fails validation and every dial dies. Passes `xray -test`.
+  Guard at the producer: refuse to render/apply when serverName would be
+  empty (node 8.2 guard). Also two independent router-config generators
+  diverged in *transport* — `render_router_config` (CGI) emitted
+  `raw`/`reality` while the template + VPS were `ws`/`tls`; if the CGI path
+  ever applied, the router could not talk to the VPS (node 8.5). Both now
+  emit WS+TLS. Keep the router config generators transport-identical.
 
 **Probes**: `grep -n '\${[A-Z_][A-Z0-9_]*}' <rendered-output>` must return
 nothing; diff the substitution key sets of the two renderers against the
