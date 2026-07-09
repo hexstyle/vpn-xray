@@ -366,13 +366,41 @@ ssh_exec_with_identity() {
 	port="$(printf '%s' "$packed" | cut -d '|' -f 3)"
 	user="$(printf '%s' "$packed" | cut -d '|' -f 4)"
 
-	ssh -i "$identity" \
-		-o BatchMode=yes \
-		-o ConnectTimeout=8 \
-		-o StrictHostKeyChecking=no \
-		-o UserKnownHostsFile="$KNOWN_HOSTS" \
-		-p "$port" \
-		"$user@$host" "$cmd"
+	# ConnectionAttempts=3 handles intermittent SYN loss on WiFi repeater
+	# uplinks (the GL.iNet apcli0 case). ServerAliveInterval keeps the
+	# session alive when the pipeline uploads large files afterwards.
+	# When SSH_RAW_LOG_PATH is set (repair pipeline sets it to a file),
+	# stderr is appended to that file so the CGI can surface the actual
+	# OpenSSH error to the operator instead of hiding it behind a generic
+	# error. We can't use an fd here because fcgiwrap keeps fd 3+ busy
+	# for its FastCGI protocol channel.
+	if [ -n "${SSH_RAW_LOG_PATH:-}" ]; then
+		ssh -i "$identity" \
+			-o BatchMode=yes \
+			-o ConnectTimeout=8 \
+			-o ConnectionAttempts=3 \
+			-o ServerAliveInterval=15 \
+			-o StrictHostKeyChecking=no \
+			-o UserKnownHostsFile="$KNOWN_HOSTS" \
+			-o ControlMaster=auto \
+			-o ControlPath=/tmp/xray-vps-ssh-%r@%h-%p \
+			-o ControlPersist=60 \
+			-p "$port" \
+			"$user@$host" "$cmd" 2>>"$SSH_RAW_LOG_PATH"
+	else
+		ssh -i "$identity" \
+			-o BatchMode=yes \
+			-o ConnectTimeout=8 \
+			-o ConnectionAttempts=3 \
+			-o ServerAliveInterval=15 \
+			-o StrictHostKeyChecking=no \
+			-o UserKnownHostsFile="$KNOWN_HOSTS" \
+			-o ControlMaster=auto \
+			-o ControlPath=/tmp/xray-vps-ssh-%r@%h-%p \
+			-o ControlPersist=60 \
+			-p "$port" \
+			"$user@$host" "$cmd"
+	fi
 }
 
 ssh_stdin_with_identity() {
@@ -386,13 +414,33 @@ ssh_stdin_with_identity() {
 	port="$(printf '%s' "$packed" | cut -d '|' -f 4)"
 	user="$(printf '%s' "$packed" | cut -d '|' -f 5)"
 
-	ssh -i "$identity" \
-		-o BatchMode=yes \
-		-o ConnectTimeout=8 \
-		-o StrictHostKeyChecking=no \
-		-o UserKnownHostsFile="$KNOWN_HOSTS" \
-		-p "$port" \
-		"$user@$host" "$remote_cmd" < "$stdin_path"
+	if [ -n "${SSH_RAW_LOG_PATH:-}" ]; then
+		ssh -i "$identity" \
+			-o BatchMode=yes \
+			-o ConnectTimeout=8 \
+			-o ConnectionAttempts=3 \
+			-o ServerAliveInterval=15 \
+			-o StrictHostKeyChecking=no \
+			-o UserKnownHostsFile="$KNOWN_HOSTS" \
+			-o ControlMaster=auto \
+			-o ControlPath=/tmp/xray-vps-ssh-%r@%h-%p \
+			-o ControlPersist=60 \
+			-p "$port" \
+			"$user@$host" "$remote_cmd" < "$stdin_path" 2>>"$SSH_RAW_LOG_PATH"
+	else
+		ssh -i "$identity" \
+			-o BatchMode=yes \
+			-o ConnectTimeout=8 \
+			-o ConnectionAttempts=3 \
+			-o ServerAliveInterval=15 \
+			-o StrictHostKeyChecking=no \
+			-o UserKnownHostsFile="$KNOWN_HOSTS" \
+			-o ControlMaster=auto \
+			-o ControlPath=/tmp/xray-vps-ssh-%r@%h-%p \
+			-o ControlPersist=60 \
+			-p "$port" \
+			"$user@$host" "$remote_cmd" < "$stdin_path"
+	fi
 }
 
 ssh_cmd() {
@@ -429,7 +477,21 @@ ssh_stdin_cmd() {
 }
 
 ssh_works() {
-	ssh_cmd "$1" 'echo ok' >/dev/null 2>&1
+	# Wrapper retry: even with ssh's own ConnectionAttempts=3 the WiFi-
+	# repeater path (apcli0 on GL.iNet) still occasionally drops the
+	# first SYN long enough to look like Connection refused. Retrying at
+	# the shell level with a longer backoff (3s) works around
+	# repeater-side burst rate limits that would otherwise reject a
+	# tight retry loop.
+	local i=0
+	while [ "$i" -lt 3 ]; do
+		if ssh_cmd "$1" 'echo ok' >/dev/null 2>&1; then
+			return 0
+		fi
+		i=$((i + 1))
+		[ "$i" -lt 3 ] && sleep 3
+	done
+	return 1
 }
 
 profile_cache_path() {
@@ -1781,6 +1843,342 @@ apply_everything_action() {
 	emit_status_response apply_profile
 }
 
+# Return 0 when the current request carries any of the profile
+# identity/routing fields that save_profile_from_request expects. Used to
+# decide whether an incoming diagnose_repair call is being made from the
+# UI (form-based, edit-then-submit) or from a headless caller that only
+# wants to trigger repair on the already-selected profile.
+request_has_profile_edit() {
+	local key
+	for key in profile_id label vps_profile ssh_host ssh_port ssh_user \
+		server_address server_port server_name uuid public_key \
+		private_key short_id flow auth_mode bootstrap_private_key; do
+		if request_has_key "$key"; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+# Run the VPS repair pipeline over an established SSH connection. Stages
+# the rendered config + meta + repair script into /tmp on the VPS, runs
+# the script with REPAIR_REPORT_PATH pointing at a report file, then
+# reads the report back and streams it as the "steps" array of the CGI
+# response. The report format is defined in install-vps.remote.sh.
+run_repair_pipeline() {
+	local profile_id="$1"
+	local vps_profile install_script_rel install_script_path remote_meta_path
+	local rendered meta rendered_install
+	local report_local report_remote='/tmp/codex-router-vps-repair.jsonl'
+	local raw_log_file
+
+	# SSH_RAW_LOG_PATH tells ssh_exec_with_identity / ssh_stdin_with_identity
+	# to append their stderr to this file. Fcgiwrap keeps fd 3+ busy for
+	# its FastCGI channel so we cannot use `exec 3>>file` here — the
+	# path-based redirect below is portable across those environments.
+	raw_log_file="/tmp/codex-router-vps-repair-raw.$$.log"
+	: > "$raw_log_file"
+	SSH_RAW_LOG_PATH="$raw_log_file"
+	export SSH_RAW_LOG_PATH
+
+	log_step() {
+		printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >> "$raw_log_file"
+	}
+
+	vps_profile="$(selected_vps_profile "$profile_id")"
+	install_script_rel="$(vps_profile_value "$vps_profile" VPS_INSTALL_SCRIPT)"
+	install_script_path="$(vps_profile_file_path "$vps_profile" "$install_script_rel")"
+	remote_meta_path="$(vps_profile_value "$vps_profile" VPS_REMOTE_META_PATH)"
+	[ -f "$install_script_path" ] || {
+		log_step "FATAL repair script template missing on router at $install_script_path"
+		REPAIR_REPORT='[]'
+		REPAIR_FATAL='Repair script template is not available on the router.'
+		REPAIR_RAW_LOG_PATH="$raw_log_file"
+		unset SSH_RAW_LOG_PATH
+		return 1
+	}
+	[ -n "$remote_meta_path" ] || remote_meta_path='/usr/local/etc/xray/codex-router-meta.env'
+
+	rendered='/tmp/codex-router-vps-config.json'
+	meta='/tmp/codex-router-vps-meta.env'
+	rendered_install='/tmp/codex-router-install.remote.sh'
+	report_local="/tmp/codex-router-vps-repair.$$.jsonl"
+
+	log_step "rendering server config, meta, and repair script templates"
+	render_server_config "$rendered" "$profile_id"
+	render_remote_meta "$meta" "$profile_id"
+	render_vps_profile_template "$profile_id" "$install_script_path" "$rendered_install"
+
+	log_step "uploading rendered xray config to VPS"
+	if ! ssh_stdin_cmd "$profile_id" 'cat > /tmp/codex-router-vps-config.json' "$rendered" >/dev/null; then
+		log_step "FAILED to upload rendered xray config"
+		REPAIR_REPORT='[]'
+		REPAIR_FATAL='Failed to upload rendered xray config to the VPS.'
+		REPAIR_RAW_LOG_PATH="$raw_log_file"
+		rm -f "$rendered" "$meta" "$rendered_install" "$report_local"
+		unset SSH_RAW_LOG_PATH
+		return 1
+	fi
+	log_step "uploading router meta.env to VPS"
+	if ! ssh_stdin_cmd "$profile_id" 'cat > /tmp/codex-router-meta.env' "$meta" >/dev/null; then
+		log_step "FAILED to upload router meta.env"
+		REPAIR_REPORT='[]'
+		REPAIR_FATAL='Failed to upload router meta.env to the VPS.'
+		REPAIR_RAW_LOG_PATH="$raw_log_file"
+		rm -f "$rendered" "$meta" "$rendered_install" "$report_local"
+		unset SSH_RAW_LOG_PATH
+		return 1
+	fi
+	log_step "uploading repair script to VPS"
+	if ! ssh_stdin_cmd "$profile_id" 'cat > /tmp/install-vps.remote.sh && chmod 755 /tmp/install-vps.remote.sh' "$rendered_install" >/dev/null; then
+		log_step "FAILED to upload repair script"
+		REPAIR_REPORT='[]'
+		REPAIR_FATAL='Failed to upload the repair script to the VPS.'
+		REPAIR_RAW_LOG_PATH="$raw_log_file"
+		rm -f "$rendered" "$meta" "$rendered_install" "$report_local"
+		unset SSH_RAW_LOG_PATH
+		return 1
+	fi
+
+	# Ship a bundled xray archive iff the remote xray binary is missing.
+	# The repair script picks it up automatically via extract_bundled_xray.
+	if ! ssh_cmd "$profile_id" 'test -x /usr/local/bin/xray' >/dev/null 2>&1; then
+		local vps_arch bundled_xray vps_pkg_dir
+		vps_arch="$(ssh_cmd "$profile_id" 'uname -m' 2>/dev/null || true)"
+		vps_pkg_dir="/usr/share/vpn-xray/vps/${vps_profile}/packages"
+		bundled_xray=''
+		case "$vps_arch" in
+			x86_64|amd64)  bundled_xray="${vps_pkg_dir}/Xray-linux-64.zip" ;;
+			aarch64|arm64) bundled_xray="${vps_pkg_dir}/Xray-linux-arm64-v8a.zip" ;;
+		esac
+		if [ -n "$bundled_xray" ] && [ -f "$bundled_xray" ]; then
+			log_step "shipping bundled xray archive for arch $vps_arch"
+			ssh_stdin_cmd "$profile_id" 'cat > /tmp/xray-bundled.zip' "$bundled_xray" >/dev/null 2>&1 || true
+		fi
+	fi
+
+	log_step "executing repair pipeline on VPS"
+	local ssh_rc=0
+	# The script runs under set -e, so a non-zero ssh_cmd exit would kill
+	# the whole CGI silently before we get to record it. Guard with an
+	# if-block so a failed repair pipeline surfaces as a proper report
+	# rather than a truncated response with no body.
+	if ssh_cmd "$profile_id" "rm -f $report_remote; VPS_REMOTE_META_PATH='$remote_meta_path' REPAIR_REPORT_PATH='$report_remote' sh /tmp/install-vps.remote.sh >/dev/null 2>&1; ec=\$?; cat $report_remote 2>/dev/null; exit \$ec" > "$report_local"; then
+		ssh_rc=0
+	else
+		ssh_rc=$?
+	fi
+	log_step "repair pipeline finished with exit=$ssh_rc"
+
+	# Fold the JSONL report into a JSON array. Each non-empty line should
+	# already be a valid JSON object.
+	REPAIR_REPORT='['
+	local first=1 line
+	while IFS= read -r line; do
+		[ -z "$line" ] && continue
+		if [ "$first" = '1' ]; then
+			first=0
+		else
+			REPAIR_REPORT="${REPAIR_REPORT},"
+		fi
+		REPAIR_REPORT="${REPAIR_REPORT}${line}"
+	done < "$report_local"
+	REPAIR_REPORT="${REPAIR_REPORT}]"
+
+	REPAIR_RAW_LOG_PATH="$raw_log_file"
+	unset SSH_RAW_LOG_PATH
+	rm -f "$rendered" "$meta" "$rendered_install" "$report_local"
+	return "$ssh_rc"
+}
+
+# Emit a structured response for the diagnose_repair action. Fields:
+#   ok: boolean; false when SSH itself failed or the pipeline could not
+#       run at all, true when the pipeline finished (whether some
+#       individual steps failed or not — the caller reads status.overall).
+#   error / need: present only when we need the operator to supply
+#       credentials.
+#   steps: JSON array of per-step reports (may be empty on hard errors).
+# Trim, escape, and cap the raw log so a long transcript does not blow
+# up the JSON response. Returns the JSON string value (without the outer
+# quotes) via stdout; empty string when the log file is missing.
+raw_log_payload() {
+	local path="$1"
+	local size max=32768 content
+	[ -n "$path" ] || return 0
+	[ -f "$path" ] || return 0
+	size="$(wc -c < "$path" 2>/dev/null || echo 0)"
+	if [ "$size" -gt "$max" ]; then
+		content="[log truncated to last ${max} bytes]
+$(tail -c "$max" "$path" 2>/dev/null)"
+	else
+		content="$(cat "$path" 2>/dev/null)"
+	fi
+	json_escape "$content"
+}
+
+emit_repair_response() {
+	local ok="$1"
+	local report="$2"
+	local raw_log="${3:-}"
+	emit_header
+	printf '{'
+	printf '"ok":'
+	json_bool "$ok"
+	printf ','
+	printf '"action":"diagnose_repair",'
+	printf '"steps":%s,' "$report"
+	printf '"raw_log":"%s",' "$raw_log"
+	printf '"status":'
+	status_json
+	printf '}'
+}
+
+emit_repair_credentials_required() {
+	local reason="$1"
+	local raw_log="${2:-}"
+	emit_header
+	printf '{'
+	printf '"ok":false,'
+	printf '"action":"diagnose_repair",'
+	printf '"error":"credentials_required",'
+	printf '"reason":"%s",' "$(json_escape "$reason")"
+	printf '"raw_log":"%s",' "$raw_log"
+	# Fields the UI should collect and re-submit. If the profile has a
+	# bootstrap key slot filled we still keep it as a fallback option.
+	printf '"need":["ssh_password"],'
+	printf '"steps":[]'
+	printf '}'
+}
+
+diagnose_repair_action() {
+	# The repair pipeline contains many "risky" commands whose non-zero
+	# exit codes are meaningful data (SSH refused, wc on a missing file,
+	# etc.) — the calling contract of set -e in this CGI would abort the
+	# whole response before we could serialize a report. Turn it off for
+	# the duration of this action and re-enable at the very end.
+	set +e
+	local profile_id save_err
+
+	# The UI sends the full profile form when the user has changed any of
+	# the identity/routing fields. When no such fields are in the request
+	# we skip save_profile_from_request entirely, otherwise that helper
+	# would allocate a fresh profile (label defaults to "profile") and
+	# tear down the currently-selected one. This keeps direct calls from
+	# curl / operator tooling well-behaved.
+	if request_has_profile_edit; then
+		if ! save_profile_from_request >/dev/null; then
+			save_err="${SAVE_PROFILE_ERROR:-Could not persist profile settings before repair.}"
+			emit_header
+			printf '{'
+			printf '"ok":false,'
+			printf '"action":"diagnose_repair",'
+			printf '"error":"save_profile_failed",'
+			printf '"reason":"%s",' "$(json_escape "$save_err")"
+			printf '"steps":[]'
+			printf '}'
+			return 0
+		fi
+		profile_id="$SAVE_PROFILE_ID"
+	else
+		profile_id="$(active_profile_id)"
+		if [ -z "$profile_id" ]; then
+			emit_header
+			printf '{'
+			printf '"ok":false,'
+			printf '"action":"diagnose_repair",'
+			printf '"error":"no_active_profile",'
+			printf '"reason":"No active VPS profile is selected. Create one first.",'
+			printf '"steps":[]'
+			printf '}'
+			return 0
+		fi
+	fi
+
+	# One-shot SSH password from the UI: install_managed_key_with_password
+	# already reads ssh_password from the request. Stash it into the
+	# profile just long enough for ensure_ssh_ready to use; the helpers
+	# themselves clear it once the managed key install succeeds.
+	local one_shot_password
+	one_shot_password="$(request_value ssh_password)"
+	if [ -n "$one_shot_password" ]; then
+		profile_set "$profile_id" auth_mode 'password'
+		profile_set "$profile_id" ssh_password "$one_shot_password"
+		uci commit "$PROFILE_PACKAGE"
+	fi
+
+	# Capture SSH stderr from the credential-check probe into a dedicated
+	# log so the credentials_required response can show the actual reason
+	# (Connection refused, permission denied, unreachable, etc.) instead
+	# of a generic message.
+	local creds_raw_log="/tmp/codex-router-vps-creds-raw.$$.log"
+	: > "$creds_raw_log"
+	SSH_RAW_LOG_PATH="$creds_raw_log"
+	export SSH_RAW_LOG_PATH
+	printf '[%s] probing SSH with current credentials\n' "$(date +%H:%M:%S)" >> "$creds_raw_log"
+	if ! ensure_ssh_ready "$profile_id"; then
+		unset SSH_RAW_LOG_PATH
+		local raw_payload
+		raw_payload="$(raw_log_payload "$creds_raw_log")"
+		rm -f "$creds_raw_log"
+		emit_repair_credentials_required \
+			'Router could not establish SSH to the VPS with the current credentials. Check the raw log below; if the reason is "Connection refused" or "timed out", the VPS is unreachable — not a credentials problem. Otherwise provide the VPS root password once so the router can re-install its managed key.' \
+			"$raw_payload"
+		return 0
+	fi
+	unset SSH_RAW_LOG_PATH
+	# Fold the credential-probe log into the same file we hand back so
+	# the operator sees the whole story in one place.
+	local combined_raw_log="/tmp/codex-router-vps-combined-raw.$$.log"
+	cat "$creds_raw_log" > "$combined_raw_log" 2>/dev/null || : > "$combined_raw_log"
+	rm -f "$creds_raw_log"
+
+	local repair_rc=0
+	run_repair_pipeline "$profile_id"
+	repair_rc=$?
+
+	# Append the pipeline log to the combined log.
+	if [ -n "${REPAIR_RAW_LOG_PATH:-}" ] && [ -f "$REPAIR_RAW_LOG_PATH" ]; then
+		cat "$REPAIR_RAW_LOG_PATH" >> "$combined_raw_log" 2>/dev/null || true
+		rm -f "$REPAIR_RAW_LOG_PATH"
+	fi
+
+	local raw_payload
+	raw_payload="$(raw_log_payload "$combined_raw_log")"
+	rm -f "$combined_raw_log"
+
+	if [ -n "${REPAIR_FATAL:-}" ] && [ "${REPAIR_REPORT:-[]}" = '[]' ]; then
+		emit_header
+		printf '{'
+		printf '"ok":false,'
+		printf '"action":"diagnose_repair",'
+		printf '"error":"pipeline_setup_failed",'
+		printf '"reason":"%s",' "$(json_escape "$REPAIR_FATAL")"
+		printf '"raw_log":"%s",' "$raw_payload"
+		printf '"steps":[]'
+		printf '}'
+		return 0
+	fi
+
+	# Regardless of whether the remote pipeline reported ok or failed,
+	# also try to refresh our local cache view of the VPS so subsequent
+	# status polls reflect the new state.
+	refresh_remote_cache "$profile_id" >/dev/null 2>&1 || true
+
+	# If the VPS side is now healthy AND the router has never had a
+	# router-side config applied for this profile, push the router
+	# config too so the operator does not have to click twice.
+	if [ "$repair_rc" -eq 0 ] && [ ! -s "$ROUTER_CONFIG" ]; then
+		apply_profile_to_router_internal "$profile_id" >/dev/null 2>&1 || true
+	fi
+
+	if [ "$repair_rc" -eq 0 ]; then
+		emit_repair_response 1 "$REPAIR_REPORT" "$raw_payload"
+	else
+		emit_repair_response 0 "$REPAIR_REPORT" "$raw_payload"
+	fi
+	return 0
+}
+
 REQUEST_DATA="$(load_request_data)"
 
 case "$(request_value action)" in
@@ -1832,6 +2230,10 @@ case "$(request_value action)" in
 	apply_profile)
 		ensure_profile_store
 		apply_everything_action
+		;;
+	diagnose_repair)
+		ensure_profile_store
+		diagnose_repair_action
 		;;
 	*)
 		emit_error "$(request_value action)" 'Unknown action.'

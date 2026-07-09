@@ -118,6 +118,15 @@ request_value() {
 	url_decode "$raw"
 }
 
+# Return 0 when the current request payload contains the given key at
+# all, regardless of the value being empty or not. This lets callers
+# distinguish "the UI submitted this field with empty value" (an active
+# edit) from "the caller never included this field" (a headless probe).
+request_has_key() {
+	local key="$1"
+	printf '%s' "$REQUEST_DATA" | tr '&' '\n' | grep -q "^${key}="
+}
+
 # --- CGI response helpers ---
 
 emit_header() {

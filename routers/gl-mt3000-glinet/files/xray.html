@@ -745,7 +745,42 @@
             <input id="sshPort" type="number" min="1" max="65535" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="22">
           </div>
         </div>
-        <div class="form-actions">
+        <div class="readonly-pane" style="margin-top:12px;background:#1a2733;border:1px solid #2c3f52;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+            <div>
+              <div class="label" style="color:#e6d34a;">Diagnose &amp; Repair</div>
+              <div class="hint" style="margin-top:4px;">
+                Runs one connected pipeline: SSH check → binary → systemd unit → dirs → permissions → TLS cert → config → firewall → runtime.
+                Each step self-heals when it can. Use this after a VPS reboot, reprovision, or when the path stops working.
+              </div>
+            </div>
+            <button class="warn-btn" id="diagnoseRepairBtn" style="min-width:180px;">Diagnose &amp; Repair</button>
+          </div>
+          <div id="repairCredsForm" style="margin-top:12px;display:none;padding:12px;background:#141d26;border-radius:4px;">
+            <div class="label" style="color:#e6d34a;margin-bottom:4px;">SSH credentials required</div>
+            <div class="hint" id="repairCredsReason" style="margin-bottom:8px;">
+              The router's managed SSH key does not currently work on the VPS. Enter the VPS root password once so the router can re-install its managed key.
+            </div>
+            <div class="field field-full">
+              <label for="repairSshPassword">VPS Root Password</label>
+              <input id="repairSshPassword" type="password" autocomplete="current-password" spellcheck="false" placeholder="Not saved. Used only for this one repair run.">
+            </div>
+            <div class="form-actions" style="margin-top:8px;">
+              <button id="repairCredsCancel" type="button">Cancel</button>
+              <button class="primary" id="repairCredsSubmit" type="button">Retry With Password</button>
+            </div>
+          </div>
+          <div id="repairReport" style="margin-top:12px;display:none;">
+            <div class="label" style="margin-bottom:4px;">Last Repair Run</div>
+            <ul id="repairSteps" class="mono" style="list-style:none;padding:0;margin:0;font-size:13px;line-height:1.5;"></ul>
+            <div id="repairSummary" class="hint" style="margin-top:8px;"></div>
+            <details id="repairRawWrap" style="margin-top:8px;display:none;">
+              <summary style="cursor:pointer;color:#8b98a5;font-size:12px;">Raw log (SSH stderr + pipeline output)</summary>
+              <pre id="repairRawLog" class="mono" style="margin-top:6px;padding:8px;background:#0a1218;border:1px solid #2c3f52;border-radius:4px;font-size:12px;line-height:1.4;white-space:pre-wrap;max-height:320px;overflow:auto;"></pre>
+            </details>
+          </div>
+        </div>
+        <div class="form-actions" style="margin-top:12px;">
           <button id="createProfileBtn" type="button">New VPS</button>
           <button class="primary" id="checkProfileBtn">Read VPS And Update Profile</button>
           <button class="warn-btn" id="applyProfileBtn">Sync Router + VPS</button>
@@ -754,7 +789,7 @@
           <div class="label">First-Time Setup</div>
           <div class="hint">
             The router platform is installed, but there is no active VPS path yet. Fill the VPS SSH details above and click
-            <strong>Sync Router + VPS</strong>. The router will configure the selected server and then apply the client profile locally.
+            <strong>Diagnose &amp; Repair</strong>. The router will configure the selected server and then apply the client profile locally.
           </div>
         </div>
         <div class="readonly-pane" style="margin-top:12px;">
@@ -1236,6 +1271,7 @@
         "createProfileBtn",
         "checkProfileBtn",
         "applyProfileBtn",
+        "diagnoseRepairBtn",
         "smokeBtn",
         "logsBtn",
         "rulesModeToggle",
@@ -1275,6 +1311,7 @@
         "createProfileBtn",
         "checkProfileBtn",
         "applyProfileBtn",
+        "diagnoseRepairBtn",
         "smokeBtn",
         "rulesModeToggle",
         "rulesSaveConfigBtn",
@@ -3521,9 +3558,135 @@
       }
     }
 
+    // Render the JSON step report from the diagnose_repair backend action
+    // into the #repairSteps list. Icons: ok=OK, fixed=FIX, failed=FAIL.
+    // Any "overall" pseudo-step becomes the summary line rather than a
+    // list row so the user sees the verdict without hunting. rawLog, if
+    // present, is placed inside a collapsed <details> block so the
+    // operator can inspect the underlying SSH stderr / pipeline output
+    // without visual noise on a clean success.
+    function renderRepairReport(steps, rawLog) {
+      const reportEl = document.getElementById("repairReport");
+      const listEl = document.getElementById("repairSteps");
+      const summaryEl = document.getElementById("repairSummary");
+      const rawWrap = document.getElementById("repairRawWrap");
+      const rawPre = document.getElementById("repairRawLog");
+      const hasSteps = steps && steps.length;
+      const hasRaw = rawLog && rawLog.length;
+      if (!hasSteps && !hasRaw) {
+        reportEl.style.display = "none";
+        listEl.innerHTML = "";
+        summaryEl.textContent = "";
+        rawWrap.style.display = "none";
+        rawPre.textContent = "";
+        return;
+      }
+      reportEl.style.display = "";
+      const iconFor = (status) => {
+        if (status === "ok") return { txt: "OK", color: "#57c877" };
+        if (status === "fixed") return { txt: "FIX", color: "#e6d34a" };
+        if (status === "skipped") return { txt: "SKIP", color: "#8b98a5" };
+        return { txt: "FAIL", color: "#e57373" };
+      };
+      const rows = [];
+      let overall = null;
+      (steps || []).forEach((step) => {
+        if (step.id === "overall") {
+          overall = step;
+          return;
+        }
+        const icon = iconFor(step.status);
+        rows.push(`<li style="padding:2px 0;"><span style="display:inline-block;min-width:44px;color:${icon.color};font-weight:600;">${icon.txt}</span> <span style="min-width:110px;display:inline-block;">${escapeHtml(step.id || "")}</span> <span style="color:#c5cfd8;">${escapeHtml(step.message || "")}</span>${step.details ? `<div style="margin-left:56px;color:#8b98a5;font-size:12px;white-space:pre-wrap;">${escapeHtml(step.details)}</div>` : ""}</li>`);
+      });
+      listEl.innerHTML = rows.join("");
+      if (overall) {
+        const icon = iconFor(overall.status);
+        summaryEl.innerHTML = `<span style="color:${icon.color};font-weight:600;">${icon.txt}</span> ${escapeHtml(overall.message || "")}`;
+      } else if (hasSteps) {
+        const failed = steps.filter((s) => s.status === "failed").length;
+        const fixed = steps.filter((s) => s.status === "fixed").length;
+        summaryEl.textContent = failed
+          ? `${failed} step(s) failed, ${fixed} fixed.`
+          : fixed
+          ? `All checks pass; ${fixed} step(s) were auto-repaired.`
+          : "All checks pass; nothing needed fixing.";
+      } else {
+        summaryEl.textContent = "";
+      }
+      if (hasRaw) {
+        rawWrap.style.display = "";
+        rawPre.textContent = rawLog;
+      } else {
+        rawWrap.style.display = "none";
+        rawPre.textContent = "";
+      }
+    }
+
+    // Called for each attempt at diagnose_repair. Handles the three
+    // response shapes: ok=true (report), ok=false + credentials_required
+    // (open the inline form), or ok=false + steps (report + flash).
+    async function runDiagnoseRepairOnce(button, extraPayload) {
+      const payload = formPayload();
+      if (extraPayload) {
+        Object.assign(payload, extraPayload);
+      }
+      beginForegroundTask("Running diagnose & repair pipeline on the VPS...", 60000);
+      setBusy(button, true);
+      try {
+        const data = await callApi(vpsApi, "diagnose_repair", payload, { timeoutMs: 90000 });
+        if (data.error === "credentials_required") {
+          document.getElementById("repairCredsForm").style.display = "";
+          const reasonEl = document.getElementById("repairCredsReason");
+          if (data.reason) reasonEl.textContent = data.reason;
+          renderRepairReport(data.steps || [], data.raw_log || "");
+          flash("VPS SSH failed — see raw log for the exact reason.", "bad");
+          return;
+        }
+        if (data.status) state.vps = data.status;
+        renderRepairReport(data.steps || [], data.raw_log || "");
+        if (data.ok) {
+          document.getElementById("repairCredsForm").style.display = "none";
+          document.getElementById("repairSshPassword").value = "";
+          await refreshAll(false, true, true);
+          flash("Diagnose & repair completed successfully.", "good");
+        } else {
+          const reason = data.reason || data.error || "one or more steps failed";
+          flash(`Repair finished with issues: ${reason}`, "bad");
+        }
+      } catch (err) {
+        flash(`Repair failed: ${err.message}`, "bad");
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
+    async function diagnoseRepair(button) {
+      // First attempt: no extra credentials. If the backend needs SSH
+      // credentials it will surface credentials_required and open the
+      // inline password form. The user then clicks Retry, which calls
+      // runDiagnoseRepairOnce again with the entered password.
+      document.getElementById("repairCredsForm").style.display = "none";
+      await runDiagnoseRepairOnce(button, null);
+    }
+
     document.getElementById("checkProfileBtn").addEventListener("click", (event) => checkProfile(event.currentTarget));
     document.getElementById("applyProfileBtn").addEventListener("click", (event) => applyProfile(event.currentTarget));
     document.getElementById("createProfileBtn").addEventListener("click", (event) => createProfile(event.currentTarget));
+    document.getElementById("diagnoseRepairBtn").addEventListener("click", (event) => diagnoseRepair(event.currentTarget));
+    document.getElementById("repairCredsCancel").addEventListener("click", () => {
+      document.getElementById("repairCredsForm").style.display = "none";
+      document.getElementById("repairSshPassword").value = "";
+    });
+    document.getElementById("repairCredsSubmit").addEventListener("click", () => {
+      const pwd = document.getElementById("repairSshPassword").value;
+      const btn = document.getElementById("diagnoseRepairBtn");
+      if (!pwd) {
+        flash("Enter the VPS root password to retry.", "bad");
+        return;
+      }
+      runDiagnoseRepairOnce(btn, { ssh_password: pwd });
+    });
     document.getElementById("logsBtn").addEventListener("click", loadLogs);
     document.getElementById("healthBtn").addEventListener("click", loadHealth);
     document.getElementById("smokeBtn").addEventListener("click", runSmoke);
