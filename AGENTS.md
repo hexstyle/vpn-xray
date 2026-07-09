@@ -80,3 +80,53 @@ Never report a hypothesis to the user as if it were a conclusion. Before saying 
 - If you say "site X works now", actually open it end-to-end from the same device/path the user would use.
 - If you identify a cause, reproduce the fix and confirm the result before reporting.
 - Do not send the user on diagnostic errands you can run yourself.
+
+## Tree-Driven Repair Development
+
+[`docs/DIAGNOSTIC-TREE.md`](./docs/DIAGNOSTIC-TREE.md) is the root artifact
+for everything that installs, diagnoses, or repairs the stack. The contract:
+
+- **Code follows the tree.** Install steps, the VPS repair pipeline, UI
+  repair actions, and `install.sh --repair-vps` implement tree nodes. A repair
+  behavior with no tree node is a review finding.
+- **Risk classes are binding.** Every repair action is `safe`, `disruptive`,
+  or `destructive` per the tree's table. `disruptive` actions (daemon
+  restarts, firewall rebuilds, mode cutovers) never run synchronously inside
+  a CGI request — schedule a detached background job and report its status
+  file. `destructive` actions require explicit operator confirmation.
+- **Breakage updates the tree first.** When a new failure mode appears in the
+  field: (1) add/extend the tree node with symptom, probes, cause, repair,
+  verification, risk; (2) then change the code to implement it; (3) re-verify
+  the node's "Verify" line on real hardware when available. Unautomated
+  findings go to the tree's Gap register.
+- **Review gate.** PR review checks that repair-path changes cite the tree
+  node they implement, respect its risk class, honor the meta-rules
+  (timeouts, single-flight, per-step reports), and that the tree was updated
+  when behavior changed.
+
+## File Size Limit
+
+No source file may exceed **500 lines**. This applies to shell, CGI, Python,
+HTML, JS, and CSS alike.
+
+- New files: hard limit, enforced at review.
+- When touching an oversized legacy file, split it as part of the change
+  (sourced shell libs under `/usr/share/vpn-xray/`, extracted JS/CSS for the
+  UI) rather than growing it further.
+- Splits must keep behavior identical: same entry points, same deploy targets
+  (update `install-platform.sh` copy lists in **both** router profiles), and
+  pass the contract tests in `tests/`.
+
+Refactor debt register (files >500 lines at the time this rule was adopted;
+shrink on touch, largest-risk first):
+
+| File | Lines | Split plan |
+| --- | --- | --- |
+| `routers/*/files/xray.html` | ~3.8k | extract CSS → `xray.css`; JS → `xray-*.js` modules by card (vps / rules / admin / core) |
+| `routers/common/files/router-rules` | ~3.8k | sourced libs under `/usr/share/vpn-xray/rules-lib/` (git, resolve, ipset, dataplane, status) |
+| `routers/*/files/xray-vps.cgi` | ~2.3k | sourced libs under `/usr/share/vpn-xray/vps-cgi/` (ssh, profile, inspect, repair, actions) |
+| `routers/*/install-platform.sh` | ~1.3k | phase libs (packages, files, uci, services) |
+| `routers/*/files/xray-rules.cgi` | ~1.1k | job/status lib shared with other CGIs |
+| `bootstrap-router-vps.sh` | ~1.0k | step functions → `common/lib/bootstrap/` |
+| `routers/*/files/xray-admin.cgi` | ~0.8k | shared CGI lib |
+| `routers/*/install-router.sh` | ~0.8k | step libs under `common/lib/` |

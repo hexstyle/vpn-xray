@@ -380,11 +380,9 @@ ssh_exec_with_identity() {
 			-o ConnectTimeout=8 \
 			-o ConnectionAttempts=3 \
 			-o ServerAliveInterval=15 \
+			-o ServerAliveCountMax=4 \
 			-o StrictHostKeyChecking=no \
 			-o UserKnownHostsFile="$KNOWN_HOSTS" \
-			-o ControlMaster=auto \
-			-o ControlPath=/tmp/xray-vps-ssh-%r@%h-%p \
-			-o ControlPersist=60 \
 			-p "$port" \
 			"$user@$host" "$cmd" 2>>"$SSH_RAW_LOG_PATH"
 	else
@@ -393,11 +391,9 @@ ssh_exec_with_identity() {
 			-o ConnectTimeout=8 \
 			-o ConnectionAttempts=3 \
 			-o ServerAliveInterval=15 \
+			-o ServerAliveCountMax=4 \
 			-o StrictHostKeyChecking=no \
 			-o UserKnownHostsFile="$KNOWN_HOSTS" \
-			-o ControlMaster=auto \
-			-o ControlPath=/tmp/xray-vps-ssh-%r@%h-%p \
-			-o ControlPersist=60 \
 			-p "$port" \
 			"$user@$host" "$cmd"
 	fi
@@ -420,11 +416,9 @@ ssh_stdin_with_identity() {
 			-o ConnectTimeout=8 \
 			-o ConnectionAttempts=3 \
 			-o ServerAliveInterval=15 \
+			-o ServerAliveCountMax=4 \
 			-o StrictHostKeyChecking=no \
 			-o UserKnownHostsFile="$KNOWN_HOSTS" \
-			-o ControlMaster=auto \
-			-o ControlPath=/tmp/xray-vps-ssh-%r@%h-%p \
-			-o ControlPersist=60 \
 			-p "$port" \
 			"$user@$host" "$remote_cmd" < "$stdin_path" 2>>"$SSH_RAW_LOG_PATH"
 	else
@@ -433,11 +427,9 @@ ssh_stdin_with_identity() {
 			-o ConnectTimeout=8 \
 			-o ConnectionAttempts=3 \
 			-o ServerAliveInterval=15 \
+			-o ServerAliveCountMax=4 \
 			-o StrictHostKeyChecking=no \
 			-o UserKnownHostsFile="$KNOWN_HOSTS" \
-			-o ControlMaster=auto \
-			-o ControlPath=/tmp/xray-vps-ssh-%r@%h-%p \
-			-o ControlPersist=60 \
 			-p "$port" \
 			"$user@$host" "$remote_cmd" < "$stdin_path"
 	fi
@@ -1843,6 +1835,67 @@ apply_everything_action() {
 	emit_status_response apply_profile
 }
 
+# --- Deferred router-apply job (DIAGNOSTIC-TREE 8.2) ---
+# The apply is a hard cutover, so it runs as a detached process, never in
+# the request path. State is exposed through a status file the UI polls
+# via status_json. Known gap G3: if the job dies mid-cutover the status
+# file stays "running" (the router itself recovers via failsafe).
+
+ROUTER_APPLY_STATUS_FILE='/tmp/xray-vps-repair-apply.status'
+
+router_apply_job_running() {
+	local pid
+	[ -f "$ROUTER_APPLY_STATUS_FILE" ] || return 1
+	pid="$(sed -n 's/^pid=//p' "$ROUTER_APPLY_STATUS_FILE" | sed -n '1p')"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+# Spawn a detached copy of this CGI in job mode. start-stop-daemon -b
+# double-forks and detaches from the fcgiwrap process group, so the job
+# survives the end of the HTTP request that scheduled it.
+schedule_router_apply_job() {
+	local profile_id="$1"
+
+	if router_apply_job_running; then
+		return 0
+	fi
+	{
+		printf 'state=scheduled\n'
+		printf 'profile=%s\n' "$profile_id"
+		printf 'scheduled_at=%s\n' "$(date +%s)"
+	} > "$ROUTER_APPLY_STATUS_FILE"
+	XRAY_VPS_JOB='apply_router' XRAY_VPS_JOB_PROFILE="$profile_id" \
+		start-stop-daemon -S -b -x /www/cgi-bin/xray-vps 2>/dev/null
+}
+
+run_router_apply_job() {
+	local profile_id="$1"
+	set +e
+	{
+		printf 'state=running\n'
+		printf 'profile=%s\n' "$profile_id"
+		printf 'pid=%s\n' "$$"
+		printf 'started_at=%s\n' "$(date +%s)"
+	} > "$ROUTER_APPLY_STATUS_FILE"
+
+	if apply_profile_to_router_internal "$profile_id" >/dev/null 2>&1; then
+		{
+			printf 'state=done\n'
+			printf 'profile=%s\n' "$profile_id"
+			printf 'finished_at=%s\n' "$(date +%s)"
+			printf 'message=Router config applied and runtime resynced.\n'
+		} > "$ROUTER_APPLY_STATUS_FILE"
+		return 0
+	fi
+	{
+		printf 'state=failed\n'
+		printf 'profile=%s\n' "$profile_id"
+		printf 'finished_at=%s\n' "$(date +%s)"
+		printf 'message=Router apply failed; previous config was restored by the apply guard.\n'
+	} > "$ROUTER_APPLY_STATUS_FILE"
+	return 1
+}
+
 # Return 0 when the current request carries any of the profile
 # identity/routing fields that save_profile_from_request expects. Used to
 # decide whether an incoming diagnose_repair call is being made from the
@@ -1959,11 +2012,16 @@ run_repair_pipeline() {
 
 	log_step "executing repair pipeline on VPS"
 	local ssh_rc=0
+	# Wrap the remote script in `timeout 90` so a hanging step on the
+	# VPS never leaves this CGI (and its fcgiwrap worker) blocked
+	# indefinitely. 90 seconds is comfortably longer than the pipeline
+	# itself needs but short enough that the browser still gets an
+	# answer before nginx's 300s fastcgi_read_timeout hits.
 	# The script runs under set -e, so a non-zero ssh_cmd exit would kill
 	# the whole CGI silently before we get to record it. Guard with an
 	# if-block so a failed repair pipeline surfaces as a proper report
 	# rather than a truncated response with no body.
-	if ssh_cmd "$profile_id" "rm -f $report_remote; VPS_REMOTE_META_PATH='$remote_meta_path' REPAIR_REPORT_PATH='$report_remote' sh /tmp/install-vps.remote.sh >/dev/null 2>&1; ec=\$?; cat $report_remote 2>/dev/null; exit \$ec" > "$report_local"; then
+	if ssh_cmd "$profile_id" "rm -f $report_remote; VPS_REMOTE_META_PATH='$remote_meta_path' REPAIR_REPORT_PATH='$report_remote' timeout 90 sh /tmp/install-vps.remote.sh >/dev/null 2>&1; ec=\$?; cat $report_remote 2>/dev/null; exit \$ec" > "$report_local"; then
 		ssh_rc=0
 	else
 		ssh_rc=$?
@@ -2020,6 +2078,7 @@ emit_repair_response() {
 	local ok="$1"
 	local report="$2"
 	local raw_log="${3:-}"
+	local router_apply="${4:-in_sync}"
 	emit_header
 	printf '{'
 	printf '"ok":'
@@ -2028,6 +2087,7 @@ emit_repair_response() {
 	printf '"action":"diagnose_repair",'
 	printf '"steps":%s,' "$report"
 	printf '"raw_log":"%s",' "$raw_log"
+	printf '"router_apply":"%s",' "$(json_escape "$router_apply")"
 	printf '"status":'
 	status_json
 	printf '}'
@@ -2057,6 +2117,30 @@ diagnose_repair_action() {
 	# whole response before we could serialize a report. Turn it off for
 	# the duration of this action and re-enable at the very end.
 	set +e
+
+	# Single-flight guard: two operators mashing the button — or the
+	# same one impatiently re-clicking — must not spawn concurrent
+	# repair pipelines. Each holds live SSH sessions and shovels config
+	# writes at the VPS; overlapping them accumulates fcgiwrap workers
+	# and can lock the router until reboot. flock exits non-zero when
+	# it cannot acquire the lock, in which case we return a fast, safe
+	# response instead of piling on top.
+	local lockfile='/tmp/xray-vps-locks/diagnose_repair.flock'
+	mkdir -p "$(dirname "$lockfile")"
+	exec 9>"$lockfile"
+	if ! flock -n 9; then
+		emit_header
+		printf '{'
+		printf '"ok":false,'
+		printf '"action":"diagnose_repair",'
+		printf '"error":"busy",'
+		printf '"reason":"A repair run is already in progress. Wait for it to finish before starting another.",'
+		printf '"raw_log":"",'
+		printf '"steps":[]'
+		printf '}'
+		return 0
+	fi
+
 	local profile_id save_err
 
 	# The UI sends the full profile form when the user has changed any of
@@ -2159,25 +2243,57 @@ diagnose_repair_action() {
 		return 0
 	fi
 
-	# Regardless of whether the remote pipeline reported ok or failed,
-	# also try to refresh our local cache view of the VPS so subsequent
-	# status polls reflect the new state.
+	# Refresh our local cache view of the VPS so status polls after this
+	# call reflect what actually runs on the VPS. Read-only side effect
+	# only, does not touch the router runtime.
 	refresh_remote_cache "$profile_id" >/dev/null 2>&1 || true
 
-	# If the VPS side is now healthy AND the router has never had a
-	# router-side config applied for this profile, push the router
-	# config too so the operator does not have to click twice.
-	if [ "$repair_rc" -eq 0 ] && [ ! -s "$ROUTER_CONFIG" ]; then
-		apply_profile_to_router_internal "$profile_id" >/dev/null 2>&1 || true
+	# DIAGNOSTIC-TREE 8.1: profile empty, VPS authoritative — adopt the
+	# live VPS identity into the profile. UCI-only, risk class `safe`, so
+	# it may run synchronously. Only when the profile has no public_key of
+	# its own; an operator-authored profile is never overwritten (8.4).
+	local router_apply='in_sync'
+	if [ "$repair_rc" -eq 0 ] && [ -z "$(profile_get "$profile_id" public_key)" ]; then
+		adopt_remote_into_profile "$profile_id" >/dev/null 2>&1 || true
+	fi
+
+	# DIAGNOSTIC-TREE 8.2: router stale vs profile. Applying performs a
+	# hard cutover of the transparent path (stops codex-transproxy and
+	# codex-xray) — risk class `disruptive`, which must NEVER run inside
+	# this CGI request: the request itself may ride the path being cut,
+	# which hung the router until reboot on 2026-07-09. Instead we
+	# schedule a detached background job and report its status file.
+	if [ "$repair_rc" -eq 0 ]; then
+		if [ ! -s "$ROUTER_CONFIG" ] || [ -n "$(profile_diff_fields "$profile_id" router)" ]; then
+			if schedule_router_apply_job "$profile_id"; then
+				router_apply='scheduled'
+			else
+				router_apply='schedule_failed'
+			fi
+		fi
+	else
+		router_apply='skipped'
 	fi
 
 	if [ "$repair_rc" -eq 0 ]; then
-		emit_repair_response 1 "$REPAIR_REPORT" "$raw_payload"
+		emit_repair_response 1 "$REPAIR_REPORT" "$raw_payload" "$router_apply"
 	else
-		emit_repair_response 0 "$REPAIR_REPORT" "$raw_payload"
+		emit_repair_response 0 "$REPAIR_REPORT" "$raw_payload" "$router_apply"
 	fi
 	return 0
 }
+
+# Internal job mode: a detached re-exec of this CGI (no HTTP context).
+# Must sit after all function definitions and before request parsing.
+if [ -n "${XRAY_VPS_JOB:-}" ]; then
+	case "$XRAY_VPS_JOB" in
+		apply_router)
+			run_router_apply_job "${XRAY_VPS_JOB_PROFILE:-$(active_profile_id)}"
+			exit $?
+			;;
+	esac
+	exit 1
+fi
 
 REQUEST_DATA="$(load_request_data)"
 

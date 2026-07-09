@@ -923,33 +923,52 @@
         One shared list of domains, IPv4 addresses and CIDRs. On GL in <code>selective</code> mode, literal IP/CIDR entries are routed directly and
         domain entries are tracked live through <code>dnsmasq -&gt; ipset</code>. The resolved IPv4 snapshot is kept only for diagnostics and state checks.
       </p>
-      <div class="subhead" style="align-items:flex-start;">
-        <div style="flex:1 1 auto;">
-          <div class="label" style="margin-bottom:8px;">Current Rules State</div>
-          <div id="rulesSummaryChips" class="chip-row"></div>
-        </div>
-        <div class="button-wrap" style="margin-top:0;">
-          <button id="rulesApplyBtn">Apply Local Rules</button>
-        </div>
+      <div id="rulesTabNav" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:12px;border-bottom:1px solid #2c3f52;">
+        <button type="button" class="rules-tab-btn" data-tab="local" style="background:none;color:#e6d34a;border:none;border-bottom:2px solid #e6d34a;padding:8px 14px;cursor:pointer;font-size:14px;font-weight:600;">Local rules</button>
+        <button type="button" class="rules-tab-btn" data-tab="git" style="background:none;color:#8b98a5;border:none;border-bottom:2px solid transparent;padding:8px 14px;cursor:pointer;font-size:14px;font-weight:600;">Git sync</button>
+        <button type="button" class="rules-tab-btn" data-tab="external" style="background:none;color:#8b98a5;border:none;border-bottom:2px solid transparent;padding:8px 14px;cursor:pointer;font-size:14px;font-weight:600;">External sources</button>
+        <button type="button" class="rules-tab-btn" data-tab="status" style="background:none;color:#8b98a5;border:none;border-bottom:2px solid transparent;padding:8px 14px;cursor:pointer;font-size:14px;font-weight:600;">Status &amp; diagnostics</button>
       </div>
-      <div class="field field-full" style="margin-top:12px;">
-        <label for="rulesModeToggle">Routing Mode On This Router</label>
-        <div class="toggle-row">
-          <span class="toggle-label">Full</span>
-          <label class="toggle-switch" for="rulesModeToggle">
-            <input type="checkbox" id="rulesModeToggle" aria-label="Selective routing mode">
-            <span class="toggle-slider"></span>
-          </label>
-          <span class="toggle-label">Selective</span>
-          <span class="toggle-state" id="rulesModeStateText">Applying current mode...</span>
+
+      <div id="rulesTabLocal" class="rules-tab-panel" style="margin-top:16px;">
+        <div class="subhead" style="align-items:flex-start;">
+          <div style="flex:1 1 auto;">
+            <div class="label" style="margin-bottom:8px;">Current Rules State</div>
+            <div id="rulesSummaryChips" class="chip-row"></div>
+          </div>
+          <div class="button-wrap" style="margin-top:0;">
+            <button id="rulesApplyBtn">Apply Local Rules</button>
+          </div>
         </div>
-        <div class="hint" id="rulesModeHint">
-          This switch applies locally on this router only and performs an immediate reset/cutover so the new mode is active right away. Shared addresses affect traffic only when the GL.iNet VPN switch is ON and this mode is set to <code>selective</code>. <code>full</code> keeps the current behavior. <code>selective</code> redirects literal IP/CIDR entries directly and tracks domain entries through <code>dnsmasq -&gt; ipset</code>.
-        </div>
-      </div>
-      <details class="readonly-pane" style="margin-top:12px;" open>
-        <summary class="label" style="cursor:pointer;">Git Sync Settings</summary>
         <div class="field field-full" style="margin-top:12px;">
+          <label for="rulesModeToggle">Routing Mode On This Router</label>
+          <div class="toggle-row">
+            <span class="toggle-label">Full</span>
+            <label class="toggle-switch" for="rulesModeToggle">
+              <input type="checkbox" id="rulesModeToggle" aria-label="Selective routing mode">
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">Selective</span>
+            <span class="toggle-state" id="rulesModeStateText">Applying current mode...</span>
+          </div>
+          <div class="hint" id="rulesModeHint">
+            This switch applies locally on this router only and performs an immediate reset/cutover so the new mode is active right away. Shared addresses affect traffic only when the GL.iNet VPN switch is ON and this mode is set to <code>selective</code>. <code>full</code> keeps the current behavior. <code>selective</code> redirects literal IP/CIDR entries directly and tracks domain entries through <code>dnsmasq -&gt; ipset</code>.
+          </div>
+        </div>
+        <div class="field field-full" style="margin-top:12px;">
+          <label for="rulesText">Shared Rules List</label>
+          <div class="hint" id="rulesEditorHint">
+            Edit the shared operator-facing list here. Comments and manual notes stay part of this file. These addresses take effect only while the GL.iNet VPN switch is ON and Routing Mode is set to <code>selective</code>.
+          </div>
+          <div class="button-wrap" style="margin-top:12px;">
+            <button id="rulesLoadTextBtn">Load Current List</button>
+          </div>
+          <textarea id="rulesText" class="mono" spellcheck="false" style="min-height:240px;"></textarea>
+        </div>
+      </div>
+
+      <div id="rulesTabGit" class="rules-tab-panel" style="margin-top:16px;display:none;">
+        <div class="field field-full">
           <label for="rulesGitSyncEnabled">Shared Rules Git Sync</label>
           <div class="toggle-row">
             <span class="toggle-label">Local-only</span>
@@ -965,78 +984,78 @@
           </div>
         </div>
         <div id="rulesGitConfigFields">
-        <div class="field field-full" style="margin-top:12px;">
-          <label for="rulesRepoFetchUrl">Repository URL</label>
-          <input type="text" id="rulesRepoFetchUrl" placeholder="git@github.com:hexstyle/routerRules.git or https://github.com/hexstyle/routerRules/blob/main/lists/shared-targets.txt">
-          <div class="hint">The router can accept either a Git repository URL or a direct GitHub blob/raw URL for the tracked rules file. The effective remote file path is shown below after save.</div>
-        </div>
-        <div class="field field-full" style="margin-top:12px;">
-          <label for="rulesRepoPushUrl">Push URL</label>
-          <input type="text" id="rulesRepoPushUrl" placeholder="Optional. Leave empty to reuse Repository URL for push.">
-        </div>
-        <div class="field field-full" style="margin-top:12px;">
-          <label for="rulesEnablePush">Allow Push To Git</label>
-          <div class="toggle-row">
-            <span class="toggle-label">Pull-only</span>
-            <label class="toggle-switch" for="rulesEnablePush">
-              <input type="checkbox" id="rulesEnablePush" aria-label="Allow this router to push shared rules to Git">
-              <span class="toggle-slider"></span>
-            </label>
-            <span class="toggle-label">Push enabled</span>
-            <span class="toggle-state" id="rulesPushStateText">Push disabled.</span>
+          <div class="field field-full" style="margin-top:12px;">
+            <label for="rulesRepoFetchUrl">Repository URL</label>
+            <input type="text" id="rulesRepoFetchUrl" placeholder="git@github.com:hexstyle/routerRules.git or https://github.com/hexstyle/routerRules/blob/main/lists/shared-targets.txt">
+            <div class="hint">The router can accept either a Git repository URL or a direct GitHub blob/raw URL for the tracked rules file. The effective remote file path is shown below after save.</div>
           </div>
-          <div class="hint" id="rulesPushHint">
-            Leave disabled when this router should only pull/apply rules locally. Enable only after configuring writable HTTPS token or SSH deploy-key access.
+          <div class="field field-full" style="margin-top:12px;">
+            <label for="rulesRepoPushUrl">Push URL</label>
+            <input type="text" id="rulesRepoPushUrl" placeholder="Optional. Leave empty to reuse Repository URL for push.">
+          </div>
+          <div class="field field-full" style="margin-top:12px;">
+            <label for="rulesEnablePush">Allow Push To Git</label>
+            <div class="toggle-row">
+              <span class="toggle-label">Pull-only</span>
+              <label class="toggle-switch" for="rulesEnablePush">
+                <input type="checkbox" id="rulesEnablePush" aria-label="Allow this router to push shared rules to Git">
+                <span class="toggle-slider"></span>
+              </label>
+              <span class="toggle-label">Push enabled</span>
+              <span class="toggle-state" id="rulesPushStateText">Push disabled.</span>
+            </div>
+            <div class="hint" id="rulesPushHint">
+              Leave disabled when this router should only pull/apply rules locally. Enable only after configuring writable HTTPS token or SSH deploy-key access.
+            </div>
+          </div>
+          <div class="button-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:12px;">
+            <div class="field">
+              <label for="rulesRepoBranch">Branch</label>
+              <input type="text" id="rulesRepoBranch" value="main">
+            </div>
+            <div class="field">
+              <label for="rulesSyncInterval">Background Sync Interval (s)</label>
+              <input type="number" id="rulesSyncInterval" min="30" step="1" value="30">
+            </div>
+            <div class="field">
+              <label for="rulesGitAuthMode">Git Auth</label>
+              <select id="rulesGitAuthMode">
+                <option value="auto">Auto detect from URL / stored credentials</option>
+                <option value="readonly">Read-only anonymous pull</option>
+                <option value="none">Legacy anonymous / local-only</option>
+                <option value="https">HTTPS login / token</option>
+                <option value="ssh">SSH key</option>
+              </select>
+            </div>
+          </div>
+          <div id="rulesGitHttpsFields" class="button-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:12px;">
+            <div class="field">
+              <label for="rulesGitHttpUsername">HTTPS Username</label>
+              <input type="text" id="rulesGitHttpUsername" placeholder="Git login or token username">
+            </div>
+            <div class="field">
+              <label for="rulesGitHttpPassword">HTTPS Password / Token</label>
+              <input type="password" id="rulesGitHttpPassword" placeholder="Leave blank to keep the stored secret">
+            </div>
+          </div>
+          <div class="field field-full" id="rulesGitSshKeyWrap" style="margin-top:12px;">
+            <label for="rulesGitSshPrivateKey">SSH Private Key</label>
+            <textarea id="rulesGitSshPrivateKey" class="mono" spellcheck="false" style="min-height:160px;" placeholder="Optional. Paste a private key to replace the router's stored git SSH key. Leave blank to keep the existing key."></textarea>
+            <div class="hint" id="rulesGitSshHint">The router can keep its existing git SSH key, or you can replace it here.</div>
+          </div>
+          <details class="readonly-pane" style="margin-top:12px;">
+            <summary class="label" style="cursor:pointer;">Current Router SSH Public Key</summary>
+            <pre id="rulesGitSshPublicKey" style="margin-top:12px;">No router SSH key yet.</pre>
+          </details>
+          <div class="button-wrap" style="margin-top:12px;">
+            <button class="warn-btn" id="rulesPullBtn">Pull From Git</button>
+            <button class="warn-btn" id="rulesPushBtn">Push To Git</button>
           </div>
         </div>
-        <div class="button-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:12px;">
-          <div class="field">
-            <label for="rulesRepoBranch">Branch</label>
-            <input type="text" id="rulesRepoBranch" value="main">
-          </div>
-          <div class="field">
-            <label for="rulesSyncInterval">Background Sync Interval (s)</label>
-            <input type="number" id="rulesSyncInterval" min="30" step="1" value="30">
-          </div>
-          <div class="field">
-            <label for="rulesGitAuthMode">Git Auth</label>
-            <select id="rulesGitAuthMode">
-              <option value="auto">Auto detect from URL / stored credentials</option>
-              <option value="readonly">Read-only anonymous pull</option>
-              <option value="none">Legacy anonymous / local-only</option>
-              <option value="https">HTTPS login / token</option>
-              <option value="ssh">SSH key</option>
-            </select>
-          </div>
-        </div>
-        <div id="rulesGitHttpsFields" class="button-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-top:12px;">
-          <div class="field">
-            <label for="rulesGitHttpUsername">HTTPS Username</label>
-            <input type="text" id="rulesGitHttpUsername" placeholder="Git login or token username">
-          </div>
-          <div class="field">
-            <label for="rulesGitHttpPassword">HTTPS Password / Token</label>
-            <input type="password" id="rulesGitHttpPassword" placeholder="Leave blank to keep the stored secret">
-          </div>
-        </div>
-        <div class="field field-full" id="rulesGitSshKeyWrap" style="margin-top:12px;">
-          <label for="rulesGitSshPrivateKey">SSH Private Key</label>
-          <textarea id="rulesGitSshPrivateKey" class="mono" spellcheck="false" style="min-height:160px;" placeholder="Optional. Paste a private key to replace the router's stored git SSH key. Leave blank to keep the existing key."></textarea>
-          <div class="hint" id="rulesGitSshHint">The router can keep its existing git SSH key, or you can replace it here.</div>
-        </div>
-        <details class="readonly-pane" style="margin-top:12px;">
-          <summary class="label" style="cursor:pointer;">Current Router SSH Public Key</summary>
-          <pre id="rulesGitSshPublicKey" style="margin-top:12px;">No router SSH key yet.</pre>
-        </details>
-        <div class="button-wrap" style="margin-top:12px;">
-          <button class="warn-btn" id="rulesPullBtn">Pull From Git</button>
-          <button class="warn-btn" id="rulesPushBtn">Push To Git</button>
-        </div>
-        </div>
-      </details>
-      <details class="readonly-pane" style="margin-top:12px;">
-        <summary class="label" style="cursor:pointer;">Managed External Source Files</summary>
-        <div class="hint" id="rulesExternalHint" style="margin-top:12px;">
+      </div>
+
+      <div id="rulesTabExternal" class="rules-tab-panel" style="margin-top:16px;display:none;">
+        <div class="hint" id="rulesExternalHint">
           External feeds are stored in separate managed files next to the editable shared list. The router applies a merged ruleset, while each managed source file can be enabled or disabled independently and viewed in a popup.
         </div>
         <div id="rulesExternalSources" class="external-source-grid" style="margin-top:12px;"></div>
@@ -1056,34 +1075,29 @@
           <div class="label">Managed Sources Summary</div>
           <pre id="rulesExternalPreviewOutput" style="margin-top:12px;">No external source activity yet.</pre>
         </div>
-      </details>
-      <div class="button-wrap" style="margin-top:12px;">
+      </div>
+
+      <div id="rulesTabStatus" class="rules-tab-panel" style="margin-top:16px;display:none;">
+        <div class="readonly-pane">
+          <div class="label">Git Sync / Runtime Status</div>
+          <div id="rulesGitStatusBanner" style="margin-top:12px;"></div>
+          <div id="rulesGitActionPanel" class="hint" style="margin-top:12px;"></div>
+          <div id="rulesStatusGrid" style="display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin-top:12px;"></div>
+        </div>
+        <details class="readonly-pane" style="margin-top:12px;" open>
+          <summary class="label" style="cursor:pointer;">Diagnostics</summary>
+          <pre id="rulesTraceOutput" style="margin-top:12px;">No diagnostics yet.</pre>
+        </details>
+        <details class="readonly-pane" style="margin-top:12px;">
+          <summary class="label" style="cursor:pointer;">Repo Details</summary>
+          <pre id="rulesRepoDetails" style="margin-top:12px;">No repo details yet.</pre>
+        </details>
+      </div>
+
+      <div class="button-wrap" style="margin-top:16px;padding-top:12px;border-top:1px solid #2c3f52;">
         <button id="rulesSaveConfigBtn">Save Settings</button>
+        <span class="hint" style="margin-left:12px;">Saves every tab (routing mode, Git config, external sources) in one shot.</span>
       </div>
-      <div class="field field-full" style="margin-top:12px;">
-        <label for="rulesText">Shared Rules List</label>
-        <div class="hint" id="rulesEditorHint">
-          Edit the shared operator-facing list here. Comments and manual notes stay part of this file. These addresses take effect only while the GL.iNet VPN switch is ON and Routing Mode is set to <code>selective</code>.
-        </div>
-        <div class="button-wrap" style="margin-top:12px;">
-          <button id="rulesLoadTextBtn">Load Current List</button>
-        </div>
-        <textarea id="rulesText" class="mono" spellcheck="false" style="min-height:240px;"></textarea>
-      </div>
-      <div class="readonly-pane" style="margin-top:12px;">
-        <div class="label">Git Sync / Runtime Status</div>
-        <div id="rulesGitStatusBanner" style="margin-top:12px;"></div>
-        <div id="rulesGitActionPanel" class="hint" style="margin-top:12px;"></div>
-        <div id="rulesStatusGrid" style="display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin-top:12px;"></div>
-      </div>
-      <details class="readonly-pane" style="margin-top:12px;">
-        <summary class="label" style="cursor:pointer;">Diagnostics</summary>
-        <pre id="rulesTraceOutput" style="margin-top:12px;">No diagnostics yet.</pre>
-      </details>
-      <details class="readonly-pane" style="margin-top:12px;">
-        <summary class="label" style="cursor:pointer;">Repo Details</summary>
-        <pre id="rulesRepoDetails" style="margin-top:12px;">No repo details yet.</pre>
-      </details>
     </section>
 
     <section class="card" style="margin-top:18px;">
@@ -3574,7 +3588,13 @@
           document.getElementById("repairCredsForm").style.display = "none";
           document.getElementById("repairSshPassword").value = "";
           await refreshAll(false, true, true);
-          flash("Diagnose & repair completed successfully.", "good");
+          if (data.router_apply === "scheduled") {
+            flash("VPS repaired. Router config apply is running in the background — the path will blip for a few seconds, then Live State refreshes.", "good");
+          } else if (data.router_apply === "schedule_failed") {
+            flash("VPS repaired, but the background router apply could not be scheduled. Use Restart Xray Runtime after checking Live State.", "bad");
+          } else {
+            flash("Diagnose & repair completed successfully.", "good");
+          }
         } else {
           const reason = data.reason || data.error || "one or more steps failed";
           flash(`Repair finished with issues: ${reason}`, "bad");
@@ -3597,6 +3617,27 @@
     }
 
     document.getElementById("createProfileBtn").addEventListener("click", (event) => createProfile(event.currentTarget));
+
+    // Rules tab navigation. One button-row toggles which .rules-tab-panel
+    // is visible. Active tab is highlighted with the accent color and a
+    // border-bottom underline; inactive tabs stay muted. Simple enough
+    // that a full CSS class approach would be more indirection than it
+    // saves, so we mutate the inline styles the buttons ship with.
+    function activateRulesTab(tabId) {
+      const panels = { local: "rulesTabLocal", git: "rulesTabGit", external: "rulesTabExternal", status: "rulesTabStatus" };
+      Object.entries(panels).forEach(([key, elId]) => {
+        const el = document.getElementById(elId);
+        if (el) el.style.display = key === tabId ? "" : "none";
+      });
+      document.querySelectorAll(".rules-tab-btn").forEach((btn) => {
+        const active = btn.dataset.tab === tabId;
+        btn.style.color = active ? "#e6d34a" : "#8b98a5";
+        btn.style.borderBottomColor = active ? "#e6d34a" : "transparent";
+      });
+    }
+    document.querySelectorAll(".rules-tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => activateRulesTab(btn.dataset.tab));
+    });
     document.getElementById("diagnoseRepairBtn").addEventListener("click", (event) => diagnoseRepair(event.currentTarget));
     document.getElementById("repairCredsCancel").addEventListener("click", () => {
       document.getElementById("repairCredsForm").style.display = "none";
