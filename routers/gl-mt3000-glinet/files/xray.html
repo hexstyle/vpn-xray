@@ -611,6 +611,7 @@
     .flash.show { display: block; }
     .flash.good { background: #e7f7ef; color: #115934; }
     .flash.bad { background: #ffe8e8; color: #8e2222; }
+    .flash.warn { background: #fff5d6; color: #7a5c00; }
     .flash.info { background: #eaf2ff; color: #123f69; }
 
     .flash.loading::before {
@@ -627,6 +628,11 @@
     }
 
     @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @keyframes repairspin {
       to {
         transform: rotate(360deg);
       }
@@ -755,6 +761,13 @@
               </div>
             </div>
             <button class="warn-btn" id="diagnoseRepairBtn" style="min-width:180px;">Diagnose &amp; Repair</button>
+          </div>
+          <div id="repairProgress" style="margin-top:12px;display:none;padding:10px 12px;background:#141d26;border-radius:4px;border-left:3px solid #e6d34a;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="repair-spinner" style="display:inline-block;width:14px;height:14px;border:2px solid #2c3f52;border-top-color:#e6d34a;border-radius:50%;animation:repairspin 0.8s linear infinite;"></span>
+              <span id="repairProgressText" class="mono" style="font-size:13px;color:#e6d34a;">Starting…</span>
+              <span id="repairProgressElapsed" class="hint" style="margin-left:auto;font-size:12px;"></span>
+            </div>
           </div>
           <div id="repairCredsForm" style="margin-top:12px;display:none;padding:12px;background:#141d26;border-radius:4px;">
             <div class="label" style="color:#e6d34a;margin-bottom:4px;">SSH credentials required</div>
@@ -1232,7 +1245,8 @@
       logsBusy: false,
       foregroundBusy: false,
       uiReady: false,
-      rulesJobPollTimer: 0
+      rulesJobPollTimer: 0,
+      repairRunning: false
     };
 
     const compareFields = [
@@ -3562,24 +3576,93 @@
       }
     }
 
+    // Drives the animated progress panel while a repair request is in
+    // flight. The backend runs the whole pipeline as one request and
+    // returns the per-step report at the end, so we can't stream real
+    // sub-steps; instead we advance a phase label on a timer to show the
+    // user that work is happening and roughly where it is. Cleared when
+    // the request resolves.
+    let repairProgressTimer = null;
+    function startRepairProgress() {
+      const panel = document.getElementById("repairProgress");
+      const textEl = document.getElementById("repairProgressText");
+      const elapsedEl = document.getElementById("repairProgressElapsed");
+      panel.style.display = "";
+      const phases = [
+        [0, "Establishing SSH to the VPS…"],
+        [3, "Uploading config, meta and repair script…"],
+        [6, "Running repair pipeline (binary, perms, certs, config, runtime)…"],
+        [20, "Still working — waiting on the VPS to converge…"],
+        [45, "Taking longer than usual — the VPS may be slow to restart…"],
+      ];
+      const started = Date.now();
+      const tick = () => {
+        const secs = Math.floor((Date.now() - started) / 1000);
+        let label = phases[0][1];
+        for (const [at, txt] of phases) {
+          if (secs >= at) label = txt;
+        }
+        textEl.textContent = label;
+        elapsedEl.textContent = `${secs}s`;
+      };
+      tick();
+      repairProgressTimer = setInterval(tick, 1000);
+    }
+    function stopRepairProgress() {
+      if (repairProgressTimer) {
+        clearInterval(repairProgressTimer);
+        repairProgressTimer = null;
+      }
+      document.getElementById("repairProgress").style.display = "none";
+    }
+
     // Called for each attempt at diagnose_repair. Handles the three
     // response shapes: ok=true (report), ok=false + credentials_required
     // (open the inline form), or ok=false + steps (report + flash).
+    // Guarded by state.repairRunning so a second click (or the Retry
+    // button firing while the first request is still in flight) cannot
+    // launch a concurrent pipeline — that used to spawn two backend runs,
+    // the second returning a confusing error.
     async function runDiagnoseRepairOnce(button, extraPayload) {
+      if (state.repairRunning) {
+        flash("A repair run is already in progress — please wait for it to finish.", "warn");
+        return;
+      }
+      state.repairRunning = true;
       const payload = formPayload();
       if (extraPayload) {
         Object.assign(payload, extraPayload);
       }
+      // Disable both entry points for the whole duration, not just the
+      // button that was clicked.
+      const repairBtn = document.getElementById("diagnoseRepairBtn");
+      const credsBtn = document.getElementById("repairCredsSubmit");
+      setBusy(repairBtn, true);
+      setBusy(credsBtn, true);
+      startRepairProgress();
       beginForegroundTask("Running diagnose & repair pipeline on the VPS...", 60000);
-      setBusy(button, true);
       try {
         const data = await callApi(vpsApi, "diagnose_repair", payload, { timeoutMs: 90000 });
+        if (data.error === "busy") {
+          flash("A repair run is already in progress on the router — please wait.", "warn");
+          return;
+        }
         if (data.error === "credentials_required") {
           document.getElementById("repairCredsForm").style.display = "";
           const reasonEl = document.getElementById("repairCredsReason");
           if (data.reason) reasonEl.textContent = data.reason;
           renderRepairReport(data.steps || [], data.raw_log || "");
-          flash("VPS SSH failed — see raw log for the exact reason.", "bad");
+          // Distinguish "need password" from "VPS unreachable" so the
+          // operator does not type a password into a form that cannot
+          // help. The raw log carries the exact OpenSSH line.
+          const raw = (data.raw_log || "").toLowerCase();
+          if (raw.includes("connection refused") || raw.includes("timed out") || raw.includes("no route")) {
+            flash("VPS is not reachable over SSH right now (see raw log). A password will not help until the VPS is back.", "warn");
+          } else if (extraPayload && extraPayload.ssh_password) {
+            flash("That password did not establish SSH. Check it and the raw log below.", "bad");
+          } else {
+            flash("Router's SSH key was rejected — enter the VPS root password once to re-establish access.", "warn");
+          }
           return;
         }
         if (data.status) state.vps = data.status;
@@ -3602,7 +3685,10 @@
       } catch (err) {
         flash(`Repair failed: ${err.message}`, "bad");
       } finally {
-        setBusy(button, false);
+        state.repairRunning = false;
+        stopRepairProgress();
+        setBusy(document.getElementById("diagnoseRepairBtn"), false);
+        setBusy(document.getElementById("repairCredsSubmit"), false);
         endForegroundTask();
       }
     }

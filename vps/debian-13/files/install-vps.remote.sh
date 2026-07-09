@@ -263,6 +263,23 @@ step_certs() {
 	local user group cert_dir
 	user="$(service_user)"
 	group="$(service_group "$user")"
+
+	# CRITICAL GUARD (root cause of the 2026-07-09 /root ownership
+	# corruption): if TLS_CERT_PATH is empty or not absolute, dirname
+	# yields "." and the `chown -R "$user:$group" "$cert_dir"` below would
+	# recursively chown the *current working directory* — which, when the
+	# repair runs over SSH as root, is /root. That silently reassigned
+	# /root to xray:xray and, with sshd StrictModes, broke key auth on
+	# every run (DIAGNOSTIC-TREE 5.1b). Never operate on a non-absolute
+	# cert path. A missing path is a render/profile gap, not something to
+	# "fix" by chowning the CWD.
+	case "$TLS_CERT_PATH" in
+		/*) : ;;
+		*)
+			report certs skipped "TLS cert path is empty or not absolute (\"$TLS_CERT_PATH\"); refusing to touch the filesystem — fix the VPS profile's VPS_TLS_CERT_PATH"
+			return 0
+			;;
+	esac
 	cert_dir="$(dirname "$TLS_CERT_PATH")"
 
 	install -d -m 750 "$cert_dir" 2>/dev/null || {
@@ -331,6 +348,21 @@ step_config() {
 			return 0
 		fi
 		report config failed "no config staged at $staged and existing $XRAY_CONFIG_PATH is missing or invalid"
+		return 1
+	fi
+
+	# Reject a staged config that still contains an unsubstituted
+	# dollar-brace template placeholder. It passes `xray -test` (a
+	# placeholder is a valid string literal) but silently breaks the
+	# tunnel — e.g. a WS path left as the literal placeholder instead of
+	# the real /cdn. A render bug must never overwrite a working config
+	# (DIAGNOSTIC-TREE 8.3).
+	if grep -q '[$][{][A-Z_][A-Z0-9_]*[}]' "$staged"; then
+		if [ "$existing_ok" = '1' ]; then
+			report config skipped "staged config has unsubstituted template placeholders (render bug); existing $XRAY_CONFIG_PATH is valid and left in place"
+			return 0
+		fi
+		report config failed "staged config has unsubstituted template placeholders and no valid config already deployed"
 		return 1
 	fi
 

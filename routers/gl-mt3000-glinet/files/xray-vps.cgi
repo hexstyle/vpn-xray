@@ -377,8 +377,8 @@ ssh_exec_with_identity() {
 	if [ -n "${SSH_RAW_LOG_PATH:-}" ]; then
 		ssh -i "$identity" \
 			-o BatchMode=yes \
-			-o ConnectTimeout=8 \
-			-o ConnectionAttempts=3 \
+			-o ConnectTimeout=6 \
+			-o ConnectionAttempts=2 \
 			-o ServerAliveInterval=15 \
 			-o ServerAliveCountMax=4 \
 			-o StrictHostKeyChecking=no \
@@ -388,8 +388,8 @@ ssh_exec_with_identity() {
 	else
 		ssh -i "$identity" \
 			-o BatchMode=yes \
-			-o ConnectTimeout=8 \
-			-o ConnectionAttempts=3 \
+			-o ConnectTimeout=6 \
+			-o ConnectionAttempts=2 \
 			-o ServerAliveInterval=15 \
 			-o ServerAliveCountMax=4 \
 			-o StrictHostKeyChecking=no \
@@ -413,8 +413,8 @@ ssh_stdin_with_identity() {
 	if [ -n "${SSH_RAW_LOG_PATH:-}" ]; then
 		ssh -i "$identity" \
 			-o BatchMode=yes \
-			-o ConnectTimeout=8 \
-			-o ConnectionAttempts=3 \
+			-o ConnectTimeout=6 \
+			-o ConnectionAttempts=2 \
 			-o ServerAliveInterval=15 \
 			-o ServerAliveCountMax=4 \
 			-o StrictHostKeyChecking=no \
@@ -424,8 +424,8 @@ ssh_stdin_with_identity() {
 	else
 		ssh -i "$identity" \
 			-o BatchMode=yes \
-			-o ConnectTimeout=8 \
-			-o ConnectionAttempts=3 \
+			-o ConnectTimeout=6 \
+			-o ConnectionAttempts=2 \
 			-o ServerAliveInterval=15 \
 			-o ServerAliveCountMax=4 \
 			-o StrictHostKeyChecking=no \
@@ -469,19 +469,22 @@ ssh_stdin_cmd() {
 }
 
 ssh_works() {
-	# Wrapper retry: even with ssh's own ConnectionAttempts=3 the WiFi-
-	# repeater path (apcli0 on GL.iNet) still occasionally drops the
-	# first SYN long enough to look like Connection refused. Retrying at
-	# the shell level with a longer backoff (3s) works around
-	# repeater-side burst rate limits that would otherwise reject a
-	# tight retry loop.
+	# Wrapper retry for the WiFi-repeater burst rate-limit (apcli0 on
+	# GL.iNet, DIAGNOSTIC-TREE 3.4): a rejected/dropped SYN in a burst
+	# looks like a failure, but a spaced retry succeeds. ssh's own
+	# ConnectionAttempts handles in-invocation SYN loss; this wrapper
+	# handles the "refused after too many recent connects" case. Two
+	# attempts with a 2s gap bounds worst-case latency — a broken key
+	# returns Permission denied immediately, so only genuine timeouts
+	# cost the full ConnectTimeout — while still absorbing a single
+	# burst rejection.
 	local i=0
-	while [ "$i" -lt 3 ]; do
+	while [ "$i" -lt 2 ]; do
 		if ssh_cmd "$1" 'echo ok' >/dev/null 2>&1; then
 			return 0
 		fi
 		i=$((i + 1))
-		[ "$i" -lt 3 ] && sleep 3
+		[ "$i" -lt 2 ] && sleep 2
 	done
 	return 1
 }
@@ -664,11 +667,19 @@ render_vps_profile_template() {
 	local output="$3"
 	local vps_profile xray_port xray_flow xray_uuid xray_server_name xray_private_key xray_short_id
 	local vps_xray_binary vps_xray_config_dir vps_xray_config_path vps_xray_log_dir vps_xray_service vps_remote_meta_path
+	local vps_tls_cert_path vps_tls_key_path xray_ws_path
 	local xray_client_flow_block
 
 	vps_profile="$(selected_vps_profile "$profile_id")"
 	xray_port="$(profile_get "$profile_id" server_port)"
 	[ -n "$xray_port" ] || xray_port='24443'
+	# WS path must match what the router dials. Track it on the profile;
+	# default to the stack's install default (/cdn) so a config is never
+	# rendered with the literal ${XRAY_WS_PATH} placeholder (which passes
+	# `xray -test` but silently breaks the tunnel because the server then
+	# expects a path of exactly "${XRAY_WS_PATH}").
+	xray_ws_path="$(profile_get "$profile_id" ws_path)"
+	[ -n "$xray_ws_path" ] || xray_ws_path='/cdn'
 	xray_flow="$(profile_get "$profile_id" flow)"
 	xray_uuid="$(profile_get "$profile_id" uuid)"
 	xray_server_name="$(profile_get "$profile_id" server_name)"
@@ -680,6 +691,16 @@ render_vps_profile_template() {
 	vps_xray_log_dir="$(vps_profile_value "$vps_profile" VPS_XRAY_LOG_DIR)"
 	vps_xray_service="$(vps_profile_value "$vps_profile" VPS_XRAY_SERVICE)"
 	vps_remote_meta_path="$(vps_profile_value "$vps_profile" VPS_REMOTE_META_PATH)"
+	# TLS paths MUST be substituted: install-vps.remote.sh does a
+	# `chown -R` on dirname(TLS_CERT_PATH). If left as the literal
+	# ${VPS_TLS_CERT_PATH}, dirname is "." and the chown lands on the
+	# SSH working directory (/root) — the 2026-07-09 corruption. Default
+	# to the profile.env values so a missing profile field cannot produce
+	# a relative path.
+	vps_tls_cert_path="$(vps_profile_value "$vps_profile" VPS_TLS_CERT_PATH)"
+	vps_tls_key_path="$(vps_profile_value "$vps_profile" VPS_TLS_KEY_PATH)"
+	[ -n "$vps_tls_cert_path" ] || vps_tls_cert_path="${vps_xray_config_dir%/}/certs/server.crt"
+	[ -n "$vps_tls_key_path" ] || vps_tls_key_path="${vps_xray_config_dir%/}/certs/server.key"
 	xray_client_flow_block=''
 	if [ -n "$xray_flow" ]; then
 		xray_client_flow_block="$(printf ',\n            "flow": "%s"' "$xray_flow")"
@@ -699,6 +720,9 @@ render_vps_profile_template() {
 		-e "s|\${VPS_XRAY_LOG_DIR}|$(template_escape "$vps_xray_log_dir")|g" \
 		-e "s|\${VPS_XRAY_SERVICE}|$(template_escape "$vps_xray_service")|g" \
 		-e "s|\${VPS_REMOTE_META_PATH}|$(template_escape "$vps_remote_meta_path")|g" \
+		-e "s|\${VPS_TLS_CERT_PATH}|$(template_escape "$vps_tls_cert_path")|g" \
+		-e "s|\${VPS_TLS_KEY_PATH}|$(template_escape "$vps_tls_key_path")|g" \
+		-e "s|\${XRAY_WS_PATH}|$(template_escape "$xray_ws_path")|g" \
 		"$template_path" > "$output"
 }
 
@@ -1448,13 +1472,26 @@ install_managed_key_with_password() {
 
 	tmp_pub="/tmp/xray-managed-key-pass.$$"
 	printf '%s\n' "$pub" > "$tmp_pub"
+	# DIAGNOSTIC-TREE 5.1: the remote command not only appends the managed
+	# key, it also normalizes ownership and mode of the login home,
+	# ~/.ssh and authorized_keys. This is essential: after a VPS
+	# reprovision the home directory can end up owned by a service user
+	# (observed: /root owned by xray:xray, 2026-07-09). With StrictModes
+	# on — the sshd default — an authorized_keys that root does not own is
+	# silently ignored, so key auth fails no matter how many times the
+	# key is re-appended. Re-appending was the entire fix before, which
+	# is why "repair with the root password" never actually worked. We do
+	# the chown in this same password session because it is the only
+	# context where we hold write access without the key that is broken.
+	# $HOME is expanded remotely; `id -gn` picks the login user's primary
+	# group so we don't hard-code root.
 	SSHPASS="$password" sshpass -e ssh \
 		-o StrictHostKeyChecking=no \
 		-o UserKnownHostsFile="$KNOWN_HOSTS" \
-		-o ConnectTimeout=8 \
+		-o ConnectTimeout=6 \
 		-p "$port" \
 		"$user@$host" \
-		"sh -c 'umask 077; mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys; PUB=\$(cat); grep -qxF \"\$PUB\" ~/.ssh/authorized_keys || printf \"%s\n\" \"\$PUB\" >> ~/.ssh/authorized_keys; chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys'" \
+		"sh -c 'set -e; umask 077; mkdir -p \"\$HOME/.ssh\"; touch \"\$HOME/.ssh/authorized_keys\"; PUB=\$(cat); grep -qxF \"\$PUB\" \"\$HOME/.ssh/authorized_keys\" || printf \"%s\n\" \"\$PUB\" >> \"\$HOME/.ssh/authorized_keys\"; U=\$(id -un); G=\$(id -gn); chown \"\$U:\$G\" \"\$HOME\" \"\$HOME/.ssh\" \"\$HOME/.ssh/authorized_keys\"; chmod 700 \"\$HOME/.ssh\"; chmod 600 \"\$HOME/.ssh/authorized_keys\"'" \
 		< "$tmp_pub" >/dev/null 2>&1 || {
 			rm -f "$tmp_pub"
 			return 1

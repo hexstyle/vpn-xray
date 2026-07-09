@@ -173,11 +173,26 @@ python3 socket connect <VPS>:443                                  # data
 ```
 
 **Causes / Repair**:
-- 5.1 **SSH auth broken** (key not in authorized_keys after reprovision) →
-  UI collects the root password **once**, re-installs the managed key
-  (`install_managed_key_with_password`), never stores the password. `safe`
-- 5.2 **SSH refused in burst context** → node 3.4 first; a single isolated
-  probe decides.
+- 5.1 **SSH key auth broken after reprovision.** Two distinct root causes,
+  and telling them apart is the whole point — re-appending the key fixes
+  only the first:
+  - 5.1a **Key absent from `authorized_keys`** → collect the root password
+    **once**, append the managed key, never store the password. `safe`
+  - 5.1b **Home/`.ssh`/`authorized_keys` owned by the wrong user**
+    (observed 2026-07-09: `/root` owned by `xray:xray` after a snapshot
+    restore). With `StrictModes yes` (sshd default) an `authorized_keys`
+    the login user does not own is **silently ignored** — the key is
+    present but every attempt returns `Permission denied`. Re-appending
+    can never fix this. Repair: in the same password session that installs
+    the key, `chown <user>:<group> $HOME $HOME/.ssh $HOME/.ssh/authorized_keys`
+    and re-assert `chmod 700 .ssh / 600 authorized_keys`. Implemented in
+    `install_managed_key_with_password`. `safe`
+  - Diagnostic tell: key **is** in `authorized_keys` (grep match) yet
+    `ssh -v` shows `Offering public key ... Permission denied` → suspect
+    5.1b, check `stat` ownership of the home chain, not the key list.
+- 5.2 **SSH refused/timed out in burst context** → node 3.4 first; a single
+  isolated probe after a pause decides. Do not read a burst-context
+  `Operation timed out` as auth failure.
 - 5.3 **:443 closed but SSH works** → VPS xray down, node 6.
 - 5.4 **Both closed** → VPS is down/rebuilding or its provider firewall
   changed; nothing the router can repair. Surface reachability + last-known
