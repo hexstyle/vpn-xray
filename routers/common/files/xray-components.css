@@ -336,3 +336,25 @@
         grid-template-columns: 1fr;
       }
     }
+
+/* Path Health — unified diagnostic tree (xray-tree.js). */
+.tree { margin-top: 12px; font-size: 13px; }
+.tree-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 8px; border-bottom: 1px solid #1e2b38;
+}
+.tree-row:last-child { border-bottom: none; }
+.tree-glyph { width: 16px; text-align: center; flex: 0 0 auto; }
+.tree-id { width: 34px; flex: 0 0 auto; color: #8b98a5; font-variant-numeric: tabular-nums; }
+.tree-title { flex: 0 0 auto; min-width: 230px; }
+.tree-status-label { width: 74px; flex: 0 0 auto; text-transform: uppercase; font-size: 11px; letter-spacing: .03em; }
+.tree-detail { flex: 1 1 auto; color: #8b98a5; min-width: 140px; }
+.tree-badge { flex: 0 0 auto; font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-left: 4px; white-space: nowrap; }
+.tree-badge.auto { background: #173a2a; color: #5fd08a; }
+.tree-badge.gap { background: #3a2f17; color: #e6d34a; }
+.status-ok .tree-glyph, .status-ok .tree-status-label { color: #5fd08a; }
+.status-degraded .tree-glyph, .status-degraded .tree-status-label { color: #e6d34a; }
+.status-failed .tree-glyph, .status-failed .tree-status-label { color: #e06a6a; }
+.status-failed { background: rgba(224, 106, 106, 0.06); }
+.status-unknown .tree-glyph, .status-unknown .tree-status-label { color: #8b98a5; }
+.status-na .tree-glyph, .status-na .tree-status-label { color: #5a6672; }

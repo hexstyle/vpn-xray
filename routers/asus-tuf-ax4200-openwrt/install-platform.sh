@@ -274,6 +274,7 @@ EOF
 	copy_if_changed "$COMMON_DIR/files/xray-app-5.js" /www/xray-app-5.js
 	copy_if_changed "$COMMON_DIR/files/xray-app-6.js" /www/xray-app-6.js
 	copy_if_changed "$COMMON_DIR/files/xray-app-7.js" /www/xray-app-7.js
+	copy_if_changed "$COMMON_DIR/files/xray-tree.js" /www/xray-tree.js
 	copy_if_changed "$PROFILE_DIR/files/xray-admin.cgi" /www/cgi-bin/xray-admin
 	copy_if_changed "$PROFILE_DIR/files/xray-vps.cgi" /www/cgi-bin/xray-vps
 	copy_if_changed "$PROFILE_DIR/files/xray-rules.cgi" /www/cgi-bin/xray-rules
@@ -322,9 +323,10 @@ EOF
 		/www/xray-app-5.js \
 		/www/xray-app-6.js \
 		/www/xray-app-7.js \
+		/www/xray-tree.js \
 		/www/xray.html
 	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/xray-health-monitor /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/bin/vpn-xray-repin-cert /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/xray-admin-probe.sh /usr/share/vpn-xray/xray-admin-status.sh /usr/share/vpn-xray/xray-rules-jobs.sh /usr/share/vpn-xray/xray-rules-actions.sh /usr/share/vpn-xray/xray-rules-scripts.sh /usr/share/vpn-xray/xray-vps-profile.sh xray-vps-ssh.sh xray-vps-render.sh xray-vps-inspect.sh xray-vps-actions.sh xray-vps-setup.sh xray-vps-repair.sh /usr/share/vpn-xray/router-rules-external.py /usr/share/vpn-xray/router-rules-config.sh /usr/share/vpn-xray/router-rules-git.sh /usr/share/vpn-xray/router-rules-repo.sh /usr/share/vpn-xray/router-rules-remote.sh /usr/share/vpn-xray/router-rules-rulestree.sh /usr/share/vpn-xray/router-rules-external-a.sh /usr/share/vpn-xray/router-rules-external-b.sh /usr/share/vpn-xray/router-rules-ipset.sh /usr/share/vpn-xray/router-rules-apply.sh /usr/share/vpn-xray/router-rules-status.sh /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
-	chmod 644 /www/xray.html /www/xray-base.css /www/xray-components.css /www/xray-app-1.js /www/xray-app-2.js /www/xray-app-3.js /www/xray-app-4.js /www/xray-app-5.js /www/xray-app-6.js /www/xray-app-7.js
+	chmod 644 /www/xray.html /www/xray-base.css /www/xray-components.css /www/xray-app-1.js /www/xray-app-2.js /www/xray-app-3.js /www/xray-app-4.js /www/xray-app-5.js /www/xray-app-6.js /www/xray-app-7.js /www/xray-tree.js
 
 	rm -rf /usr/share/vpn-xray/vps
 	mkdir -p /usr/share/vpn-xray

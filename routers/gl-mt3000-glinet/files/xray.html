@@ -37,6 +37,12 @@
 
     <div id="flash" class="flash"></div>
 
+    <section class="card" id="pathHealthCard">
+      <h2>Path Health</h2>
+      <p class="subcopy">Live decision tree — each layer is checked top to bottom; fix the deepest broken layer first. Reflects the real transparent client path (redsocks + nat), not just the direct proxy port.</p>
+      <div id="pathHealthTree" class="tree">Loading path health…</div>
+    </section>
+
     <section class="grid">
       <div class="card">
         <h2>Selected VPS</h2>
@@ -523,5 +529,6 @@
   <script src="xray-app-5.js"></script>
   <script src="xray-app-6.js"></script>
   <script src="xray-app-7.js"></script>
+  <script src="xray-tree.js"></script>
 </body>
 </html>

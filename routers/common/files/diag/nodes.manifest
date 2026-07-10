@@ -1,0 +1,16 @@
+# Unified diagnostic node manifest — single source of truth.
+# See docs/UNIFIED-DIAGNOSTIC-UI-DESIGN.md.
+# Fields: id|parent|layer|title|side|risk|repair|auto|ui_slot|gap
+# parent empty = layer root. status is derived live, never stored here.
+1||1|Workstation reaches router|xstation|safe|local_route|none|path|
+2||2|Router platform files installed|router|disruptive|install|none|path|
+3||3|Router uplink has internet|router|disruptive|uplink_reselect|hotplug|path|G2
+4||4|Router Xray runtime up|router|disruptive|restart_runtime|watchdog|path|
+4.1|4|4|Transparent proxy (redsocks + nat)|router|disruptive|transproxy_restart|watchdog|path|
+5||5|Router to VPS transport (WS+TLS)|router|disruptive|repin_render|watchdog+repin|path|
+6||6|VPS Xray runtime|vps|disruptive|repair_pipeline|none|vps|
+7||7|End-to-end: LAN client to internet via VPS|router|disruptive|walk|none|path|
+8||8|Config coherence (profile = router = VPS)|router|disruptive|apply_profile|none|config|
+8.5|8|8|Transport matches VPS|router|disruptive|rerender|none|config|
+R||R|Template rendering (build-time)|build|safe|fix_renderer|none|config|
+9||9|Install pipeline|xstation|disruptive|reinstall|none|path|

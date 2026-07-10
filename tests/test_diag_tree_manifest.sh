@@ -1,0 +1,58 @@
+#!/bin/sh
+
+set -eu
+
+# Contract for the unified diagnostic tree (docs/UNIFIED-DIAGNOSTIC-UI-DESIGN.md):
+# the node manifest is the single source of truth, the admin CGI serves it via
+# action=tree, and the UI renders it. Assert the wiring so a node can never be
+# half-added.
+
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+MANIFEST="$ROOT/routers/common/files/diag/nodes.manifest"
+TREE_LIB="$ROOT/routers/common/files/xray-admin-tree.sh"
+TREE_JS="$ROOT/routers/common/files/xray-tree.js"
+
+fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+
+[ -f "$MANIFEST" ] || fail "node manifest missing"
+
+# Every non-comment, non-blank line has exactly 10 pipe-separated fields
+# (id|parent|layer|title|side|risk|repair|auto|ui_slot|gap) and a non-empty id.
+awk -F'|' '
+	/^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+	{ if (NF != 10) { printf "BADFIELDS line %d: %d fields\n", NR, NF; bad=1 }
+	  if ($1 == "") { printf "EMPTY id line %d\n", NR; bad=1 }
+	  seen[$3]=1 }
+	END { if (bad) exit 1 }
+' "$MANIFEST" || fail "manifest has a malformed node row (need 10 | fields)"
+
+# Every top-level layer 1..9 has at least one node.
+for layer in 1 2 3 4 5 6 7 8 9; do
+	awk -F'|' -v L="$layer" '$3==L{f=1} END{exit f?0:1}' "$MANIFEST" \
+		|| fail "manifest has no node for layer $layer"
+done
+
+# The runner exposes both functions and derives the transparent-proxy node
+# (4.1) — the one whose failure caused the 2026-07-10 blackout — so it is
+# always visible in the tree.
+grep -q '^tree_json()' "$TREE_LIB" || fail "xray-admin-tree.sh must define tree_json()"
+grep -q '^tree_node_status()' "$TREE_LIB" || fail "xray-admin-tree.sh must define tree_node_status()"
+grep -q 'CODEX_TRANSPROXY\|nat_rule_present' "$TREE_LIB" \
+	|| fail "tree runner must check the transparent-proxy nat rule for node 4.1"
+grep -Eq '4\.1\|' "$MANIFEST" || fail "manifest must carry the transparent-proxy node 4.1"
+
+# Every profile's admin CGI sources the tree lib and dispatches action=tree.
+for prof in gl-mt3000-glinet asus-tuf-ax4200-openwrt; do
+	cgi="$ROOT/routers/$prof/files/xray-admin.cgi"
+	grep -q 'xray-admin-tree.sh' "$cgi" || fail "$prof xray-admin.cgi must source the tree lib"
+	grep -q '^	tree)' "$cgi" || fail "$prof xray-admin.cgi must dispatch action=tree"
+done
+
+# UI renderer exists and reads the tree endpoint.
+[ -f "$TREE_JS" ] || fail "xray-tree.js renderer missing"
+grep -q 'action=tree' "$TREE_JS" || fail "xray-tree.js must fetch action=tree"
+grep -q 'pathHealthTree' "$TREE_JS" || fail "xray-tree.js must render into #pathHealthTree"
+grep -q 'id="pathHealthTree"' "$ROOT/routers/gl-mt3000-glinet/files/xray.html" \
+	|| fail "xray.html must contain the #pathHealthTree mount"
+
+printf 'ok\n'

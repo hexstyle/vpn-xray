@@ -84,6 +84,7 @@ live_socks_port() {
 # share this scope, so ordering vs the helpers above does not matter.
 . "${VX_ADMIN_PROBE_LIB:-/usr/share/vpn-xray/xray-admin-probe.sh}"
 . "${VX_ADMIN_STATUS_LIB:-/usr/share/vpn-xray/xray-admin-status.sh}"
+. "${VX_ADMIN_TREE_LIB:-/usr/share/vpn-xray/xray-admin-tree.sh}"
 
 action_sync() {
 	if sync_to_hardware_switch; then
@@ -255,6 +256,10 @@ case "$(request_value action)" in
 	health)
 		emit_header
 		health_json
+		;;
+	tree)
+		emit_header
+		tree_json
 		;;
 	probe)
 		action_probe
