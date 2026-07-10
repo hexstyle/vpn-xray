@@ -41,12 +41,27 @@ grep -q 'CODEX_TRANSPROXY\|nat_rule_present' "$TREE_LIB" \
 	|| fail "tree runner must check the transparent-proxy nat rule for node 4.1"
 grep -Eq '4\.1\|' "$MANIFEST" || fail "manifest must carry the transparent-proxy node 4.1"
 
-# Every profile's admin CGI sources the tree lib and dispatches action=tree.
+# The runner exposes the repair surface: single-node repair and the tree walk,
+# and both derive success from the honest listening signal, not a bare rc.
+grep -q '^node_repair_run()' "$TREE_LIB" || fail "tree lib must define node_repair_run()"
+grep -q '^tree_repair_json()' "$TREE_LIB" || fail "tree lib must define tree_repair_json() (the bottom-up walk)"
+grep -q 'listen_present 12345' "$TREE_LIB" \
+	|| fail "tree lib must verify redsocks LISTENING on :12345 (not pgrep -x, which never matches /usr/sbin/redsocks)"
+grep -q 'pgrep -x redsocks' "$TREE_LIB" \
+	&& fail "tree lib must not use pgrep -x redsocks (false DOWN on a healthy /usr/sbin/redsocks)"
+
+# Every profile's admin CGI sources the tree lib and dispatches the tree +
+# repair actions.
 for prof in gl-mt3000-glinet asus-tuf-ax4200-openwrt; do
 	cgi="$ROOT/routers/$prof/files/xray-admin.cgi"
 	grep -q 'xray-admin-tree.sh' "$cgi" || fail "$prof xray-admin.cgi must source the tree lib"
 	grep -q '^	tree)' "$cgi" || fail "$prof xray-admin.cgi must dispatch action=tree"
+	grep -q '^	node_repair)' "$cgi" || fail "$prof xray-admin.cgi must dispatch action=node_repair"
+	grep -q '^	tree_repair)' "$cgi" || fail "$prof xray-admin.cgi must dispatch action=tree_repair"
 done
+# The install completion gate must use the same honest redsocks signal.
+grep -q 'pgrep -x redsocks' "$ROOT/routers/gl-mt3000-glinet/install-router-lib.sh" \
+	&& fail "install-router-lib.sh must not use pgrep -x redsocks in the completion gate"
 
 # UI renderer exists and reads the tree endpoint.
 [ -f "$TREE_JS" ] || fail "xray-tree.js renderer missing"

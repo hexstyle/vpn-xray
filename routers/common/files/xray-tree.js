@@ -95,10 +95,46 @@
     paint(data.nodes);
   }
 
-  // One delegated click handler for all (current and future) repair buttons.
+  async function onWalkClick(btn) {
+    if (repairBusy) return;
+    if (!window.confirm("Diagnose & Repair the whole path?\nThis walks the tree and restarts the broken router-side layers (runtime / transparent proxy / transport), briefly interrupting client traffic.")) {
+      return;
+    }
+    repairBusy = true;
+    btn.disabled = true;
+    var label = btn.textContent;
+    btn.textContent = "Repairing path…";
+    try {
+      var resp = await fetch("/cgi-bin/xray-admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "action=tree_repair",
+      });
+      var data = await resp.json();
+      if (data && data.tree && Array.isArray(data.tree.nodes)) paint(data.tree.nodes);
+      var flash = document.getElementById("flash");
+      if (flash) {
+        flash.textContent = (data && data.message) || "Path repair finished.";
+        flash.className = "flash " + (data && data.ok ? "ok" : "err");
+        setTimeout(function () { flash.textContent = ""; flash.className = "flash"; }, 8000);
+      }
+    } catch (_err) {
+      /* next poll refreshes the tree */
+    } finally {
+      repairBusy = false;
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
+  // One delegated click handler for the per-node repair buttons and the
+  // whole-path walk button.
   document.addEventListener("click", function (ev) {
-    var btn = ev.target && ev.target.closest && ev.target.closest(".tree-repair-btn");
-    if (btn) onRepairClick(btn);
+    if (!ev.target || !ev.target.closest) return;
+    var rbtn = ev.target.closest(".tree-repair-btn");
+    if (rbtn) { onRepairClick(rbtn); return; }
+    var wbtn = ev.target.closest("#pathHealthWalkBtn");
+    if (wbtn) onWalkClick(wbtn);
   });
 
   renderPathHealth();

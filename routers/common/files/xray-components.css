@@ -365,3 +365,4 @@
 }
 .tree-repair-btn:hover { background: #4a3d1e; }
 .tree-repair-btn:disabled { opacity: .6; cursor: default; }
+.path-health-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

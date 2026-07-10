@@ -98,45 +98,91 @@ tree_node_status() {
 	esac
 }
 
-# node_repair_json <id> — run the router-side repair for one node, then return
-# {ok, node, message, tree:[...]} so the UI can re-render the tree from the
-# post-repair state. Only router-side, known-safe (recoverable) repairs live
-# here; VPS runtime (node 6) and config apply (node 8) stay in the VPS panel /
-# diagnose_repair, which already gate their disruptive/destructive steps.
-node_repair_json() {
-	local id="$1" rc=0 msg=''
-	case "$id" in
+# node_repair_run <id> — DO the router-side repair for one node. Returns
+# rc 0 = success (verified), 1 = ran but did not converge, 2 = no router repair.
+# Action only, no output — shared by single-node repair and the tree walk.
+# Only known-safe (recoverable) router-side repairs; VPS runtime (node 6) and
+# config apply (node 8) stay in the guarded diagnose_repair.
+node_repair_run() {
+	case "$1" in
 		4)
-			if restart_runtime_from_saved_config >/dev/null 2>&1; then
-				msg='Xray runtime restarted and re-synced to the hardware switch.'
-			else rc=1; msg='Runtime restart did not converge; see logs.'; fi ;;
+			restart_runtime_from_saved_config >/dev/null 2>&1 ;;
 		4.1)
-			# The 2026-07-10 blackout recovery, one click: bring the transparent
-			# proxy back and re-apply the switch state.
+			# The 2026-07-10 blackout recovery: bring the transparent proxy
+			# back and re-apply the switch state. Success = redsocks really
+			# LISTENING + nat rule (not just "the command returned 0").
 			/etc/init.d/codex-transproxy restart >/dev/null 2>&1 || true
 			sleep 1
 			/etc/gl-switch.d/xray.sh on >/dev/null 2>&1 || true
 			sleep 1
-			# Success = redsocks really LISTENING + nat rule (not just "the
-			# command returned 0") so this cannot claim green over a dead path.
-			if listen_present 12345 && nat_rule_present; then
-				msg='Transparent proxy restarted; redsocks is listening on :12345 and CODEX_TRANSPROXY is active.'
-			else rc=1; msg='Transparent proxy restart did not restore the path (redsocks not listening); see logs.'; fi ;;
+			listen_present 12345 && nat_rule_present ;;
 		5)
-			if [ -x /usr/bin/vpn-xray-repin-cert ]; then
-				/usr/bin/vpn-xray-repin-cert >/dev/null 2>&1 || true
-			fi
-			if restart_runtime_from_saved_config >/dev/null 2>&1; then
-				msg='Re-pinned the VPS cert (if drifted) and restarted the runtime.'
-			else rc=1; msg='Re-pin/restart did not converge; see logs.'; fi ;;
+			[ -x /usr/bin/vpn-xray-repin-cert ] && /usr/bin/vpn-xray-repin-cert >/dev/null 2>&1
+			restart_runtime_from_saved_config >/dev/null 2>&1 ;;
 		*)
-			rc=2
-			msg="Node $id has no one-click router-side repair. Use Diagnose & Repair (VPS/config) above." ;;
+			return 2 ;;
 	esac
-	[ "$rc" = '2' ] || sleep 2
+}
+
+# node_repair_msg <id> <rc> — human message for a node_repair_run result.
+node_repair_msg() {
+	case "$1:$2" in
+		4:0)   printf 'Xray runtime restarted and re-synced to the hardware switch.' ;;
+		4.1:0) printf 'Transparent proxy restarted; redsocks is listening on :12345 and CODEX_TRANSPROXY is active.' ;;
+		5:0)   printf 'Re-pinned the VPS cert (if drifted) and restarted the runtime.' ;;
+		*:2)   printf 'Node %s has no one-click router-side repair. Use Diagnose & Repair (VPS/config) above.' "$1" ;;
+		*)     printf 'Repair of node %s did not converge; see logs.' "$1" ;;
+	esac
+}
+
+# node_repair_json <id> — run one node's repair and return
+# {ok, node, message, tree:{...}} so the UI re-renders from the post-repair state.
+node_repair_json() {
+	local id="$1" rc
+	node_repair_run "$id"
+	rc=$?
 	printf '{'
 	printf '"ok":'; json_bool "$([ "$rc" = '0' ] && printf 1 || printf 0)"; printf ','
 	printf '"node":"%s",' "$(json_escape "$id")"
+	printf '"message":"%s",' "$(json_escape "$(node_repair_msg "$id" "$rc")")"
+	printf '"tree":'
+	tree_json
+	printf '}'
+}
+
+# tree_repair_json — the tree-walking Diagnose & Repair. Repair bottom-up: fix
+# the lowest-layer broken router-repairable node, re-probe, repeat until the
+# end-to-end node (7) is ok or nothing router-side is left to fix. Whatever it
+# cannot fix (VPS runtime / config) is reported so the operator runs the guarded
+# Diagnose & Repair. Bounded to 5 rounds so a non-converging node cannot churn.
+tree_repair_json() {
+	local walked='' rounds=0 target st
+	while [ "$rounds" -lt 5 ]; do
+		rounds=$((rounds + 1))
+		target=''
+		# dependency order (most foundational first): runtime, transproxy, transport
+		for st in 4 4.1 5; do
+			if [ "$(tree_node_status "$st" | cut -f1)" = 'failed' ]; then
+				target="$st"; break
+			fi
+		done
+		[ -n "$target" ] || break
+		node_repair_run "$target" || true
+		walked="$walked $target"
+		[ "$(tree_node_status 7 | cut -f1)" = 'ok' ] && break
+	done
+	local e2e msg
+	e2e="$(tree_node_status 7 | cut -f1)"
+	if [ -z "$walked" ]; then
+		msg='No router-side layer was broken. If the client path still fails, the cause is the VPS or config — run Diagnose & Repair above.'
+	elif [ "$e2e" = 'ok' ]; then
+		msg="Repaired layer(s)${walked}. End-to-end client path is healthy."
+	else
+		msg="Repaired layer(s)${walked}, but the path is still not healthy — the remaining cause is VPS or config. Run Diagnose & Repair above."
+	fi
+	printf '{'
+	printf '"ok":'; json_bool "$([ "$e2e" = 'ok' ] && printf 1 || printf 0)"; printf ','
+	printf '"walked":"%s",' "$(json_escape "$walked")"
 	printf '"message":"%s",' "$(json_escape "$msg")"
 	printf '"tree":'
 	tree_json

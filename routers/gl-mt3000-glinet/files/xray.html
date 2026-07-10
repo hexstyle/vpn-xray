@@ -38,8 +38,11 @@
     <div id="flash" class="flash"></div>
 
     <section class="card" id="pathHealthCard">
-      <h2>Path Health</h2>
-      <p class="subcopy">Live decision tree — each layer is checked top to bottom; fix the deepest broken layer first. Reflects the real transparent client path (redsocks + nat), not just the direct proxy port.</p>
+      <div class="path-health-head">
+        <h2>Path Health</h2>
+        <button class="primary" id="pathHealthWalkBtn" type="button">Diagnose &amp; Repair Path ▸</button>
+      </div>
+      <p class="subcopy">Live decision tree — each layer is checked top to bottom; fix the deepest broken layer first. Reflects the real transparent client path (redsocks + nat), not just the direct proxy port. Diagnose &amp; Repair Path walks the tree and fixes the router-side layers bottom-up.</p>
       <div id="pathHealthTree" class="tree">Loading path health…</div>
     </section>
 
