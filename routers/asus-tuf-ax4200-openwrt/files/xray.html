@@ -186,43 +186,8 @@
           Live state refreshes automatically. This block shows only the current path state, latest VPS inspection,
           and whether the saved profile, router and VPS still match.
         </p>
-        <div class="status-grid">
-          <div class="status-box">
-            <div class="label">Hardware Switch</div>
-            <div id="switchState" class="value">...</div>
-            <div class="hint">Physical ON/OFF switch on the router body. Enforced by the router watchdog service.</div>
-          </div>
-          <div class="status-box">
-            <div class="label">Platform Status</div>
-            <div id="configReady" class="value">...</div>
-            <div class="hint" id="configReadyHint">Whether this router already has an active Xray client profile.</div>
-          </div>
-          <div class="status-box">
-            <div class="label">Path State</div>
-            <div id="pathActive" class="value">...</div>
-            <div class="hint" id="pathActiveHint">Whether the live transparent path is active right now.</div>
-          </div>
-          <div class="status-box">
-            <div class="label">Switch Request</div>
-            <div id="switchRequest" class="value">...</div>
-            <div class="hint">What the physical hardware switch is currently asking the router to do.</div>
-          </div>
-          <div class="status-box">
-            <div class="label">Last VPS Check</div>
-            <div id="summaryInspect" class="value">...</div>
-            <div class="hint">Latest successful manual VPS read or apply result.</div>
-          </div>
-          <div class="status-box">
-            <div class="label">Remote Public IP</div>
-            <div id="summaryRemoteIp" class="value mono">...</div>
-            <div class="hint">Latest public IP detected from the selected VPS.</div>
-          </div>
-          <div class="status-box">
-            <div class="label">Sync State</div>
-            <div id="summaryDrift" class="value">...</div>
-            <div class="hint">Whether saved profile, router and VPS already match.</div>
-          </div>
-        </div>
+        <!-- Populated by renderStaticCells() (xray-app-1.js) from STATUS_CELLS -->
+        <div class="status-grid" id="statusGrid"></div>
         <div class="readonly-pane" style="margin-top:12px;">
           <div class="label">Live Snapshot</div>
           <div class="kv" id="remoteInfoGrid">
@@ -233,20 +198,8 @@
           <summary class="label" style="cursor:pointer;">Detailed Compare</summary>
           <div style="margin-top:12px;">
             <div id="syncChips" class="chip-row"></div>
-            <div class="compare-grid three" style="margin-top:12px;">
-              <div class="compare-box">
-                <div class="label">Saved Profile</div>
-                <table class="compare-table"><tbody id="desiredCompare"></tbody></table>
-              </div>
-              <div class="compare-box">
-                <div class="label">Live Router Config</div>
-                <table class="compare-table"><tbody id="routerCompare"></tbody></table>
-              </div>
-              <div class="compare-box">
-                <div class="label">Live VPS Config</div>
-                <table class="compare-table"><tbody id="remoteCompare"></tbody></table>
-              </div>
-            </div>
+            <!-- Populated by renderStaticCells() (xray-app-1.js) from COMPARE_CELLS -->
+            <div class="compare-grid three" id="compareGrid" style="margin-top:12px;"></div>
           </div>
         </details>
         <details class="readonly-pane" style="margin-top:12px;">

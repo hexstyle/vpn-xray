@@ -1,3 +1,38 @@
+    // Live State display cells and the Detailed-Compare tables are rendered from
+    // data here (DRY) instead of seven / three near-identical HTML blocks. Runs
+    // first so their value/tbody elements exist before any status code fills them.
+    (function renderStaticCells() {
+      const STATUS_CELLS = [
+        ["Hardware Switch", "switchState", "value", "", "Physical ON/OFF switch on the router body. Enforced by the router watchdog service."],
+        ["Platform Status", "configReady", "value", "configReadyHint", "Whether this router already has an active Xray client profile."],
+        ["Path State", "pathActive", "value", "pathActiveHint", "Whether the live transparent path is active right now."],
+        ["Switch Request", "switchRequest", "value", "", "What the physical hardware switch is currently asking the router to do."],
+        ["Last VPS Check", "summaryInspect", "value", "", "Latest successful manual VPS read or apply result."],
+        ["Remote Public IP", "summaryRemoteIp", "value mono", "", "Latest public IP detected from the selected VPS."],
+        ["Sync State", "summaryDrift", "value", "", "Whether saved profile, router and VPS already match."],
+      ];
+      const grid = document.getElementById("statusGrid");
+      if (grid) {
+        grid.innerHTML = STATUS_CELLS.map(function (c) {
+          return '<div class="status-box"><div class="label">' + c[0] + '</div>' +
+            '<div id="' + c[1] + '" class="' + c[2] + '">...</div>' +
+            '<div class="hint"' + (c[3] ? ' id="' + c[3] + '"' : "") + '>' + c[4] + '</div></div>';
+        }).join("");
+      }
+      const COMPARE_CELLS = [
+        ["Saved Profile", "desiredCompare"],
+        ["Live Router Config", "routerCompare"],
+        ["Live VPS Config", "remoteCompare"],
+      ];
+      const cgrid = document.getElementById("compareGrid");
+      if (cgrid) {
+        cgrid.innerHTML = COMPARE_CELLS.map(function (c) {
+          return '<div class="compare-box"><div class="label">' + c[0] + '</div>' +
+            '<table class="compare-table"><tbody id="' + c[1] + '"></tbody></table></div>';
+        }).join("");
+      }
+    })();
+
     const runtimeApi = "/cgi-bin/xray-admin";
     const vpsApi = "/cgi-bin/xray-vps";
     const rulesApi = "/cgi-bin/xray-rules";
