@@ -261,6 +261,10 @@ case "$(request_value action)" in
 		emit_header
 		tree_json
 		;;
+	node_repair)
+		emit_header
+		node_repair_json "$(request_value node)"
+		;;
 	probe)
 		action_probe
 		;;

@@ -358,3 +358,10 @@
 .status-failed { background: rgba(224, 106, 106, 0.06); }
 .status-unknown .tree-glyph, .status-unknown .tree-status-label { color: #8b98a5; }
 .status-na .tree-glyph, .status-na .tree-status-label { color: #5a6672; }
+.tree-repair-btn {
+  flex: 0 0 auto; margin-left: 6px;
+  background: #3a2f17; color: #e6d34a; border: 1px solid #5a4a1e;
+  border-radius: 4px; padding: 2px 10px; font-size: 12px; cursor: pointer;
+}
+.tree-repair-btn:hover { background: #4a3d1e; }
+.tree-repair-btn:disabled { opacity: .6; cursor: default; }

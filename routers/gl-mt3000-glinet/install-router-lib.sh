@@ -459,7 +459,7 @@ if [[ "${e2e_ok:-0}" == "1" ]]; then
   # (2026-07-10 incident: install reported 10/10 while redsocks was down and
   # every LAN client was blocked). redsocks-up + the nat rule are structural
   # and definitive, so this cannot false-fail on a transient egress blip.
-  tp_state="$(router_ssh 'pgrep -x redsocks >/dev/null 2>&1 && echo rs=up || echo rs=DOWN; iptables -t nat -S PREROUTING 2>/dev/null | grep -q CODEX_TRANSPROXY && echo tp=up || echo tp=DOWN' 2>/dev/null | tr "\n" " " || true)"
+  tp_state="$(router_ssh 'netstat -ltn 2>/dev/null | grep -q ":12345 " && echo rs=up || echo rs=DOWN; iptables -t nat -S PREROUTING 2>/dev/null | grep -q CODEX_TRANSPROXY && echo tp=up || echo tp=DOWN' 2>/dev/null | tr "\n" " " || true)"
   case "$tp_state" in
     *rs=up*tp=up*)
       echo "✓ Transparent path healthy: redsocks running and CODEX_TRANSPROXY active"

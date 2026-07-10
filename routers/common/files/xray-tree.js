@@ -23,6 +23,14 @@
     if (n.gap) {
       badges += '<span class="tree-badge gap" title="open gap ' + esc(n.gap) + ' — diagnose-only, no automatic repair yet">' + esc(n.gap) + "</span>";
     }
+    // A broken node that has a one-click router-side repair gets an inline
+    // button. risk="disruptive" repairs restart the path, so the click is
+    // confirmed first (see onRepairClick).
+    var action = "";
+    if (n.can_repair && (status === "failed" || status === "degraded")) {
+      action = '<button class="tree-repair-btn" data-node="' + esc(n.id) + '" data-risk="' + esc(n.risk || "") +
+        '" data-title="' + esc(n.title) + '" type="button">Repair</button>';
+    }
     return '<div class="tree-row status-' + esc(status) + '" style="padding-left:' + (indent * 22 + 8) + 'px">' +
       '<span class="tree-glyph">' + (GLYPH[status] || GLYPH.unknown) + "</span>" +
       '<span class="tree-id">' + esc(n.id) + "</span>" +
@@ -30,7 +38,45 @@
       '<span class="tree-status-label">' + esc(status) + "</span>" +
       '<span class="tree-detail">' + esc(n.detail) + "</span>" +
       badges +
+      action +
       "</div>";
+  }
+
+  function paint(nodes) {
+    var el = document.getElementById("pathHealthTree");
+    if (el) el.innerHTML = nodes.map(rowHtml).join("");
+  }
+
+  var repairBusy = false;
+  async function onRepairClick(btn) {
+    if (repairBusy) return;
+    var id = btn.getAttribute("data-node");
+    var title = btn.getAttribute("data-title") || ("node " + id);
+    if (!window.confirm('Repair "' + title + '"?\nThis restarts the transparent proxy path and briefly interrupts client traffic.')) {
+      return;
+    }
+    repairBusy = true;
+    btn.disabled = true;
+    btn.textContent = "Repairing…";
+    try {
+      var resp = await fetch("/cgi-bin/xray-admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "action=node_repair&node=" + encodeURIComponent(id),
+      });
+      var data = await resp.json();
+      if (data && data.tree && Array.isArray(data.tree.nodes)) paint(data.tree.nodes);
+      var flash = document.getElementById("flash");
+      if (flash) {
+        flash.textContent = (data && data.message) || "Repair finished.";
+        flash.className = "flash " + (data && data.ok ? "ok" : "err");
+        setTimeout(function () { flash.textContent = ""; flash.className = "flash"; }, 6000);
+      }
+    } catch (_err) {
+      /* leave the tree as-is; next poll refreshes it */
+    } finally {
+      repairBusy = false;
+    }
   }
 
   async function renderPathHealth() {
@@ -45,8 +91,15 @@
       return;
     }
     if (!data || !Array.isArray(data.nodes)) return;
-    el.innerHTML = data.nodes.map(rowHtml).join("");
+    if (repairBusy) return; // don't clobber a repair-in-progress row
+    paint(data.nodes);
   }
+
+  // One delegated click handler for all (current and future) repair buttons.
+  document.addEventListener("click", function (ev) {
+    var btn = ev.target && ev.target.closest && ev.target.closest(".tree-repair-btn");
+    if (btn) onRepairClick(btn);
+  });
 
   renderPathHealth();
   setInterval(renderPathHealth, 5000);
