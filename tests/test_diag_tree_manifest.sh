@@ -70,4 +70,11 @@ grep -q 'pathHealthTree' "$TREE_JS" || fail "xray-tree.js must render into #path
 grep -q 'id="pathHealthTree"' "$ROOT/routers/gl-mt3000-glinet/files/xray.html" \
 	|| fail "xray.html must contain the #pathHealthTree mount"
 
+# The DIAGNOSTIC-TREE.md node summary is generated from the manifest and must
+# stay in sync (single source of truth — the doc can no longer drift).
+if command -v python3 >/dev/null 2>&1; then
+	python3 "$ROOT/common/lib/diag/gen-tree-doc.py" --check \
+		|| fail "docs/DIAGNOSTIC-TREE.md node table is out of sync with the manifest — run: python3 common/lib/diag/gen-tree-doc.py"
+fi
+
 printf 'ok\n'

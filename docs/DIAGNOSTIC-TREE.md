@@ -45,6 +45,25 @@ Meta-rules (enforced by review):
 
 ---
 
+<!-- BEGIN generated node table (common/lib/diag/gen-tree-doc.py) -->
+*Generated from `routers/common/files/diag/nodes.manifest` — do not edit by hand.*
+
+| id | layer | title | side | risk | repair | auto | gap |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1 | Workstation reaches router | xstation | safe | local_route | none | — |
+| 2 | 2 | Router platform files installed | router | disruptive | install | none | — |
+| 3 | 3 | Router uplink has internet | router | disruptive | uplink_reselect | hotplug | G2 |
+| 4 | 4 | Router Xray runtime up | router | disruptive | restart_runtime | watchdog | — |
+| 4.1 | 4 | Transparent proxy (redsocks + nat) | router | disruptive | transproxy_restart | watchdog | — |
+| 5 | 5 | Router to VPS transport (WS+TLS) | router | disruptive | repin_render | watchdog+repin | — |
+| 6 | 6 | VPS Xray runtime | vps | disruptive | repair_pipeline | none | — |
+| 7 | 7 | End-to-end: LAN client to internet via VPS | router | disruptive | walk | none | — |
+| 8 | 8 | Config coherence (profile = router = VPS) | router | disruptive | apply_profile | none | — |
+| 8.5 | 8 | Transport matches VPS | router | disruptive | rerender | none | — |
+| R | R | Template rendering (build-time) | build | safe | fix_renderer | none | — |
+| 9 | 9 | Install pipeline | xstation | disruptive | reinstall | none | — |
+<!-- END generated node table -->
+
 ## 0. Entry: "The path does not work"
 
 Order of layers. Diagnose top-down; repair bottom-up (fix the deepest broken
