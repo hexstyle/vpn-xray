@@ -4,6 +4,12 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 ADMIN_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-admin.cgi"
+# xray-admin.cgi sources its probe/build and status/smoke/health logic from
+# these shared libs (AGENTS.md 500-line split). Contracts on moved content
+# grep the whole implementation set so they survive future re-splits.
+ADMIN_PROBE_LIB="$ROOT/routers/common/files/xray-admin-probe.sh"
+ADMIN_STATUS_LIB="$ROOT/routers/common/files/xray-admin-status.sh"
+ADMIN_IMPL="$ADMIN_CGI $ADMIN_PROBE_LIB $ADMIN_STATUS_LIB"
 VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
 XRAY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.init"
 TRANSPROXY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init"
@@ -23,13 +29,13 @@ fail() {
 grep -q 'runtime_path_active()' "$ADMIN_CGI" \
 	|| fail "xray-admin.cgi must expose an explicit runtime path health check"
 
-grep -q '/etc/gl-switch.d/xray.sh "\$switch_state" >/dev/null 2>&1 || return 1' "$ADMIN_CGI" \
+grep -q '/etc/gl-switch.d/xray.sh "\$switch_state" >/dev/null 2>&1 || return 1' $ADMIN_IMPL \
 	|| fail "xray-admin.cgi must not swallow switch-sync failures"
 
-grep -q "path_state='degraded'" "$ADMIN_CGI" \
+grep -q "path_state='degraded'" $ADMIN_IMPL \
 	|| fail "xray-admin.cgi must mark runtime as degraded when smoke health says the path is broken"
 
-grep -q '"path_effective":' "$ADMIN_CGI" \
+grep -q '"path_effective":' $ADMIN_IMPL \
 	|| fail "xray-admin.cgi must expose whether the active runtime is still effective after smoke checks"
 
 grep -q 'router_path_active()' "$VPS_CGI" \
@@ -67,7 +73,7 @@ grep -q '"destOverride": \[' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.js
 # ws+tls, not the legacy reality fingerprint.
 for gen in \
 	"$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
-	"$ADMIN_CGI" \
+	"$ADMIN_PROBE_LIB" \
 	"$VPS_CGI"; do
 	name="$(basename "$gen")"
 	grep -q '"network": "ws"' "$gen" \
@@ -185,10 +191,10 @@ grep -q '/etc/init.d/codex-transproxy enable' "$INSTALL_PLATFORM" \
 grep -q 'data.path_state === "degraded"' "$XRAY_UI" \
 	|| fail "xray.html must surface degraded runtime state instead of showing it as healthy active path"
 
-grep -q -- '--socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}"' "$ADMIN_CGI" \
+grep -q -- '--socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}"' $ADMIN_IMPL \
 	|| fail "xray-admin.cgi smoke must verify the local SOCKS path used by transparent traffic"
 
-grep -q '"last_smoke_http_ok":' "$ADMIN_CGI" \
+grep -q '"last_smoke_http_ok":' $ADMIN_IMPL \
 	|| fail "xray-admin.cgi status must expose whether the local HTTP proxy path also passed smoke checks"
 
 printf 'ok\n'

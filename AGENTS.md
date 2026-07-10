@@ -128,5 +128,5 @@ shrink on touch, largest-risk first):
 | `routers/*/install-platform.sh` | ~1.3k | phase libs (packages, files, uci, services) |
 | `routers/*/files/xray-rules.cgi` | ~1.1k | job/status lib shared with other CGIs |
 | `bootstrap-router-vps.sh` | ~1.0k | step functions → `common/lib/bootstrap/` |
-| `routers/*/files/xray-admin.cgi` | ~0.8k | shared CGI lib |
+| ~~`routers/*/files/xray-admin.cgi`~~ | ~~0.8k~~ → 271 | **DONE.** probe/build → `common/files/xray-admin-probe.sh`; status/smoke/health → `common/files/xray-admin-status.sh` (deployed to `/usr/share/vpn-xray/`, sourced after `lib-common.sh`) |
 | `routers/*/install-router.sh` | ~0.8k | step libs under `common/lib/` |
