@@ -234,7 +234,13 @@ EOF
 	copy_if_changed "$COMMON_DIR/files/xray-rules-jobs.sh" /usr/share/vpn-xray/xray-rules-jobs.sh
 	copy_if_changed "$COMMON_DIR/files/xray-rules-actions.sh" /usr/share/vpn-xray/xray-rules-actions.sh
 	copy_if_changed "$COMMON_DIR/files/xray-rules-scripts.sh" /usr/share/vpn-xray/xray-rules-scripts.sh
-	copy_if_changed "$COMMON_DIR/files/xray-vps-profile.sh xray-vps-ssh.sh xray-vps-render.sh xray-vps-inspect.sh xray-vps-actions.sh xray-vps-setup.sh xray-vps-repair.sh" /usr/share/vpn-xray/xray-vps-profile.sh xray-vps-ssh.sh xray-vps-render.sh xray-vps-inspect.sh xray-vps-actions.sh xray-vps-setup.sh xray-vps-repair.sh
+	copy_if_changed "$COMMON_DIR/files/xray-vps-profile.sh" /usr/share/vpn-xray/xray-vps-profile.sh
+	copy_if_changed "$COMMON_DIR/files/xray-vps-ssh.sh" /usr/share/vpn-xray/xray-vps-ssh.sh
+	copy_if_changed "$COMMON_DIR/files/xray-vps-render.sh" /usr/share/vpn-xray/xray-vps-render.sh
+	copy_if_changed "$COMMON_DIR/files/xray-vps-inspect.sh" /usr/share/vpn-xray/xray-vps-inspect.sh
+	copy_if_changed "$COMMON_DIR/files/xray-vps-actions.sh" /usr/share/vpn-xray/xray-vps-actions.sh
+	copy_if_changed "$COMMON_DIR/files/xray-vps-setup.sh" /usr/share/vpn-xray/xray-vps-setup.sh
+	copy_if_changed "$COMMON_DIR/files/xray-vps-repair.sh" /usr/share/vpn-xray/xray-vps-repair.sh
 	copy_if_changed "$COMMON_DIR/files/router-rules-external.py" /usr/share/vpn-xray/router-rules-external.py
 	copy_if_changed "$COMMON_DIR/files/router-rules-config.sh" /usr/share/vpn-xray/router-rules-config.sh
 	copy_if_changed "$COMMON_DIR/files/router-rules-git.sh" /usr/share/vpn-xray/router-rules-git.sh
