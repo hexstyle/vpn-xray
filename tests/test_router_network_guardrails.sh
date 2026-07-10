@@ -8,6 +8,9 @@ INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
 # (AGENTS.md 500-line rule); grep the whole set for moved content.
 INSTALL_PLATFORM_IMPL="$INSTALL_PLATFORM $ROOT/routers/gl-mt3000-glinet/install-platform-lib-a.sh $ROOT/routers/gl-mt3000-glinet/install-platform-lib-b.sh"
 INSTALL_ROUTER="$ROOT/routers/gl-mt3000-glinet/install-router.sh"
+# install-router.sh: helpers + deploy/verify flow moved to a sibling lib
+# (AGENTS.md 500-line rule); grep the whole implementation set.
+INSTALL_ROUTER_IMPL="$INSTALL_ROUTER $ROOT/routers/gl-mt3000-glinet/install-router-lib.sh"
 TRANSPROXY="$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init"
 XRAY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.init"
 WATCHDOG="$ROOT/routers/gl-mt3000-glinet/files/xray-switch-watchdog.init"
@@ -45,7 +48,7 @@ if grep -q "uci add_list network.@device\\[0\\].ports='eth1'" "$INSTALL_PLATFORM
 	fail "install-platform must not unconditionally add eth1 to the LAN bridge"
 fi
 
-grep -q 'Router is reachable again over SSH after network reload' "$INSTALL_ROUTER" \
+grep -q 'Router is reachable again over SSH after network reload' $INSTALL_ROUTER_IMPL \
 	|| fail "install-router must confirm the router comes back after a network reload"
 
 grep -q 'codex-xray-uplink.hotplug' "$INSTALL_PLATFORM" \

@@ -16,6 +16,9 @@ ADMIN_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-admin.cgi"
 # so the contract survives future re-splits.
 ADMIN_IMPL="$ADMIN_CGI $ROOT/routers/common/files/xray-admin-probe.sh $ROOT/routers/common/files/xray-admin-status.sh"
 INSTALL_ROUTER="$ROOT/routers/gl-mt3000-glinet/install-router.sh"
+# install-router.sh: helpers + deploy/verify flow moved to a sibling lib
+# (AGENTS.md 500-line rule); grep the whole implementation set.
+INSTALL_ROUTER_IMPL="$INSTALL_ROUTER $ROOT/routers/gl-mt3000-glinet/install-router-lib.sh"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2
@@ -34,10 +37,10 @@ grep -q 'user_flow_line' $VPS_IMPL \
 grep -q 'user_flow_line' $ADMIN_IMPL \
 	|| fail "xray-admin.cgi must render flow into manual runtime configs when present"
 
-grep -q 'XRAY_USER_FLOW_BLOCK' "$INSTALL_ROUTER" \
+grep -q 'XRAY_USER_FLOW_BLOCK' $INSTALL_ROUTER_IMPL \
 	|| fail "install-router must export the router flow placeholder block"
 
-grep -q 'XRAY_CLIENT_FLOW_BLOCK' "$INSTALL_ROUTER" \
+grep -q 'XRAY_CLIENT_FLOW_BLOCK' $INSTALL_ROUTER_IMPL \
 	|| fail "install-router must export the VPS flow placeholder block"
 
 printf 'ok\n'

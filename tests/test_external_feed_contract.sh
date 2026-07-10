@@ -13,6 +13,9 @@ INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
 # (AGENTS.md 500-line rule); grep the whole set for moved content.
 INSTALL_PLATFORM_IMPL="$INSTALL_PLATFORM $ROOT/routers/gl-mt3000-glinet/install-platform-lib-a.sh $ROOT/routers/gl-mt3000-glinet/install-platform-lib-b.sh"
 INSTALL_ROUTER="$ROOT/routers/gl-mt3000-glinet/install-router.sh"
+# install-router.sh: helpers + deploy/verify flow moved to a sibling lib
+# (AGENTS.md 500-line rule); grep the whole implementation set.
+INSTALL_ROUTER_IMPL="$INSTALL_ROUTER $ROOT/routers/gl-mt3000-glinet/install-router-lib.sh"
 CGI_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray-rules.cgi"
 # xray-rules.cgi sources its job, action, and external-script logic from
 # these shared libs (AGENTS.md 500-line split). Grep the whole set for
@@ -60,9 +63,9 @@ awk '
 	|| fail "install-platform must apply the ruleset before starting the background sync loop to avoid lock contention during deploys"
 grep -q "/etc/init.d/router-rules-sync stop" "$INSTALL_PLATFORM" \
 	|| fail "install-platform must stop the existing background sync loop before applying a new ruleset during deploys"
-grep -q "current_router_external_source_config()" "$INSTALL_ROUTER" \
+grep -q "current_router_external_source_config()" $INSTALL_ROUTER_IMPL \
 	|| fail "install-router must preserve the router's current external source config on updates"
-grep -q "current_vps_xray_meta()" "$INSTALL_ROUTER" \
+grep -q "current_vps_xray_meta()" $INSTALL_ROUTER_IMPL \
 	|| fail "install-router must be able to sync the live VPS Reality profile during router updates"
 awk '
 	/current_vps_meta="\$\(current_vps_xray_meta 2>\/dev\/null \|\| true\)"/ && !meta_line { meta_line = NR }
@@ -70,13 +73,13 @@ awk '
 	END { exit !(meta_line && require_line && meta_line < require_line) }
 ' "$INSTALL_ROUTER" \
 	|| fail "install-router must sync live VPS Reality metadata before requiring XRAY variables"
-grep -q "RULES_EXTERNAL_SOURCE_ENABLED" "$INSTALL_ROUTER" \
+grep -q "RULES_EXTERNAL_SOURCE_ENABLED" $INSTALL_ROUTER_IMPL \
 	|| fail "install-router must pass external source settings to install-platform"
-grep -q "exec </dev/null" "$INSTALL_ROUTER" \
+grep -q "exec </dev/null" $INSTALL_ROUTER_IMPL \
 	|| fail "install-router must close remote stdin before starting long-lived services so SSH updates can finish cleanly"
-grep -q "nohup sh -c" "$INSTALL_ROUTER" \
+grep -q "nohup sh -c" $INSTALL_ROUTER_IMPL \
 	|| fail "install-router must bring long-lived router services back asynchronously after the blocking rules apply step"
-grep -q "wait_for_router_runtime_ready()" "$INSTALL_ROUTER" \
+grep -q "wait_for_router_runtime_ready()" $INSTALL_ROUTER_IMPL \
 	|| fail "install-router must wait for the router runtime to report ready before exiting"
 
 grep -q "external_source_enabled()" $ROUTER_RULES_IMPL \
