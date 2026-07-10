@@ -4,6 +4,9 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 HTML_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
+# xray.html inline CSS/JS extracted to sibling assets (AGENTS.md 500-line
+# rule); grep the whole UI implementation set for moved content.
+HTML_FILE_IMPL="$HTML_FILE $ROOT/routers/common/files/xray-base.css $ROOT/routers/common/files/xray-components.css $ROOT/routers/common/files/xray-app-1.js $ROOT/routers/common/files/xray-app-2.js $ROOT/routers/common/files/xray-app-3.js $ROOT/routers/common/files/xray-app-4.js $ROOT/routers/common/files/xray-app-5.js $ROOT/routers/common/files/xray-app-6.js $ROOT/routers/common/files/xray-app-7.js"
 ROUTER_RULES_FILE="$ROOT/routers/common/files/router-rules"
 # router-rules split into sourced libs (AGENTS.md 500-line rule); grep the
 # whole implementation set for moved function content.
@@ -14,16 +17,16 @@ fail() {
 	exit 1
 }
 
-grep -q 'editor.readOnly = !state.rulesTextLoaded;' "$HTML_FILE" \
+grep -q 'editor.readOnly = !state.rulesTextLoaded;' $HTML_FILE_IMPL \
 	|| fail "xray.html must keep the shared rules editor writable after the full text is loaded"
 
-grep -q 'if (state.rulesDirty && state.rulesTextLoaded) {' "$HTML_FILE" \
+grep -q 'if (state.rulesDirty && state.rulesTextLoaded) {' $HTML_FILE_IMPL \
 	|| fail "xray.html must submit dirty rules text even in pull-only Git mode"
 
-grep -q 'pull-only mode' "$HTML_FILE" \
+grep -q 'pull-only mode' $HTML_FILE_IMPL \
 	|| fail "xray.html must describe anonymous/read-only Git sync as pull-only instead of a locked editor"
 
-if grep -q 'editing on the router is locked' "$HTML_FILE"; then
+if grep -q 'editing on the router is locked' $HTML_FILE_IMPL; then
 	fail "xray.html must not claim that pull-only Git sync locks local rule editing"
 fi
 

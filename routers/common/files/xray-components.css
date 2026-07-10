@@ -1,0 +1,338 @@
+    .readonly-pane {
+      background: #f8fbfd;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+    }
+
+    .status-banner {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin-top: 12px;
+      background: #fbfcfd;
+      line-height: 1.45;
+    }
+
+    .status-banner.ok {
+      background: #eefaf3;
+      border-color: #ccead8;
+      color: #115934;
+    }
+
+    .status-banner.warn {
+      background: #fff7ea;
+      border-color: #f0d4a2;
+      color: #8b5300;
+    }
+
+    .status-banner.bad {
+      background: #fff0f0;
+      border-color: #efc0c0;
+      color: #8e2222;
+    }
+
+    .status-banner-title {
+      font-weight: 800;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .status-banner-body {
+      font-size: 13px;
+      white-space: pre-line;
+    }
+
+    /* Install banner — pinned across the top of the page. Visible while a
+       deploy is running or in a failed state so the operator can see what
+       broke without scrolling, and the message survives a refresh because
+       the source of truth is /tmp/vpn-xray-install-status.json on the
+       router. */
+    .install-banner {
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      width: 100%;
+      background: #ad1f1f;
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      border-bottom: 2px solid #7a1414;
+    }
+    .install-banner.running {
+      background: #145ea8;
+      border-bottom-color: #0d4377;
+    }
+    .install-banner.complete {
+      background: #1a7a3d;
+      border-bottom-color: #0f5226;
+    }
+    .install-banner-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 12px 18px;
+      font-size: 14px;
+    }
+    .install-banner-title {
+      font-weight: 800;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .install-banner-body {
+      font-size: 13px;
+      margin-top: 4px;
+    }
+    .install-banner-fix {
+      font-size: 12px;
+      margin-top: 6px;
+      padding: 6px 8px;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 6px;
+    }
+
+    .external-source-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .external-source-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      background: #fbfcfd;
+    }
+
+    .source-error-inline {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--bad);
+      line-height: 1.4;
+    }
+
+    .external-source-meta {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .external-source-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: rgba(13, 24, 35, 0.72);
+      z-index: 30;
+    }
+
+    .modal-backdrop.show {
+      display: flex;
+    }
+
+    .modal-panel {
+      width: min(1040px, calc(100vw - 32px));
+      max-height: calc(100vh - 32px);
+      overflow: hidden;
+      background: #fff;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.2);
+      box-shadow: 0 24px 70px rgba(9, 20, 33, 0.34);
+      padding: 18px;
+    }
+
+    .modal-panel pre {
+      margin-top: 12px;
+      max-height: calc(100vh - 180px);
+      min-height: 320px;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: var(--chip);
+      color: var(--chip-text);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .chip.bad {
+      background: #ffe8e8;
+      color: #8e2222;
+    }
+
+    .chip.ok {
+      background: #e7f7ef;
+      color: #115934;
+    }
+
+    .compare-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .compare-table th,
+    .compare-table td {
+      text-align: left;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    .compare-table th {
+      color: var(--muted);
+      width: 34%;
+      font-weight: 700;
+    }
+
+    .compare-table tr:last-child th,
+    .compare-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .compare-value {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .diff-badge {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #e7f7ef;
+      color: #115934;
+    }
+
+    .diff-badge.diff {
+      background: #fff2df;
+      color: #8b5300;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      background: #0d1823;
+      color: #d8e5f2;
+      border-radius: 14px;
+      padding: 14px;
+      min-height: 220px;
+      overflow: auto;
+    }
+
+    .subhead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .subhead p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .flash {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .flash.show { display: block; }
+    .flash.good { background: #e7f7ef; color: #115934; }
+    .flash.bad { background: #ffe8e8; color: #8e2222; }
+    .flash.warn { background: #fff5d6; color: #7a5c00; }
+    .flash.info { background: #eaf2ff; color: #123f69; }
+
+    .flash.loading::before {
+      content: "";
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      margin-right: 8px;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 50%;
+      vertical-align: -2px;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @keyframes repairspin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    details.card summary {
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 18px;
+      list-style: none;
+      margin: -18px;
+      padding: 18px;
+    }
+
+    details.card summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.card[open] summary {
+      margin-bottom: 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    @media (max-width: 1120px) {
+      .grid,
+      .panels,
+      .form-grid,
+      .status-grid,
+      .compare-grid,
+      .compare-grid.three {
+        grid-template-columns: 1fr;
+      }
+
+      .kv {
+        grid-template-columns: 1fr;
+      }
+    }

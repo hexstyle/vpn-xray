@@ -21,6 +21,9 @@ RENDER_LIB="$ROOT/routers/common/files/xray-vps-render.sh"
 ACTIONS_LIB="$ROOT/routers/common/files/xray-vps-actions.sh"
 INSPECT_LIB="$ROOT/routers/common/files/xray-vps-inspect.sh"
 UI="$PROFILE/files/xray.html"
+# xray.html inline CSS/JS extracted to sibling assets (AGENTS.md 500-line
+# rule); grep the whole UI implementation set for moved content.
+UI_IMPL="$UI $ROOT/routers/common/files/xray-base.css $ROOT/routers/common/files/xray-components.css $ROOT/routers/common/files/xray-app-1.js $ROOT/routers/common/files/xray-app-2.js $ROOT/routers/common/files/xray-app-3.js $ROOT/routers/common/files/xray-app-4.js $ROOT/routers/common/files/xray-app-5.js $ROOT/routers/common/files/xray-app-6.js $ROOT/routers/common/files/xray-app-7.js"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2
@@ -94,7 +97,7 @@ grep -q '"transport_net":"%s"' "$CGI" \
 	|| fail "router_current_json must expose the router outbound transport_net (G8)"
 grep -q 'REMOTE_TRANSPORT_NET' "$INSPECT_LIB" \
 	|| fail "remote inspection must emit the VPS inbound transport for the mismatch detector (G8)"
-grep -q 'transportMismatch' "$UI" \
+grep -q 'transportMismatch' $UI_IMPL \
 	|| fail "the UI must compare router vs VPS transport and warn on mismatch (G8)"
 
 # Recovery: revive-router.sh must rebuild the outbound as WS+TLS (the real

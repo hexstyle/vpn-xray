@@ -20,6 +20,9 @@ XRAY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.init"
 TRANSPROXY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
 XRAY_UI="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
+# xray.html inline CSS/JS extracted to sibling assets (AGENTS.md 500-line
+# rule); grep the whole UI implementation set for moved content.
+XRAY_UI_IMPL="$XRAY_UI $ROOT/routers/common/files/xray-base.css $ROOT/routers/common/files/xray-components.css $ROOT/routers/common/files/xray-app-1.js $ROOT/routers/common/files/xray-app-2.js $ROOT/routers/common/files/xray-app-3.js $ROOT/routers/common/files/xray-app-4.js $ROOT/routers/common/files/xray-app-5.js $ROOT/routers/common/files/xray-app-6.js $ROOT/routers/common/files/xray-app-7.js"
 ROUTER_RULES="$ROOT/routers/common/files/router-rules"
 # router-rules split into sourced libs (AGENTS.md 500-line rule); grep the
 # whole implementation set for moved function content.
@@ -181,7 +184,7 @@ grep -q 'recover)' "$SWITCH_HELPER" \
 grep -q 'action_recover()' "$ADMIN_CGI" \
 	|| fail "xray-admin.cgi must expose a manual recovery action"
 
-grep -q 'Recover Xray Path' "$XRAY_UI" \
+grep -q 'Recover Xray Path' $XRAY_UI_IMPL \
 	|| fail "xray.html must expose the manual recovery lever"
 
 grep -q 'selective rules file is empty and recovery failed' $ROUTER_RULES_IMPL \
@@ -196,7 +199,7 @@ grep -q '/etc/init.d/codex-xray enable' "$INSTALL_PLATFORM" \
 grep -q '/etc/init.d/codex-transproxy enable' "$INSTALL_PLATFORM" \
 	|| fail "install-platform must enable codex-transproxy on boot for fast post-reboot restore"
 
-grep -q 'data.path_state === "degraded"' "$XRAY_UI" \
+grep -q 'data.path_state === "degraded"' $XRAY_UI_IMPL \
 	|| fail "xray.html must surface degraded runtime state instead of showing it as healthy active path"
 
 grep -q -- '--socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}"' $ADMIN_IMPL \

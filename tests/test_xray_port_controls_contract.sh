@@ -4,6 +4,9 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 XRAY_UI="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
+# xray.html inline CSS/JS extracted to sibling assets (AGENTS.md 500-line
+# rule); grep the whole UI implementation set for moved content.
+XRAY_UI_IMPL="$XRAY_UI $ROOT/routers/common/files/xray-base.css $ROOT/routers/common/files/xray-components.css $ROOT/routers/common/files/xray-app-1.js $ROOT/routers/common/files/xray-app-2.js $ROOT/routers/common/files/xray-app-3.js $ROOT/routers/common/files/xray-app-4.js $ROOT/routers/common/files/xray-app-5.js $ROOT/routers/common/files/xray-app-6.js $ROOT/routers/common/files/xray-app-7.js"
 VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
 # xray-vps.cgi sources its logic from shared libs (AGENTS.md 500-line split):
 # port validation lives in xray-vps-actions.sh (save_profile_from_request),
@@ -17,13 +20,13 @@ fail() {
 	exit 1
 }
 
-grep -q '<input id="sshPort" type="number"' "$XRAY_UI" \
+grep -q '<input id="sshPort" type="number"' $XRAY_UI_IMPL \
 	|| fail "xray.html must expose SSH port as an editable numeric field"
 
-grep -q '<input id="serverPort" type="number"' "$XRAY_UI" \
+grep -q '<input id="serverPort" type="number"' $XRAY_UI_IMPL \
 	|| fail "xray.html must expose Xray server port as an editable numeric field"
 
-if grep -q '<input id="serverPort".*readonly' "$XRAY_UI"; then
+if grep -q '<input id="serverPort".*readonly' $XRAY_UI_IMPL; then
 	fail "xray.html must not keep the Xray server port field read-only"
 fi
 

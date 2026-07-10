@@ -19,6 +19,9 @@ CGI_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray-rules.cgi"
 # moved content; the dispatch case-arms stay in the CGI itself.
 RULES_IMPL="$CGI_FILE $ROOT/routers/common/files/xray-rules-jobs.sh $ROOT/routers/common/files/xray-rules-actions.sh $ROOT/routers/common/files/xray-rules-scripts.sh"
 HTML_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
+# xray.html inline CSS/JS extracted to sibling assets (AGENTS.md 500-line
+# rule); grep the whole UI implementation set for moved content.
+HTML_FILE_IMPL="$HTML_FILE $ROOT/routers/common/files/xray-base.css $ROOT/routers/common/files/xray-components.css $ROOT/routers/common/files/xray-app-1.js $ROOT/routers/common/files/xray-app-2.js $ROOT/routers/common/files/xray-app-3.js $ROOT/routers/common/files/xray-app-4.js $ROOT/routers/common/files/xray-app-5.js $ROOT/routers/common/files/xray-app-6.js $ROOT/routers/common/files/xray-app-7.js"
 PYTHON_GENERATOR="$ROOT/routers/common/files/router-rules-external.py"
 
 fail() {
@@ -112,15 +115,15 @@ grep -q 'ROUTER_RULES_LOCK_WAIT="\$RULES_EXTERNAL_LOCK_WAIT"' $RULES_IMPL \
 grep -q "include_rules_text" $RULES_IMPL \
 	|| fail "xray-rules.cgi status must be able to omit or include the full rules_text payload"
 
-grep -q 'id="rulesExternalSources"' "$HTML_FILE" \
+grep -q 'id="rulesExternalSources"' $HTML_FILE_IMPL \
 	|| fail "xray.html must render the managed external source list"
-grep -q 'id="rulesExternalRunBtn"' "$HTML_FILE" \
+grep -q 'id="rulesExternalRunBtn"' $HTML_FILE_IMPL \
 	|| fail "xray.html must render the external source run button"
-grep -q 'id="rulesLoadTextBtn"' "$HTML_FILE" \
+grep -q 'id="rulesLoadTextBtn"' $HTML_FILE_IMPL \
 	|| fail "xray.html must render a button for loading the full rules list on demand"
-grep -q 'id="rulesTextModal"' "$HTML_FILE" \
+grep -q 'id="rulesTextModal"' $HTML_FILE_IMPL \
 	|| fail "xray.html must render a popup/modal for viewing managed source contents"
-grep -q "external_source_enabled_ids" "$HTML_FILE" \
+grep -q "external_source_enabled_ids" $HTML_FILE_IMPL \
 	|| fail "xray.html must submit per-source external source settings"
 
 printf 'ok\n'
