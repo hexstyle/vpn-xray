@@ -36,7 +36,7 @@ compose_effective_rules_internal >/dev/null
 
 expected="$TMPDIR/expected.txt"
 cat > "$expected" <<'EOF'
-10.0.0.0/16
+10.0.0.0/23
 example.com
 EOF
 

@@ -174,19 +174,13 @@ def collapse_targets(values: Sequence[str]) -> List[str]:
             normalized_domains.add(normalized)
 
     collapsed_values: Set[str] = set(normalized_domains)
-    ipv4_prefix16: Set[ipaddress.IPv4Network] = set()
+    # Merge only genuinely adjacent/contained networks into their minimal
+    # supernet (10.0.0.0/25 + 10.0.0.128/25 + 10.0.1.0/24 -> 10.0.0.0/23).
+    # Do NOT round up to a coarser fixed prefix: broadening each range to a
+    # /16 would pull tens of thousands of unrelated addresses into the tunnel.
     for network in ipaddress.collapse_addresses(ipv4_networks):
         if network.version != 4:
             continue
-        start = int(network.network_address)
-        end = int(network.broadcast_address)
-        current = start & 0xFFFF0000
-        last = end & 0xFFFF0000
-        while current <= last:
-            ipv4_prefix16.add(ipaddress.ip_network((current, 16)))
-            current += 1 << 16
-
-    for network in sorted(ipv4_prefix16, key=lambda item: int(item.network_address)):
         collapsed_values.add(str(network))
 
     return sort_targets(collapsed_values)
