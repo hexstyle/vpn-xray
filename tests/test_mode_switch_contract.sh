@@ -4,6 +4,10 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 CGI_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray-rules.cgi"
+# set_mode's async worker moved into the shared action lib (AGENTS.md
+# 500-line split); grep the whole implementation set for it. The lock-wait
+# and timeout constants stay declared in the CGI itself.
+RULES_IMPL="$CGI_FILE $ROOT/routers/common/files/xray-rules-jobs.sh $ROOT/routers/common/files/xray-rules-actions.sh $ROOT/routers/common/files/xray-rules-scripts.sh"
 HTML_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
 ROUTER_RULES_FILE="$ROOT/routers/common/files/router-rules"
 
@@ -20,13 +24,13 @@ mode_timeout="$(sed -n "s/^[[:space:]]*RULES_MODE_TIMEOUT=['\"]\\{0,1\\}\\([0-9]
 
 [ "$mode_timeout" -gt "$mode_lock_wait" ] || fail "mode-switch timeout must be greater than the router-rules lock wait"
 
-grep -q 'ROUTER_RULES_LOCK_WAIT="$RULES_MODE_LOCK_WAIT"' "$CGI_FILE" \
+grep -q 'ROUTER_RULES_LOCK_WAIT="$RULES_MODE_LOCK_WAIT"' $RULES_IMPL \
 	|| fail "set_mode must use RULES_MODE_LOCK_WAIT in xray-rules.cgi"
 
-grep -q 'ui_job_begin set_mode' "$CGI_FILE" \
+grep -q 'ui_job_begin set_mode' $RULES_IMPL \
 	|| fail "set_mode must start a tracked async UI job in xray-rules.cgi"
 
-grep -q 'timeout "$RULES_MODE_TIMEOUT" /usr/bin/router-rules set-mode-cutover "$mode" >"$run_log" 2>&1 || rc=\$?' "$CGI_FILE" \
+grep -q 'timeout "$RULES_MODE_TIMEOUT" /usr/bin/router-rules set-mode-cutover "$mode" >"$run_log" 2>&1 || rc=\$?' $RULES_IMPL \
 	|| fail "set_mode async worker must still enforce RULES_MODE_TIMEOUT in xray-rules.cgi"
 
 mode_timeout_ms="$(sed -n 's/^[[:space:]]*const RULES_MODE_TIMEOUT_MS = \([0-9][0-9]*\);/\1/p' "$HTML_FILE" | sed -n '1p')"

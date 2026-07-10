@@ -8,6 +8,10 @@ CONFIG_TEMPLATE="$ROOT/routers/common/files/router-rules.config.template"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
 INSTALL_ROUTER="$ROOT/routers/gl-mt3000-glinet/install-router.sh"
 CGI_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray-rules.cgi"
+# xray-rules.cgi sources its job, action, and external-script logic from
+# these shared libs (AGENTS.md 500-line split). Grep the whole set for
+# moved content; the dispatch case-arms stay in the CGI itself.
+RULES_IMPL="$CGI_FILE $ROOT/routers/common/files/xray-rules-jobs.sh $ROOT/routers/common/files/xray-rules-actions.sh $ROOT/routers/common/files/xray-rules-scripts.sh"
 HTML_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
 PYTHON_GENERATOR="$ROOT/routers/common/files/router-rules-external.py"
 
@@ -95,11 +99,11 @@ grep -q "read_external_source)" "$CGI_FILE" \
 	|| fail "xray-rules.cgi must support read_external_source action"
 grep -q "sync_external_source)" "$CGI_FILE" \
 	|| fail "xray-rules.cgi must support sync_external_source action"
-grep -q "external_source_enabled_ids" "$CGI_FILE" \
+grep -q "external_source_enabled_ids" $RULES_IMPL \
 	|| fail "xray-rules.cgi must persist per-source external enable flags"
-grep -q 'ROUTER_RULES_LOCK_WAIT="\$RULES_EXTERNAL_LOCK_WAIT"' "$CGI_FILE" \
+grep -q 'ROUTER_RULES_LOCK_WAIT="\$RULES_EXTERNAL_LOCK_WAIT"' $RULES_IMPL \
 	|| fail "xray-rules.cgi must let external preview/sync wait for the router-rules lock"
-grep -q "include_rules_text" "$CGI_FILE" \
+grep -q "include_rules_text" $RULES_IMPL \
 	|| fail "xray-rules.cgi status must be able to omit or include the full rules_text payload"
 
 grep -q 'id="rulesExternalSources"' "$HTML_FILE" \

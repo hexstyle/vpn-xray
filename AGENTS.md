@@ -126,7 +126,7 @@ shrink on touch, largest-risk first):
 | `routers/common/files/router-rules` | ~3.8k | sourced libs under `/usr/share/vpn-xray/rules-lib/` (git, resolve, ipset, dataplane, status) |
 | `routers/*/files/xray-vps.cgi` | ~2.3k | sourced libs under `/usr/share/vpn-xray/vps-cgi/` (ssh, profile, inspect, repair, actions) |
 | `routers/*/install-platform.sh` | ~1.3k | phase libs (packages, files, uci, services) |
-| `routers/*/files/xray-rules.cgi` | ~1.1k | job/status lib shared with other CGIs |
+| ~~`routers/*/files/xray-rules.cgi`~~ | ~~1.1k~~ → 271 | **DONE.** job/status → `xray-rules-jobs.sh`; save/sync/source actions → `xray-rules-actions.sh`; external-script CRUD → `xray-rules-scripts.sh` (in `common/files/`, deployed to `/usr/share/vpn-xray/`). Config/sync helpers + dispatch stay inline |
 | `bootstrap-router-vps.sh` | ~1.0k | step functions → `common/lib/bootstrap/` |
 | ~~`routers/*/files/xray-admin.cgi`~~ | ~~0.8k~~ → 271 | **DONE.** probe/build → `common/files/xray-admin-probe.sh`; status/smoke/health → `common/files/xray-admin-status.sh` (deployed to `/usr/share/vpn-xray/`, sourced after `lib-common.sh`) |
 | `routers/*/install-router.sh` | ~0.8k | step libs under `common/lib/` |

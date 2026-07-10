@@ -1087,6 +1087,9 @@ EOF
 	copy_if_changed "$COMMON_DIR/files/lib-common.sh" /usr/share/vpn-xray/lib-common.sh
 	copy_if_changed "$COMMON_DIR/files/xray-admin-probe.sh" /usr/share/vpn-xray/xray-admin-probe.sh
 	copy_if_changed "$COMMON_DIR/files/xray-admin-status.sh" /usr/share/vpn-xray/xray-admin-status.sh
+	copy_if_changed "$COMMON_DIR/files/xray-rules-jobs.sh" /usr/share/vpn-xray/xray-rules-jobs.sh
+	copy_if_changed "$COMMON_DIR/files/xray-rules-actions.sh" /usr/share/vpn-xray/xray-rules-actions.sh
+	copy_if_changed "$COMMON_DIR/files/xray-rules-scripts.sh" /usr/share/vpn-xray/xray-rules-scripts.sh
 	copy_if_changed "$COMMON_DIR/files/router-rules-external.py" /usr/share/vpn-xray/router-rules-external.py
 	copy_if_changed "$PROFILE_DIR/files/gl-switch-xray.sh" /etc/gl-switch.d/xray.sh
 	copy_if_changed "$COMMON_DIR/files/router-rules" /usr/bin/router-rules
@@ -1107,12 +1110,15 @@ EOF
 		/usr/share/vpn-xray/lib-common.sh \
 		/usr/share/vpn-xray/xray-admin-probe.sh \
 		/usr/share/vpn-xray/xray-admin-status.sh \
+		/usr/share/vpn-xray/xray-rules-jobs.sh \
+		/usr/share/vpn-xray/xray-rules-actions.sh \
+		/usr/share/vpn-xray/xray-rules-scripts.sh \
 		/usr/share/vpn-xray/router-rules-external.py \
 		/www/cgi-bin/xray-admin \
 		/www/cgi-bin/xray-vps \
 		/www/cgi-bin/xray-rules \
 		/www/xray.html
-	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/xray-health-monitor /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/bin/vpn-xray-repin-cert /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/xray-admin-probe.sh /usr/share/vpn-xray/xray-admin-status.sh /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
+	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/xray-health-monitor /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/bin/vpn-xray-repin-cert /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/xray-admin-probe.sh /usr/share/vpn-xray/xray-admin-status.sh /usr/share/vpn-xray/xray-rules-jobs.sh /usr/share/vpn-xray/xray-rules-actions.sh /usr/share/vpn-xray/xray-rules-scripts.sh /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
 	chmod 644 /www/xray.html
 
 	rm -rf /usr/share/vpn-xray/vps
