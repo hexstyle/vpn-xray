@@ -4,6 +4,9 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
+# install-platform.sh split its function groups into sibling libs
+# (AGENTS.md 500-line rule); grep the whole set for moved content.
+INSTALL_PLATFORM_IMPL="$INSTALL_PLATFORM $ROOT/routers/gl-mt3000-glinet/install-platform-lib-a.sh $ROOT/routers/gl-mt3000-glinet/install-platform-lib-b.sh"
 INSTALL_ROUTER="$ROOT/routers/gl-mt3000-glinet/install-router.sh"
 TRANSPROXY="$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init"
 XRAY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.init"
@@ -17,19 +20,19 @@ fail() {
 	exit 1
 }
 
-grep -q 'configure_lan_bridge_ports()' "$INSTALL_PLATFORM" \
+grep -q 'configure_lan_bridge_ports()' $INSTALL_PLATFORM_IMPL \
 	|| fail "install-platform must centralize LAN bridge mutation behind a dedicated guard"
 
-grep -q 'normalize_lan_bridge_ports()' "$INSTALL_PLATFORM" \
+grep -q 'normalize_lan_bridge_ports()' $INSTALL_PLATFORM_IMPL \
 	|| fail "install-platform must normalize duplicate LAN bridge ports after repeated deploys"
 
-grep -q 'Preserving existing LAN bridge port topology' "$INSTALL_PLATFORM" \
+grep -q 'Preserving existing LAN bridge port topology' $INSTALL_PLATFORM_IMPL \
 	|| fail "install-platform must preserve existing LAN bridge topology by default"
 
-grep -q 'stabilize_wireless_bssid()' "$INSTALL_PLATFORM" \
+grep -q 'stabilize_wireless_bssid()' $INSTALL_PLATFORM_IMPL \
 	|| fail "install-platform must stabilize Wi-Fi BSSIDs for management-plane reliability"
 
-grep -q 'random_bssid=0' "$INSTALL_PLATFORM" \
+grep -q 'random_bssid=0' $INSTALL_PLATFORM_IMPL \
 	|| fail "install-platform must disable random_bssid so AP identities stay stable across reloads and reboots"
 
 grep -q "uci set dhcp.@dnsmasq\\[0\\].filter_aaaa='1'" "$INSTALL_PLATFORM" \

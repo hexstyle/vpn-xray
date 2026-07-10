@@ -5,6 +5,9 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 ROUTER_RULES_FILE="$ROOT/routers/common/files/router-rules"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
+# install-platform.sh split its function groups into sibling libs
+# (AGENTS.md 500-line rule); grep the whole set for moved content.
+INSTALL_PLATFORM_IMPL="$INSTALL_PLATFORM $ROOT/routers/gl-mt3000-glinet/install-platform-lib-a.sh $ROOT/routers/gl-mt3000-glinet/install-platform-lib-b.sh"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2
@@ -23,7 +26,7 @@ grep -q 'git_push_cmd -C "$repo" push origin "$branch"' "$ROUTER_RULES_FILE" \
 grep -q 'git_push_auth_configured()' "$ROUTER_RULES_FILE" \
 	|| fail "router-rules must detect whether push credentials are actually configured"
 
-grep -q 'effective_git_auth_mode()' "$INSTALL_PLATFORM" \
+grep -q 'effective_git_auth_mode()' $INSTALL_PLATFORM_IMPL \
 	|| fail "install-platform must preserve the router's existing Git auth mode"
 
 grep -q 'effective_router_rules_bool_value enable_push' "$INSTALL_PLATFORM" \

@@ -6,6 +6,9 @@ ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 ROUTER_RULES_FILE="$ROOT/routers/common/files/router-rules"
 CONFIG_TEMPLATE="$ROOT/routers/common/files/router-rules.config.template"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
+# install-platform.sh split its function groups into sibling libs
+# (AGENTS.md 500-line rule); grep the whole set for moved content.
+INSTALL_PLATFORM_IMPL="$INSTALL_PLATFORM $ROOT/routers/gl-mt3000-glinet/install-platform-lib-a.sh $ROOT/routers/gl-mt3000-glinet/install-platform-lib-b.sh"
 INSTALL_ROUTER="$ROOT/routers/gl-mt3000-glinet/install-router.sh"
 CGI_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray-rules.cgi"
 # xray-rules.cgi sources its job, action, and external-script logic from
@@ -35,11 +38,11 @@ grep -qE '(cp|copy_if_changed) "\$COMMON_DIR/files/router-rules-external.py"' "$
 	|| fail "install-platform must copy the external generator to the router"
 grep -q "python3" "$INSTALL_PLATFORM" \
 	|| fail "install-platform must provision python3 for the external generator"
-grep -q "resolve_pkg_via_openwrt_fallback()" "$INSTALL_PLATFORM" \
+grep -q "resolve_pkg_via_openwrt_fallback()" $INSTALL_PLATFORM_IMPL \
 	|| fail "install-platform must resolve fallback package dependencies recursively"
-grep -q "python3_supports_external_fetcher()" "$INSTALL_PLATFORM" \
+grep -q "python3_supports_external_fetcher()" $INSTALL_PLATFORM_IMPL \
 	|| fail "install-platform must verify the Python runtime can import the external fetcher modules"
-grep -q "effective_external_source_enabled()" "$INSTALL_PLATFORM" \
+grep -q "effective_external_source_enabled()" $INSTALL_PLATFORM_IMPL \
 	|| fail "install-platform must preserve existing external source enable state on router updates"
 grep -q "exec </dev/null" "$INSTALL_PLATFORM" \
 	|| fail "install-platform must close remote stdin before starting long-lived services so SSH deploys can finish cleanly"

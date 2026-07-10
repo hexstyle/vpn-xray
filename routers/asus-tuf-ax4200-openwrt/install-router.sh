@@ -544,7 +544,7 @@ install_progress_begin "Stage source bundle on router"
 router_ssh "rm -rf $remote_source_root && mkdir -p $remote_source_root"
 router_ssh "cat > $remote_source_tar" < "$source_bundle"
 router_ssh "tar -xf $remote_source_tar -C $remote_source_root && rm -f $remote_source_tar"
-router_ssh "sed -i 's/\r$//' $remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh"
+router_ssh "sed -i 's/\r$//' $remote_source_root/routers/$ROUTER_PROFILE/install-platform.sh $remote_source_root/routers/$ROUTER_PROFILE/install-platform-lib-a.sh $remote_source_root/routers/$ROUTER_PROFILE/install-platform-lib-b.sh"
 
 # Deploy configs BEFORE install-platform.sh so they survive if the router
 # reboots during platform setup (e.g. network/wireless reload).

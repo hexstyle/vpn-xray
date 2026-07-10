@@ -125,7 +125,7 @@ shrink on touch, largest-risk first):
 | `routers/*/files/xray.html` | ~3.8k | extract CSS → `xray.css`; JS → `xray-*.js` modules by card (vps / rules / admin / core) |
 | `routers/common/files/router-rules` | ~3.8k | sourced libs under `/usr/share/vpn-xray/rules-lib/` (git, resolve, ipset, dataplane, status) |
 | ~~`routers/*/files/xray-vps.cgi`~~ | ~~2.3k~~ → 224 | **DONE.** Seven `common/files/xray-vps-*.sh` libs (profile, ssh, render, inspect, actions, setup, repair) deployed to `/usr/share/vpn-xray/`. Core router helpers + top-level job-mode/dispatch stay inline |
-| `routers/*/install-platform.sh` | ~1.3k | phase libs (packages, files, uci, services) |
+| ~~`routers/*/install-platform.sh`~~ | ~~1.3k~~ → 416/429 | **DONE.** Per-profile `install-platform-lib-a.sh` (package mgmt, OpenWrt fallback, rules-config helpers) + `install-platform-lib-b.sh` (deps, rendering, LAN/wifi, switch, preflight), sourced via `$SELF_DIR`. Kept per-profile (not shared) because the two profiles genuinely diverge (fallback release, switch behaviour, model probe). Header + `install_platform` orchestrator stay inline |
 | ~~`routers/*/files/xray-rules.cgi`~~ | ~~1.1k~~ → 271 | **DONE.** job/status → `xray-rules-jobs.sh`; save/sync/source actions → `xray-rules-actions.sh`; external-script CRUD → `xray-rules-scripts.sh` (in `common/files/`, deployed to `/usr/share/vpn-xray/`). Config/sync helpers + dispatch stay inline |
 | `bootstrap-router-vps.sh` | ~1.0k | step functions → `common/lib/bootstrap/` |
 | ~~`routers/*/files/xray-admin.cgi`~~ | ~~0.8k~~ → 271 | **DONE.** probe/build → `common/files/xray-admin-probe.sh`; status/smoke/health → `common/files/xray-admin-status.sh` (deployed to `/usr/share/vpn-xray/`, sourced after `lib-common.sh`) |
