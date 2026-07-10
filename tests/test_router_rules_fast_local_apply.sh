@@ -4,18 +4,21 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 ROUTER_RULES_FILE="$ROOT/routers/common/files/router-rules"
+# router-rules split into sourced libs (AGENTS.md 500-line rule); grep the
+# whole implementation set for moved function content.
+ROUTER_RULES_IMPL="$ROUTER_RULES_FILE $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-status.sh"
 
-grep -q 'ROUTER_RULES_SKIP_EFFECTIVE_COLLAPSE=1 .*apply_xray_internal' "$ROUTER_RULES_FILE" || {
+grep -q 'ROUTER_RULES_SKIP_EFFECTIVE_COLLAPSE=1 .*apply_xray_internal' $ROUTER_RULES_IMPL || {
 	printf 'FAIL: fast local cutover must skip expensive effective-rules collapse in the foreground path\n' >&2
 	exit 1
 }
 
-grep -q 'ROUTER_RULES_INCREMENTAL_IPSET=1 .*apply_xray_internal' "$ROUTER_RULES_FILE" || {
+grep -q 'ROUTER_RULES_INCREMENTAL_IPSET=1 .*apply_xray_internal' $ROUTER_RULES_IMPL || {
 	printf 'FAIL: fast local cutover must update ipset incrementally in the foreground path\n' >&2
 	exit 1
 }
 
-if grep -q "set_sync_phase refreshing_dns 'Refreshing full DNS resolution after fast local apply'" "$ROUTER_RULES_FILE"; then
+if grep -q "set_sync_phase refreshing_dns 'Refreshing full DNS resolution after fast local apply'" $ROUTER_RULES_IMPL; then
 	printf 'FAIL: background-tick must not run full DNS/collapse refresh after fast local apply under the global lock\n' >&2
 	exit 1
 fi
@@ -23,7 +26,7 @@ fi
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT INT TERM
 
-VX_LIB_COMMON="$ROOT/routers/common/files/lib-common.sh" ROUTER_RULES_LIB_ONLY=1 . "$ROUTER_RULES_FILE"
+VX_LIB_COMMON="$ROOT/routers/common/files/lib-common.sh" VX_RULES_LIB_DIR="$ROOT/routers/common/files" ROUTER_RULES_LIB_ONLY=1 . "$ROUTER_RULES_FILE"
 
 status_file="$TMPDIR/status"
 events_file="$TMPDIR/events"

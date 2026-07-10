@@ -8,7 +8,7 @@ ROUTER_RULES_FILE="$ROOT/routers/common/files/router-rules"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT INT TERM
 
-VX_LIB_COMMON="$ROOT/routers/common/files/lib-common.sh" ROUTER_RULES_LIB_ONLY=1 . "$ROUTER_RULES_FILE"
+VX_LIB_COMMON="$ROOT/routers/common/files/lib-common.sh" VX_RULES_LIB_DIR="$ROOT/routers/common/files" ROUTER_RULES_LIB_ONLY=1 . "$ROUTER_RULES_FILE"
 
 repo_path() { printf '%s\n' "$TMPDIR/repo"; }
 rules_relpath() { printf '%s\n' 'lists/shared-targets.txt'; }

@@ -236,6 +236,16 @@ EOF
 	copy_if_changed "$COMMON_DIR/files/xray-rules-scripts.sh" /usr/share/vpn-xray/xray-rules-scripts.sh
 	copy_if_changed "$COMMON_DIR/files/xray-vps-profile.sh xray-vps-ssh.sh xray-vps-render.sh xray-vps-inspect.sh xray-vps-actions.sh xray-vps-setup.sh xray-vps-repair.sh" /usr/share/vpn-xray/xray-vps-profile.sh xray-vps-ssh.sh xray-vps-render.sh xray-vps-inspect.sh xray-vps-actions.sh xray-vps-setup.sh xray-vps-repair.sh
 	copy_if_changed "$COMMON_DIR/files/router-rules-external.py" /usr/share/vpn-xray/router-rules-external.py
+	copy_if_changed "$COMMON_DIR/files/router-rules-config.sh" /usr/share/vpn-xray/router-rules-config.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules-git.sh" /usr/share/vpn-xray/router-rules-git.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules-repo.sh" /usr/share/vpn-xray/router-rules-repo.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules-remote.sh" /usr/share/vpn-xray/router-rules-remote.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules-rulestree.sh" /usr/share/vpn-xray/router-rules-rulestree.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules-external-a.sh" /usr/share/vpn-xray/router-rules-external-a.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules-external-b.sh" /usr/share/vpn-xray/router-rules-external-b.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules-ipset.sh" /usr/share/vpn-xray/router-rules-ipset.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules-apply.sh" /usr/share/vpn-xray/router-rules-apply.sh
+	copy_if_changed "$COMMON_DIR/files/router-rules-status.sh" /usr/share/vpn-xray/router-rules-status.sh
 	copy_if_changed "$PROFILE_DIR/files/gl-switch-xray.sh" /etc/gl-switch.d/xray.sh
 	copy_if_changed "$COMMON_DIR/files/router-rules" /usr/bin/router-rules
 	copy_if_changed "$PROFILE_DIR/files/vpn-xray-repin-cert" /usr/bin/vpn-xray-repin-cert
@@ -266,11 +276,21 @@ EOF
 		/usr/share/vpn-xray/xray-vps-setup.sh \
 		/usr/share/vpn-xray/xray-vps-repair.sh \
 		/usr/share/vpn-xray/router-rules-external.py \
+		/usr/share/vpn-xray/router-rules-config.sh \
+		/usr/share/vpn-xray/router-rules-git.sh \
+		/usr/share/vpn-xray/router-rules-repo.sh \
+		/usr/share/vpn-xray/router-rules-remote.sh \
+		/usr/share/vpn-xray/router-rules-rulestree.sh \
+		/usr/share/vpn-xray/router-rules-external-a.sh \
+		/usr/share/vpn-xray/router-rules-external-b.sh \
+		/usr/share/vpn-xray/router-rules-ipset.sh \
+		/usr/share/vpn-xray/router-rules-apply.sh \
+		/usr/share/vpn-xray/router-rules-status.sh \
 		/www/cgi-bin/xray-admin \
 		/www/cgi-bin/xray-vps \
 		/www/cgi-bin/xray-rules \
 		/www/xray.html
-	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/xray-health-monitor /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/bin/vpn-xray-repin-cert /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/xray-admin-probe.sh /usr/share/vpn-xray/xray-admin-status.sh /usr/share/vpn-xray/xray-rules-jobs.sh /usr/share/vpn-xray/xray-rules-actions.sh /usr/share/vpn-xray/xray-rules-scripts.sh /usr/share/vpn-xray/xray-vps-profile.sh xray-vps-ssh.sh xray-vps-render.sh xray-vps-inspect.sh xray-vps-actions.sh xray-vps-setup.sh xray-vps-repair.sh /usr/share/vpn-xray/router-rules-external.py /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
+	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/xray-health-monitor /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/bin/vpn-xray-repin-cert /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/xray-admin-probe.sh /usr/share/vpn-xray/xray-admin-status.sh /usr/share/vpn-xray/xray-rules-jobs.sh /usr/share/vpn-xray/xray-rules-actions.sh /usr/share/vpn-xray/xray-rules-scripts.sh /usr/share/vpn-xray/xray-vps-profile.sh xray-vps-ssh.sh xray-vps-render.sh xray-vps-inspect.sh xray-vps-actions.sh xray-vps-setup.sh xray-vps-repair.sh /usr/share/vpn-xray/router-rules-external.py /usr/share/vpn-xray/router-rules-config.sh /usr/share/vpn-xray/router-rules-git.sh /usr/share/vpn-xray/router-rules-repo.sh /usr/share/vpn-xray/router-rules-remote.sh /usr/share/vpn-xray/router-rules-rulestree.sh /usr/share/vpn-xray/router-rules-external-a.sh /usr/share/vpn-xray/router-rules-external-b.sh /usr/share/vpn-xray/router-rules-ipset.sh /usr/share/vpn-xray/router-rules-apply.sh /usr/share/vpn-xray/router-rules-status.sh /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
 	chmod 644 /www/xray.html
 
 	rm -rf /usr/share/vpn-xray/vps

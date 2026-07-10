@@ -10,6 +10,9 @@ CGI_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray-rules.cgi"
 RULES_IMPL="$CGI_FILE $ROOT/routers/common/files/xray-rules-jobs.sh $ROOT/routers/common/files/xray-rules-actions.sh $ROOT/routers/common/files/xray-rules-scripts.sh"
 HTML_FILE="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
 ROUTER_RULES_FILE="$ROOT/routers/common/files/router-rules"
+# router-rules split into sourced libs (AGENTS.md 500-line rule); grep the
+# whole implementation set for moved function content.
+ROUTER_RULES_IMPL="$ROUTER_RULES_FILE $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-status.sh"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2
@@ -50,7 +53,7 @@ grep -q 'async function waitForRulesJob' "$HTML_FILE" \
 grep -q 'const RULES_JOB_STATUS_DELAY_MS = 2000;' "$HTML_FILE" \
 	|| fail "xray.html must delay detailed long-running status UX by 2 seconds"
 
-grep -q '"ui_job_state"' "$ROUTER_RULES_FILE" \
+grep -q '"ui_job_state"' $ROUTER_RULES_IMPL \
 	|| fail "router-rules status-json must expose async UI job state"
 
 grep -q 'mode_error_message()' "$CGI_FILE" \

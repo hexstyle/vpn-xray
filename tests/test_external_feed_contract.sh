@@ -4,6 +4,9 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 ROUTER_RULES_FILE="$ROOT/routers/common/files/router-rules"
+# router-rules split into sourced libs (AGENTS.md 500-line rule); grep the
+# whole implementation set for moved function content.
+ROUTER_RULES_IMPL="$ROUTER_RULES_FILE $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-status.sh"
 CONFIG_TEMPLATE="$ROOT/routers/common/files/router-rules.config.template"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
 # install-platform.sh split its function groups into sibling libs
@@ -73,27 +76,27 @@ grep -q "nohup sh -c" "$INSTALL_ROUTER" \
 grep -q "wait_for_router_runtime_ready()" "$INSTALL_ROUTER" \
 	|| fail "install-router must wait for the router runtime to report ready before exiting"
 
-grep -q "external_source_enabled()" "$ROUTER_RULES_FILE" \
+grep -q "external_source_enabled()" $ROUTER_RULES_IMPL \
 	|| fail "router-rules must expose external_source_enabled()"
-grep -q "preview_external_source_internal()" "$ROUTER_RULES_FILE" \
+grep -q "preview_external_source_internal()" $ROUTER_RULES_IMPL \
 	|| fail "router-rules must implement preview_external_source_internal()"
-grep -q "refresh_external_sources_internal()" "$ROUTER_RULES_FILE" \
+grep -q "refresh_external_sources_internal()" $ROUTER_RULES_IMPL \
 	|| fail "router-rules must implement refresh_external_sources_internal()"
-grep -q "compose_effective_rules_internal()" "$ROUTER_RULES_FILE" \
+grep -q "compose_effective_rules_internal()" $ROUTER_RULES_IMPL \
 	|| fail "router-rules must build an effective merged rules file from editable and managed sources"
-grep -q -- "--collapse --input-file" "$ROUTER_RULES_FILE" \
+grep -q -- "--collapse --input-file" $ROUTER_RULES_IMPL \
 	|| fail "router-rules must collapse managed IPv4 targets before applying the runtime-effective ruleset"
-grep -q "refresh_resolved_runtime_internal()" "$ROUTER_RULES_FILE" \
+grep -q "refresh_resolved_runtime_internal()" $ROUTER_RULES_IMPL \
 	|| fail "router-rules must refresh resolved selective targets without forcing a hard cutover every time"
-grep -q "read_external_source_internal()" "$ROUTER_RULES_FILE" \
+grep -q "read_external_source_internal()" $ROUTER_RULES_IMPL \
 	|| fail "router-rules must expose read_external_source_internal() for source file viewing"
-grep -q "external_sources_json()" "$ROUTER_RULES_FILE" \
+grep -q "external_sources_json()" $ROUTER_RULES_IMPL \
 	|| fail "router-rules status must emit per-source metadata"
-grep -q "preview-external-source" "$ROUTER_RULES_FILE" \
+grep -q "preview-external-source" $ROUTER_RULES_IMPL \
 	|| fail "router-rules must expose preview-external-source command"
-grep -q "read-external-source" "$ROUTER_RULES_FILE" \
+grep -q "read-external-source" $ROUTER_RULES_IMPL \
 	|| fail "router-rules must expose read-external-source command"
-grep -q "status_include_rules_text()" "$ROUTER_RULES_FILE" \
+grep -q "status_include_rules_text()" $ROUTER_RULES_IMPL \
 	|| fail "router-rules must support lightweight status responses without full rules_text"
 
 grep -q "preview_external_source)" "$CGI_FILE" \

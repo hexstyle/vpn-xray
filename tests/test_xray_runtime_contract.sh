@@ -21,6 +21,9 @@ TRANSPROXY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
 XRAY_UI="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
 ROUTER_RULES="$ROOT/routers/common/files/router-rules"
+# router-rules split into sourced libs (AGENTS.md 500-line rule); grep the
+# whole implementation set for moved function content.
+ROUTER_RULES_IMPL="$ROUTER_RULES $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-status.sh"
 SWITCH_HELPER="$ROOT/routers/gl-mt3000-glinet/files/gl-switch-xray.sh"
 WATCHDOG="$ROOT/routers/gl-mt3000-glinet/files/xray-switch-watchdog.init"
 HEALTH_MONITOR="$ROOT/routers/gl-mt3000-glinet/files/xray-health-monitor.init"
@@ -109,13 +112,13 @@ grep -q 'ROUTER_RULES_USE_CACHED_RESOLVED=1 /usr/bin/router-rules build-xray-ips
 grep -q 'ROUTER_RULES_SYNC_ACTOR=boot' "$ROOT/routers/common/files/router-rules-sync.init" \
 	|| fail "router-rules-sync init must run an immediate boot-time apply-xray refresh"
 
-grep -q 'path_requested' "$ROUTER_RULES" \
+grep -q 'path_requested' $ROUTER_RULES_IMPL \
 	|| fail "router-rules must gate runtime drift recovery behind the active switch/config state"
 
-grep -q 'xray_runtime_healthy || return 0' "$ROUTER_RULES" \
+grep -q 'xray_runtime_healthy || return 0' $ROUTER_RULES_IMPL \
 	|| fail "router-rules must treat a dead codex-xray runtime as actionable drift"
 
-grep -q 'transproxy_runtime_healthy || return 0' "$ROUTER_RULES" \
+grep -q 'transproxy_runtime_healthy || return 0' $ROUTER_RULES_IMPL \
 	|| fail "router-rules must treat a dead transparent proxy runtime as actionable drift"
 
 grep -q 'RUNNER_ACTION=' "$SWITCH_HELPER" \
@@ -181,10 +184,10 @@ grep -q 'action_recover()' "$ADMIN_CGI" \
 grep -q 'Recover Xray Path' "$XRAY_UI" \
 	|| fail "xray.html must expose the manual recovery lever"
 
-grep -q 'selective rules file is empty and recovery failed' "$ROUTER_RULES" \
+grep -q 'selective rules file is empty and recovery failed' $ROUTER_RULES_IMPL \
 	|| fail "router-rules must fail closed when selective rules cannot be recovered"
 
-grep -q 'client internet is blocked by fail-safe' "$ROUTER_RULES" \
+grep -q 'client internet is blocked by fail-safe' $ROUTER_RULES_IMPL \
 	|| fail "router-rules must report fail-safe blocking when runtime recovery does not converge"
 
 grep -q '/etc/init.d/codex-xray enable' "$INSTALL_PLATFORM" \

@@ -13,6 +13,9 @@ XRAY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.init"
 WATCHDOG="$ROOT/routers/gl-mt3000-glinet/files/xray-switch-watchdog.init"
 UPLINK_HOTPLUG="$ROOT/routers/gl-mt3000-glinet/files/codex-xray-uplink.hotplug"
 ROUTER_RULES="$ROOT/routers/common/files/router-rules"
+# router-rules split into sourced libs (AGENTS.md 500-line rule); grep the
+# whole implementation set for moved function content.
+ROUTER_RULES_IMPL="$ROUTER_RULES $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-status.sh"
 AGENTS_FILE="$ROOT/AGENTS.md"
 
 fail() {
@@ -76,10 +79,10 @@ fi
 grep -q 'ip6tables -I FORWARD 1 -i "\$lan_if" -j REJECT' "$TRANSPROXY" \
 	|| fail "codex-transproxy must still reject forwarded IPv6 while the IPv4-only Xray path is active"
 
-grep -q 'lan_device' "$ROUTER_RULES" \
+grep -q 'lan_device' $ROUTER_RULES_IMPL \
 	|| fail "router-rules must resolve the LAN device dynamically"
 
-if grep -q 'dev br-lan' "$ROUTER_RULES"; then
+if grep -q 'dev br-lan' $ROUTER_RULES_IMPL; then
 	fail "router-rules must not hardcode br-lan for LAN CIDR detection"
 fi
 
