@@ -460,6 +460,27 @@ if [[ "${e2e_ok:-0}" == "1" ]]; then
     e2e_ok=0
   fi
 fi
+if [[ "${e2e_ok:-0}" == "1" ]]; then
+  # The probe above only proves the DIRECT HTTP proxy (:$PROXY_PORT) works.
+  # LAN clients use the TRANSPARENT path (redsocks -> xray -> CODEX_TRANSPROXY
+  # nat), which can be down while :$PROXY_PORT still answers. Verify it for
+  # real so "complete" can never render 10/10 over a dead transparent path
+  # (2026-07-10 incident: install reported 10/10 while redsocks was down and
+  # every LAN client was blocked). redsocks-up + the nat rule are structural
+  # and definitive, so this cannot false-fail on a transient egress blip.
+  tp_state="$(router_ssh 'pgrep -x redsocks >/dev/null 2>&1 && echo rs=up || echo rs=DOWN; iptables -t nat -S PREROUTING 2>/dev/null | grep -q CODEX_TRANSPROXY && echo tp=up || echo tp=DOWN' 2>/dev/null | tr "\n" " " || true)"
+  case "$tp_state" in
+    *rs=up*tp=up*)
+      echo "✓ Transparent path healthy: redsocks running and CODEX_TRANSPROXY active"
+      ;;
+    *)
+      install_progress_fail \
+        "Direct proxy works but the TRANSPARENT client path is down (${tp_state}); LAN clients would be blocked." \
+        "Bring it up: ssh $ROUTER_SSH '/etc/init.d/codex-transproxy restart; /etc/gl-switch.d/xray.sh on'. Then run Live Smoke in the UI to confirm."
+      e2e_ok=0
+      ;;
+  esac
+fi
 set -e
 [[ "${e2e_ok:-0}" == "1" ]] || exit 1
 

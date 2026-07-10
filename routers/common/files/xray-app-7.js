@@ -4,6 +4,11 @@
     // missing or empty status file resolves to state=idle and hides the
     // banner. Failed state stays visible until the operator re-runs the
     // install successfully.
+    // Remembers the state seen on the previous poll so a "complete" banner is
+    // surfaced only on the running->complete transition the operator actually
+    // watched — never re-shown on every 5s poll of a status file that stays
+    // "complete" until the next install (that made the banner blink forever).
+    let installBannerPrevState = "idle";
     async function refreshInstallBanner() {
       const banner = document.getElementById("installBanner");
       if (!banner) return;
@@ -18,6 +23,8 @@
         return;
       }
       const installState = (data && data.state) || "idle";
+      const installPrevState = installBannerPrevState;
+      installBannerPrevState = installState;
       if (installState === "idle") {
         // Even with no active install, surface selective fallback at the
         // top of the page so the operator notices the temporary FULL
@@ -64,16 +71,25 @@
           fixEl.hidden = true;
         }
       } else if (installState === "complete") {
-        banner.classList.add("complete");
-        titleEl.textContent = "Install complete";
-        bodyEl.textContent = `${stepTotal}/${stepTotal} steps OK`;
-        fixEl.hidden = true;
-        // Auto-hide success banners after 8 seconds — failures persist.
-        setTimeout(() => {
-          if (!banner.classList.contains("running")) {
-            banner.hidden = true;
-          }
-        }, 8000);
+        if (installPrevState === "running") {
+          // Fresh completion the operator just watched finish — show once,
+          // then auto-hide after 8s. Subsequent polls of the same "complete"
+          // state fall through and do nothing (no re-show => no blink).
+          banner.classList.add("complete");
+          titleEl.textContent = "Install complete";
+          bodyEl.textContent = `${stepTotal}/${stepTotal} steps OK`;
+          fixEl.hidden = true;
+          setTimeout(() => {
+            if (!banner.classList.contains("running")) {
+              banner.hidden = true;
+            }
+          }, 8000);
+        } else {
+          // Stale/persistent "complete" (page load, or already dismissed).
+          // The status file stays "complete" until the next install, so this
+          // is not news — keep the banner hidden instead of blinking it.
+          banner.hidden = true;
+        }
       }
     }
     refreshInstallBanner();
