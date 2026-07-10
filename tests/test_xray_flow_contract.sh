@@ -6,6 +6,10 @@ ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 ROUTER_TEMPLATE="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template"
 VPS_TEMPLATE="$ROOT/vps/debian-13/files/xray-vps-config.template.json"
 VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
+# xray-vps.cgi sources profile/ssh/render/inspect/actions/setup/repair logic
+# from shared libs (AGENTS.md 500-line split). Grep the whole set for moved
+# content.
+VPS_IMPL="$VPS_CGI $ROOT/routers/common/files/xray-vps-profile.sh $ROOT/routers/common/files/xray-vps-ssh.sh $ROOT/routers/common/files/xray-vps-render.sh $ROOT/routers/common/files/xray-vps-inspect.sh $ROOT/routers/common/files/xray-vps-actions.sh $ROOT/routers/common/files/xray-vps-setup.sh $ROOT/routers/common/files/xray-vps-repair.sh"
 ADMIN_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-admin.cgi"
 # xray-admin.cgi sources its probe/build and status/smoke logic from these
 # shared libs (AGENTS.md 500-line split). Grep the whole implementation set
@@ -24,7 +28,7 @@ grep -q 'XRAY_USER_FLOW_BLOCK' "$ROUTER_TEMPLATE" \
 grep -q 'XRAY_CLIENT_FLOW_BLOCK' "$VPS_TEMPLATE" \
 	|| fail "VPS Xray template must preserve flow when it is configured"
 
-grep -q 'user_flow_line' "$VPS_CGI" \
+grep -q 'user_flow_line' $VPS_IMPL \
 	|| fail "xray-vps.cgi must render flow into the router config when present"
 
 grep -q 'user_flow_line' $ADMIN_IMPL \

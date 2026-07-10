@@ -11,6 +11,11 @@ ADMIN_PROBE_LIB="$ROOT/routers/common/files/xray-admin-probe.sh"
 ADMIN_STATUS_LIB="$ROOT/routers/common/files/xray-admin-status.sh"
 ADMIN_IMPL="$ADMIN_CGI $ADMIN_PROBE_LIB $ADMIN_STATUS_LIB"
 VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
+# xray-vps.cgi sources profile/ssh/render/inspect/actions/setup/repair logic
+# from shared libs (AGENTS.md 500-line split); the router-config renderers
+# live in xray-vps-render.sh. Grep the whole set for moved content.
+VPS_RENDER_LIB="$ROOT/routers/common/files/xray-vps-render.sh"
+VPS_IMPL="$VPS_CGI $ROOT/routers/common/files/xray-vps-profile.sh $ROOT/routers/common/files/xray-vps-ssh.sh $VPS_RENDER_LIB $ROOT/routers/common/files/xray-vps-inspect.sh $ROOT/routers/common/files/xray-vps-actions.sh $ROOT/routers/common/files/xray-vps-setup.sh $ROOT/routers/common/files/xray-vps-repair.sh"
 XRAY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.init"
 TRANSPROXY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"
@@ -41,10 +46,10 @@ grep -q '"path_effective":' $ADMIN_IMPL \
 grep -q 'router_path_active()' "$VPS_CGI" \
 	|| fail "xray-vps.cgi must expose an explicit router path health check"
 
-grep -q 'resync_runtime_to_switch || return 1' "$VPS_CGI" \
+grep -q 'resync_runtime_to_switch || return 1' $VPS_IMPL \
 	|| fail "xray-vps.cgi must fail apply_profile when runtime does not come back"
 
-grep -q '"sniffing": {' "$VPS_CGI" \
+grep -q '"sniffing": {' $VPS_IMPL \
 	|| fail "xray-vps.cgi must preserve inbound sniffing when it renders router configs from saved VPS profiles"
 
 grep -q 'LOCAL_MANGLE_CHAIN="CODEX_XRAY_LOCAL"' "$XRAY_INIT" \
@@ -74,7 +79,7 @@ grep -q '"destOverride": \[' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.js
 for gen in \
 	"$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
 	"$ADMIN_PROBE_LIB" \
-	"$VPS_CGI"; do
+	"$VPS_RENDER_LIB"; do
 	name="$(basename "$gen")"
 	grep -q '"network": "ws"' "$gen" \
 		|| fail "$name must render the router outbound as network=ws (transport parity, node 8.5)"

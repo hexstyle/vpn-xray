@@ -14,6 +14,12 @@ PROFILE="$ROOT/routers/gl-mt3000-glinet"
 CONFIG_TEMPLATE="$ROOT/vps/debian-13/files/xray-vps-config.template.json"
 REMOTE_INSTALL="$ROOT/vps/debian-13/files/install-vps.remote.sh"
 CGI="$PROFILE/files/xray-vps.cgi"
+# xray-vps.cgi sources its render/apply/inspect logic from shared libs
+# (AGENTS.md 500-line split). Extract the relevant function from the lib that
+# now owns it; router_current_json stays in the CGI itself.
+RENDER_LIB="$ROOT/routers/common/files/xray-vps-render.sh"
+ACTIONS_LIB="$ROOT/routers/common/files/xray-vps-actions.sh"
+INSPECT_LIB="$ROOT/routers/common/files/xray-vps-inspect.sh"
 UI="$PROFILE/files/xray.html"
 
 fail() {
@@ -27,7 +33,7 @@ fail() {
 placeholders="$(grep -oE '\$\{[A-Z_][A-Z0-9_]*\}' "$CONFIG_TEMPLATE" \
 	| sed -e 's/^\${//' -e 's/}$//' | sort -u)"
 
-sed_keys="$(sed -n '/^render_vps_profile_template()/,/^}/p' "$CGI" \
+sed_keys="$(sed -n '/^render_vps_profile_template()/,/^}/p' "$RENDER_LIB" \
 	| grep -oE 's\|\\\$\{[A-Z_][A-Z0-9_]*\}' \
 	| grep -oE '[A-Z_][A-Z0-9_]*' | sort -u)"
 
@@ -65,7 +71,7 @@ grep -q "grep -q '\[\$\]\[{\]\[A-Z_\]\[A-Z0-9_\]\*\[}\]' \"\$staged\"" "$REMOTE_
 # Node R.4 / 8.5: the CGI router-config generator must emit the same
 # transport the VPS serves (WS+TLS), not the legacy raw/reality — else an
 # apply produces a config that cannot talk to the VPS.
-router_cfg="$(sed -n '/^render_router_config()/,/^}/p' "$CGI")"
+router_cfg="$(sed -n '/^render_router_config()/,/^}/p' "$RENDER_LIB")"
 printf '%s' "$router_cfg" | grep -q '"network": "ws"' \
 	|| fail "render_router_config must emit network=ws to match the VPS + template transport (node 8.5)"
 printf '%s' "$router_cfg" | grep -q '"security": "tls"' \
@@ -75,7 +81,7 @@ printf '%s' "$router_cfg" | grep -q '"security": "reality"' \
 
 # Node 8.2 guard: applying a router config must refuse when TLS-critical
 # profile fields are empty (empty serverName → cert validated against the IP).
-apply_fn="$(sed -n '/^apply_profile_to_router_internal()/,/^}/p' "$CGI")"
+apply_fn="$(sed -n '/^apply_profile_to_router_internal()/,/^}/p' "$ACTIONS_LIB")"
 printf '%s' "$apply_fn" | grep -q 'refusing to overwrite the working router config' \
 	|| fail "apply_profile_to_router_internal must refuse an incomplete profile (empty server_name/address/uuid/port) before overwriting the router config (node 8.2)"
 
@@ -86,7 +92,7 @@ printf '%s' "$apply_fn" | grep -q 'refusing to overwrite the working router conf
 # REMOTE_TRANSPORT_NET/SEC.
 grep -q '"transport_net":"%s"' "$CGI" \
 	|| fail "router_current_json must expose the router outbound transport_net (G8)"
-grep -q 'REMOTE_TRANSPORT_NET' "$CGI" \
+grep -q 'REMOTE_TRANSPORT_NET' "$INSPECT_LIB" \
 	|| fail "remote inspection must emit the VPS inbound transport for the mismatch detector (G8)"
 grep -q 'transportMismatch' "$UI" \
 	|| fail "the UI must compare router vs VPS transport and warn on mismatch (G8)"

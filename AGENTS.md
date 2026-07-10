@@ -124,7 +124,7 @@ shrink on touch, largest-risk first):
 | --- | --- | --- |
 | `routers/*/files/xray.html` | ~3.8k | extract CSS → `xray.css`; JS → `xray-*.js` modules by card (vps / rules / admin / core) |
 | `routers/common/files/router-rules` | ~3.8k | sourced libs under `/usr/share/vpn-xray/rules-lib/` (git, resolve, ipset, dataplane, status) |
-| `routers/*/files/xray-vps.cgi` | ~2.3k | sourced libs under `/usr/share/vpn-xray/vps-cgi/` (ssh, profile, inspect, repair, actions) |
+| ~~`routers/*/files/xray-vps.cgi`~~ | ~~2.3k~~ → 224 | **DONE.** Seven `common/files/xray-vps-*.sh` libs (profile, ssh, render, inspect, actions, setup, repair) deployed to `/usr/share/vpn-xray/`. Core router helpers + top-level job-mode/dispatch stay inline |
 | `routers/*/install-platform.sh` | ~1.3k | phase libs (packages, files, uci, services) |
 | ~~`routers/*/files/xray-rules.cgi`~~ | ~~1.1k~~ → 271 | **DONE.** job/status → `xray-rules-jobs.sh`; save/sync/source actions → `xray-rules-actions.sh`; external-script CRUD → `xray-rules-scripts.sh` (in `common/files/`, deployed to `/usr/share/vpn-xray/`). Config/sync helpers + dispatch stay inline |
 | `bootstrap-router-vps.sh` | ~1.0k | step functions → `common/lib/bootstrap/` |

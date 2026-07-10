@@ -5,6 +5,11 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 XRAY_UI="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
 VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
+# xray-vps.cgi sources its logic from shared libs (AGENTS.md 500-line split):
+# port validation lives in xray-vps-actions.sh (save_profile_from_request),
+# the remote listener probe in xray-vps-inspect.sh. Grep the whole set for
+# moved content; the valid_port definition itself stays in the CGI.
+VPS_IMPL="$VPS_CGI $ROOT/routers/common/files/xray-vps-actions.sh $ROOT/routers/common/files/xray-vps-inspect.sh $ROOT/routers/common/files/xray-vps-render.sh"
 VPS_INSTALL="$ROOT/vps/debian-13/files/install-vps.remote.sh"
 
 fail() {
@@ -25,37 +30,37 @@ fi
 grep -q '^valid_port() {$' "$VPS_CGI" \
 	|| fail "xray-vps.cgi must validate user-supplied port values"
 
-grep -q 'valid_port "\$ssh_port" || {' "$VPS_CGI" \
+grep -q 'valid_port "\$ssh_port" || {' $VPS_IMPL \
 	|| fail "xray-vps.cgi must reject invalid SSH ports"
 
-grep -q 'valid_port "\$server_port" || {' "$VPS_CGI" \
+grep -q 'valid_port "\$server_port" || {' $VPS_IMPL \
 	|| fail "xray-vps.cgi must reject invalid Xray server ports"
 
-grep -q "SSH port must be in the range 1-65535." "$VPS_CGI" \
+grep -q "SSH port must be in the range 1-65535." $VPS_IMPL \
 	|| fail "xray-vps.cgi must report an explicit SSH port validation error"
 
-grep -q "Xray server port must be in the range 1-65535." "$VPS_CGI" \
+grep -q "Xray server port must be in the range 1-65535." $VPS_IMPL \
 	|| fail "xray-vps.cgi must report an explicit Xray server port validation error"
 
-grep -q 'if ! save_profile_from_request >/dev/null; then' "$VPS_CGI" \
+grep -q 'if ! save_profile_from_request >/dev/null; then' $VPS_IMPL \
 	|| fail "xray-vps.cgi callers must preserve save_profile validation errors without subshell command substitution"
 
 # listener_port is exposed through the awk-based remote-cache JSON builder
 # (REMOTE_LISTENER_PORT -> listener_port), not a standalone printf. Assert
 # the field is both collected and mapped into the JSON key.
-grep -q 'REMOTE_LISTENER_PORT listener_port' "$VPS_CGI" \
+grep -q 'REMOTE_LISTENER_PORT listener_port' $VPS_IMPL \
 	|| fail "xray-vps.cgi must map REMOTE_LISTENER_PORT to the listener_port JSON key in the remote cache"
 
-grep -q 'line REMOTE_LISTENER_PORT "\$listener_port_v"' "$VPS_CGI" \
+grep -q 'line REMOTE_LISTENER_PORT "\$listener_port_v"' $VPS_IMPL \
 	|| fail "xray-vps.cgi must collect the selected-port listener state (listener_port_v) during remote inspection"
 
-grep -q "EXPECTED_SERVER_PORT='\\\$expected_server_port'" "$VPS_CGI" \
+grep -q "EXPECTED_SERVER_PORT='\\\$expected_server_port'" $VPS_IMPL \
 	|| fail "xray-vps.cgi must pass the profile's expected Xray port into remote inspection"
 
-grep -q 'listener_target_port="\${remote_server_port:-\${EXPECTED_SERVER_PORT:-443}}"' "$VPS_CGI" \
+grep -q 'listener_target_port="\${remote_server_port:-\${EXPECTED_SERVER_PORT:-443}}"' $VPS_IMPL \
 	|| fail "xray-vps.cgi must resolve the inspected listener port from VPS metadata or the selected profile port"
 
-grep -q 'line REMOTE_LISTENER_PORT "\$listener_port_v"' "$VPS_CGI" \
+grep -q 'line REMOTE_LISTENER_PORT "\$listener_port_v"' $VPS_IMPL \
 	|| fail "xray-vps.cgi must persist the selected-port listener probe result"
 
 # Firewall management is the step_firewall repair step (DIAGNOSTIC-TREE
