@@ -462,16 +462,21 @@
       // Publish the config-coherence signals (nodes 8 / 8.5) for the Path
       // Health tree to overlay. Derived here, once, where the VPS data lives;
       // xray-tree.js only reads this — no duplicated logic.
+      // Node 8 can only be assessed once we have VPS-side data (a successful
+      // inspection). Without it, remote_diff compares against an empty remote
+      // and reads a spurious "needs sync" — so gate on transportKnown and show
+      // "unknown" (can't compare), not a false "degraded". The tunnel data
+      // plane is unaffected by this; it is the SSH control plane that is idle.
       window.__diagVpsStatus = {
-        "8": transportMismatch
-          ? "failed"
-          : (runtime.config_ready ? (drift ? "degraded" : "ok") : "unknown"),
+        "8": transportMismatch ? "failed" : (!transportKnown ? "unknown" : (drift ? "degraded" : "ok")),
         "8_detail": transportMismatch
-          ? "transport mismatch (see 8.5)"
-          : (runtime.config_ready ? (drift ? "profile/router/VPS differ — needs sync" : "profile = router = VPS") : "waiting for first apply"),
+          ? "transport mismatch — see 8.5"
+          : (!transportKnown
+              ? "VPS not inspected yet — config coherence can't be compared (SSH control plane idle)"
+              : (drift ? "profile/router/VPS differ — needs sync" : "profile = router = VPS")),
         "8.5": !transportKnown ? "unknown" : (transportMismatch ? "failed" : "ok"),
         "8.5_detail": !transportKnown
-          ? "transport not inspected yet"
+          ? "VPS transport not inspected yet — run Diagnose & Repair to enable"
           : (transportMismatch ? `router ${rNet}/${rSec} vs VPS ${vNet}/${vSec}` : `router and VPS both ${rNet}/${rSec}`),
       };
     }

@@ -6,7 +6,9 @@
 // docs/UNIFIED-DIAGNOSTIC-UI-DESIGN.md.
 (function () {
   "use strict";
-  var GLYPH = { ok: "●", degraded: "◐", failed: "✗", unknown: "○", na: "⚠" };
+  // na = not applicable on this platform / build-time-only — a neutral dash, not
+  // a warning glyph, so nodes like R (CI-enforced) don't read as a problem.
+  var GLYPH = { ok: "●", degraded: "◐", failed: "✗", unknown: "○", na: "–" };
 
   function esc(s) {
     return String(s == null ? "" : s)
@@ -120,12 +122,22 @@
 
   // The single, whole-path Diagnose & Repair. Walks the tree bottom-up: first
   // the router-side layers (tree_repair restarts runtime / redsocks / transport),
-  // then — only if the path is still down — it escalates to the VPS server repair
-  // by triggering the existing VPS flow (its creds prompt / progress / report),
-  // which owns node 6 and config apply. One button for the whole tree.
+  // then escalates to the VPS server repair whenever the VPS/config half is not
+  // verified-healthy — the path is down, OR the VPS runtime / config coherence /
+  // transport-match (nodes 6 / 8 / 8.5) is not ok. That VPS flow (its creds
+  // prompt / progress / report) installs the SSH key, inspects, and syncs
+  // config — which is what clears an "unknown"/"needs sync" 8 / 8.5. One button
+  // for the whole tree; it does not stop at a green router while the VPS half is
+  // unverified.
+  function treeStatusOf(nodes, id) {
+    var overlay = window.__diagVpsStatus || {};
+    if (overlay[id]) return overlay[id];
+    var n = nodes.find(function (x) { return x.id === id; });
+    return n ? n.status : "unknown";
+  }
   async function onWalkClick(btn) {
     if (repairBusy) return;
-    if (!window.confirm("Diagnose & Repair the whole path?\nThis restarts the broken router-side layers (runtime / redsocks / transport). If the path is still down because of the VPS server or config, it then runs the VPS repair (which may ask for the VPS password). Client traffic is briefly interrupted.")) {
+    if (!window.confirm("Diagnose & Repair the whole path?\nThis restarts the broken router-side layers, then — if the VPS server or config is not verified-healthy — runs the VPS repair (SSH key install, inspection, config sync; it may ask for the VPS password once). Client traffic is briefly interrupted.")) {
       return;
     }
     repairBusy = true;
@@ -139,24 +151,27 @@
         body: "action=tree_repair",
       });
       var data = await resp.json();
-      if (data && data.tree && Array.isArray(data.tree.nodes)) paint(data.tree.nodes);
-      if (data && data.ok) {
-        // Router walk fixed it (or nothing router-side was broken and the path
-        // is healthy). Done — no need to touch the VPS.
-        flashMsg((data && data.message) || "Path is healthy.", true);
+      var nodes = (data && data.tree && Array.isArray(data.tree.nodes)) ? data.tree.nodes : [];
+      if (nodes.length) paint(nodes);
+      // Does the VPS/config half need work? unknown counts — an uninspected VPS
+      // (SSH control plane idle) is exactly what the VPS repair sets up.
+      var vpsNeedsWork = !(data && data.ok) || ["6", "8", "8.5"].some(function (id) {
+        var s = treeStatusOf(nodes, id);
+        return s !== "ok" && s !== "na";
+      });
+      if (!vpsNeedsWork) {
+        flashMsg((data && data.message) || "Whole path is healthy.", true);
       } else {
-        // Path still down after the router layers — the cause is the VPS server
-        // or config. Escalate to the VPS repair, reusing its full flow.
         var vpsBtn = document.getElementById("diagnoseRepairBtn");
         if (vpsBtn && !vpsBtn.disabled) {
-          flashMsg((data && data.message ? data.message + " " : "") + "Running VPS repair…", false, 6000);
+          flashMsg("Router layers handled — running VPS repair (SSH / inspect / config)…", false, 6000);
           repairBusy = false; // hand off to the VPS flow (it manages its own busy/progress)
           btn.disabled = false;
           btn.textContent = label;
           vpsBtn.click();
           return;
         }
-        flashMsg((data && data.message) || "Path still down; run the VPS repair.", false);
+        flashMsg((data && data.message) || "VPS repair is needed — open the VPS panel.", false);
       }
     } catch (_err) {
       /* next poll refreshes the tree */
