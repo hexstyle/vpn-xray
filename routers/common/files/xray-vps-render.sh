@@ -4,6 +4,18 @@
 # Sourced by /www/cgi-bin/xray-vps after lib-common.sh (shares its scope,
 # constants, and helper functions). Defines functions only; runs no code.
 
+# effective_server_name <profile_id> — the SNI to actually use: the profile's
+# server_name, or the VPS-profile default (www.cloudflare.com) when the profile
+# left it blank. Renders must never emit an empty serverName (empty SNI fails
+# cert validation — node 8.2), and an unset profile SNI must not read as drift
+# against a router already running the default.
+effective_server_name() {
+	local v
+	v="$(profile_get "$1" server_name)"
+	[ -n "$v" ] || v="$(default_server_name_for_profile "$(default_vps_profile)")"
+	printf '%s' "$v"
+}
+
 render_router_config() {
 	local path="$1"
 	local profile_id="$2"
@@ -11,7 +23,7 @@ render_router_config() {
 
 	server_address="$(profile_get "$profile_id" server_address)"
 	server_port="$(profile_get "$profile_id" server_port)"
-	server_name="$(profile_get "$profile_id" server_name)"
+	server_name="$(effective_server_name "$profile_id")"
 	uuid="$(profile_get "$profile_id" uuid)"
 	public_key="$(profile_get "$profile_id" public_key)"
 	short_id="$(profile_get "$profile_id" short_id)"
@@ -140,7 +152,7 @@ render_vps_profile_template() {
 	[ -n "$xray_ws_path" ] || xray_ws_path='/cdn'
 	xray_flow="$(profile_get "$profile_id" flow)"
 	xray_uuid="$(profile_get "$profile_id" uuid)"
-	xray_server_name="$(profile_get "$profile_id" server_name)"
+	xray_server_name="$(effective_server_name "$profile_id")"
 	xray_private_key="$(profile_get "$profile_id" private_key)"
 	xray_short_id="$(profile_get "$profile_id" short_id)"
 	vps_xray_binary="$(vps_profile_value "$vps_profile" VPS_XRAY_BINARY)"
@@ -205,7 +217,7 @@ PROFILE_ID=${profile_id}
 XRAY_HOST=$(profile_get "$profile_id" server_address)
 XRAY_PORT=$(profile_get "$profile_id" server_port)
 XRAY_UUID=$(profile_get "$profile_id" uuid)
-XRAY_SERVER_NAME=$(profile_get "$profile_id" server_name)
+XRAY_SERVER_NAME=$(effective_server_name "$profile_id")
 XRAY_SHORT_ID=$(profile_get "$profile_id" short_id)
 XRAY_PRIVATE_KEY=$(profile_get "$profile_id" private_key)
 XRAY_PUBLIC_KEY=$(profile_get "$profile_id" public_key)
@@ -263,14 +275,25 @@ profile_diff_fields() {
 	local diffs=''
 	local keys key expected actual
 
+	# public_key / short_id are Reality-only fields. The whole stack is WS+TLS,
+	# where they are unused and always empty on the router and VPS — but a
+	# profile can still carry stale Reality values from before the migration.
+	# Comparing them reads a permanent false "needs sync"; a real transport
+	# difference is caught separately by node 8.5. So they are NOT identity
+	# fields for coherence.
 	if [ "$source" = 'router' ]; then
-		keys='server_address server_port server_name uuid public_key short_id flow'
+		keys='server_address server_port server_name uuid flow'
 	else
-		keys='server_port server_name uuid public_key short_id flow'
+		keys='server_port server_name uuid flow'
 	fi
 
 	for key in $keys; do
 		expected="$(profile_get "$profile_id" "$key")"
+		# An unset SNI resolves to the default at render time, so compare the
+		# effective value — otherwise a blank profile SNI reads as permanent drift.
+		if [ "$key" = 'server_name' ] && [ -z "$expected" ]; then
+			expected="$(default_server_name_for_profile "$(default_vps_profile)")"
+		fi
 		if [ "$source" = 'router' ]; then
 			actual="$(router_live_value "$key")"
 		else

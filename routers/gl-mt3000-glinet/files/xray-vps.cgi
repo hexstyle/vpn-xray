@@ -51,7 +51,7 @@ config_value() {
 }
 
 router_live_value() {
-	local key="$1"
+	local key="$1" _sn
 	case "$key" in
 		server_address)
 			config_value '@.outbounds[0].settings.vnext[0].address'
@@ -60,7 +60,11 @@ router_live_value() {
 			config_value '@.outbounds[0].settings.vnext[0].port'
 			;;
 		server_name)
-			config_value '@.outbounds[0].streamSettings.realitySettings.serverName'
+			# WS+TLS keeps the SNI in tlsSettings; realitySettings is the legacy
+			# path (empty in a WS+TLS config, which read as permanent false drift).
+			_sn="$(config_value '@.outbounds[0].streamSettings.tlsSettings.serverName')"
+			[ -n "$_sn" ] || _sn="$(config_value '@.outbounds[0].streamSettings.realitySettings.serverName')"
+			printf '%s' "$_sn"
 			;;
 		uuid)
 			config_value '@.outbounds[0].settings.vnext[0].users[0].id'
