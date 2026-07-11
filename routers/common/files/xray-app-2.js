@@ -458,5 +458,21 @@
         driftEl.className = `value ${drift ? "warn" : "ok"}`;
         driftEl.title = "";
       }
+
+      // Publish the config-coherence signals (nodes 8 / 8.5) for the Path
+      // Health tree to overlay. Derived here, once, where the VPS data lives;
+      // xray-tree.js only reads this — no duplicated logic.
+      window.__diagVpsStatus = {
+        "8": transportMismatch
+          ? "failed"
+          : (runtime.config_ready ? (drift ? "degraded" : "ok") : "unknown"),
+        "8_detail": transportMismatch
+          ? "transport mismatch (see 8.5)"
+          : (runtime.config_ready ? (drift ? "profile/router/VPS differ — needs sync" : "profile = router = VPS") : "waiting for first apply"),
+        "8.5": !transportKnown ? "unknown" : (transportMismatch ? "failed" : "ok"),
+        "8.5_detail": !transportKnown
+          ? "transport not inspected yet"
+          : (transportMismatch ? `router ${rNet}/${rSec} vs VPS ${vNet}/${vSec}` : `router and VPS both ${rNet}/${rSec}`),
+      };
     }
 

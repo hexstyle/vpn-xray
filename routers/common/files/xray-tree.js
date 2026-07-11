@@ -43,8 +43,23 @@
   }
 
   function paint(nodes) {
+    // Overlay the config-coherence nodes (8 / 8.5) with the signals the main
+    // app derives from the VPS data it already polls (window.__diagVpsStatus),
+    // so those rows are live instead of "see VPS panel". Router-side nodes are
+    // untouched — the tree endpoint owns them.
+    var o = window.__diagVpsStatus || {};
+    var merged = nodes.map(function (n) {
+      if (o[n.id]) {
+        var m = {};
+        for (var k in n) m[k] = n[k];
+        m.status = o[n.id];
+        if (o[n.id + "_detail"]) m.detail = o[n.id + "_detail"];
+        return m;
+      }
+      return n;
+    });
     var el = document.getElementById("pathHealthTree");
-    if (el) el.innerHTML = nodes.map(rowHtml).join("");
+    if (el) el.innerHTML = merged.map(rowHtml).join("");
   }
 
   var repairBusy = false;
