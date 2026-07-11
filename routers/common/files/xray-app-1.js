@@ -188,13 +188,17 @@
     const RULES_JOB_STATUS_DELAY_MS = 2000;
     const RULES_JOB_POLL_MS = 2000;
 
-    function beginForegroundTask(message, pauseMs = 15000) {
+    function beginForegroundTask(message, pauseMs = 15000, scope = "") {
       setControlsBusy(true);
       flashLoading(message);
+      // A rules-scoped task also raises the rules-card progress overlay so the
+      // section clearly shows "applying" and blocks pointer input mid-flight.
+      if (scope === "rules") setRulesSectionBusy(true, message);
     }
 
     function endForegroundTask() {
       setControlsBusy(false);
+      setRulesSectionBusy(false);
     }
 
     function parseDiffList(text) {

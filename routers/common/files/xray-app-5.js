@@ -38,7 +38,7 @@
     }
 
     async function loadRulesText(button) {
-      beginForegroundTask("Loading the full shared rules list from the router...", RULES_TEXT_TIMEOUT_MS);
+      beginForegroundTask("Loading the full shared rules list from the router...", RULES_TEXT_TIMEOUT_MS, "rules");
       setBusy(button, true);
       try {
         await refreshRules(true, true);
@@ -52,7 +52,7 @@
     }
 
     async function saveRulesConfig(button) {
-      beginForegroundTask("Saving rules settings on the router...", RULES_SAVE_CONFIG_TIMEOUT_MS);
+      beginForegroundTask("Saving rules settings on the router...", RULES_SAVE_CONFIG_TIMEOUT_MS, "rules");
       setBusy(button, true);
       try {
         const data = await callApi(rulesApi, "save_config", rulesConfigPayload(), { timeoutMs: RULES_SAVE_CONFIG_TIMEOUT_MS });
@@ -87,7 +87,7 @@
 
     async function runRulesSync(button, mode) {
       const verb = syncModeVerb(mode);
-      beginForegroundTask(`${verb} on this router...`, RULES_SYNC_TIMEOUT_MS);
+      beginForegroundTask(`${verb} on this router...`, RULES_SYNC_TIMEOUT_MS, "rules");
       setBusy(button, true);
       try {
         const payload = {
@@ -151,7 +151,7 @@
     async function downloadExternalFresh(button, sourceId) {
       const source = externalSourceById(sourceId);
       if (!source) { flash("Source metadata missing.", "bad"); return; }
-      beginForegroundTask(`Generating fresh output for ${source.label || source.id}...`, RULES_EXTERNAL_PREVIEW_TIMEOUT_MS);
+      beginForegroundTask(`Generating fresh output for ${source.label || source.id}...`, RULES_EXTERNAL_PREVIEW_TIMEOUT_MS, "rules");
       setBusy(button, true);
       try {
         const resp = await fetch(rulesApi, {
@@ -178,7 +178,7 @@
     async function downloadExternalStored(button, sourceId) {
       const source = externalSourceById(sourceId);
       if (!source) { flash("Source metadata missing.", "bad"); return; }
-      beginForegroundTask(`Downloading stored file for ${source.label || source.id}...`, RULES_TEXT_TIMEOUT_MS);
+      beginForegroundTask(`Downloading stored file for ${source.label || source.id}...`, RULES_TEXT_TIMEOUT_MS, "rules");
       setBusy(button, true);
       try {
         const resp = await fetch(rulesApi, {
@@ -303,7 +303,7 @@
 
       outputEl.textContent = "Validating script on the router (15s timeout)...";
       setBusy(saveBtn, true);
-      beginForegroundTask(`Validating and saving ${label || sourceId}...`, RULES_EXTERNAL_VALIDATE_TIMEOUT_MS);
+      beginForegroundTask(`Validating and saving ${label || sourceId}...`, RULES_EXTERNAL_VALIDATE_TIMEOUT_MS, "rules");
       try {
         const data = await callApi(rulesApi, "save_external_script", {
           source_id: sourceId, label, url, script_text: scriptText, max_targets: maxTargets
@@ -329,7 +329,7 @@
 
     async function deleteExternalScript(sourceId) {
       if (!confirm(`Delete external source "${sourceId}" and its stored file?`)) return;
-      beginForegroundTask(`Deleting ${sourceId}...`, 30000);
+      beginForegroundTask(`Deleting ${sourceId}...`, 30000, "rules");
       try {
         const data = await callApi(rulesApi, "delete_external_script", { source_id: sourceId }, { timeoutMs: 30000 });
         if (data.ok === false) { throw new Error(data.error || "Delete failed"); }
@@ -349,7 +349,7 @@
         document.getElementById("rulesExternalPreviewOutput").textContent = "Save Git and managed-source settings before refreshing external files.";
         return;
       }
-      beginForegroundTask("Refreshing managed source snapshots in the background and applying changed routing targets if needed...", RULES_EXTERNAL_RUN_TIMEOUT_MS);
+      beginForegroundTask("Refreshing managed source snapshots in the background and applying changed routing targets if needed...", RULES_EXTERNAL_RUN_TIMEOUT_MS, "rules");
       setBusy(button, true);
       try {
         const data = await callApi(rulesApi, "sync_external_source", null, { timeoutMs: RULES_STATUS_TIMEOUT_MS });

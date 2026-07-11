@@ -366,3 +366,17 @@
 .tree-repair-btn:hover { background: #4a3d1e; }
 .tree-repair-btn:disabled { opacity: .6; cursor: default; }
 .path-health-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+/* Section busy overlay — blocks interaction + shows progress during a
+   disruptive apply/sync (rules mode cutover, git sync, apply). */
+.busy-overlay {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: rgba(10, 18, 24, 0.74); border-radius: inherit;
+}
+.busy-spinner {
+  width: 20px; height: 20px; flex: 0 0 auto;
+  border: 3px solid #2c3f52; border-top-color: #e6d34a; border-radius: 50%;
+  animation: repairspin 0.8s linear infinite;
+}
+.busy-text { color: #e6d34a; font-size: 14px; font-weight: 600; }

@@ -180,7 +180,7 @@
       state.pendingRulesMode = mode;
       renderRulesModeUi(state.rules);
       updateRulesActionState();
-      beginForegroundTask(`Applying ${mode} routing mode with hard cutover...`, RULES_MODE_TIMEOUT_MS);
+      beginForegroundTask(`Applying ${mode} routing mode with hard cutover...`, RULES_MODE_TIMEOUT_MS, "rules");
       setBusy(input, true);
       try {
         const data = await callApi(rulesApi, "set_mode", { mode }, { timeoutMs: RULES_STATUS_TIMEOUT_MS });

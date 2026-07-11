@@ -462,3 +462,19 @@
       }
     }
 
+    // Requirement 3: block + show progress on the whole rules card during an
+    // apply/sync (driven by beginForegroundTask/endForegroundTask with a
+    // "rules" scope). The overlay is absolute-positioned over the card with a
+    // high z-index, so it captures every pointer event and nothing underneath
+    // can be clicked or toggled mid-flight; setControlsBusy also disables the
+    // controls so keyboard/tab can't reach them either.
+    function setRulesSectionBusy(on, message) {
+      const overlay = document.getElementById("rulesBusyOverlay");
+      if (!overlay) return;
+      overlay.hidden = !on;
+      if (on && message) {
+        const textEl = document.getElementById("rulesBusyText");
+        if (textEl) textEl.textContent = message;
+      }
+    }
+

@@ -230,7 +230,11 @@
       </div>
     </section>
 
-    <section class="card" style="margin-top:18px;">
+    <section class="card" id="rulesCard" style="margin-top:18px;position:relative;">
+      <div id="rulesBusyOverlay" class="busy-overlay" hidden>
+        <span class="busy-spinner"></span>
+        <span id="rulesBusyText" class="busy-text">Applying…</span>
+      </div>
       <h2>Selective Address Filter</h2>
       <p class="subcopy">
         One shared list of domains, IPv4 addresses and CIDRs. On GL in <code>selective</code> mode, literal IP/CIDR entries are routed directly and
