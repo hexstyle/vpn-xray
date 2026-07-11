@@ -35,9 +35,13 @@
         sshWrap.style.display = syncEnabled && authMode === "ssh" ? "" : "none";
       }
       if (saveButton) {
+        // Settings save is deliberately separate from the list's "Save & Sync
+        // List". With Git on, saving also checks the repo is reachable and has
+        // the shared list, so the label says "& Check"; local-only has nothing
+        // remote to check.
         saveButton.textContent = !syncEnabled
-          ? "Save Local-Only Mode"
-          : (projectedReadonly ? "Save Pull-Only Git Settings" : "Save Git Settings");
+          ? "Save Settings (Local-Only)"
+          : (projectedReadonly ? "Save & Check Settings (Pull-Only)" : "Save & Check Settings");
       }
       if (pushStateText) {
         if (!syncEnabled) {

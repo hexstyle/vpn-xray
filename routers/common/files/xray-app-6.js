@@ -289,7 +289,7 @@
     document.getElementById("smokeBtn").addEventListener("click", runSmoke);
     document.getElementById("recoverPathBtn").addEventListener("click", (event) => recoverPath(event.currentTarget));
     document.getElementById("rulesSaveConfigBtn").addEventListener("click", (event) => saveRulesConfig(event.currentTarget));
-    document.getElementById("rulesApplyBtn").addEventListener("click", (event) => applyRules(event.currentTarget));
+    document.getElementById("rulesApplyBtn").addEventListener("click", (event) => saveSyncList(event.currentTarget));
     document.getElementById("rulesPullBtn").addEventListener("click", (event) => pullRules(event.currentTarget));
     document.getElementById("rulesPushBtn").addEventListener("click", (event) => pushRules(event.currentTarget));
     document.getElementById("rulesLoadTextBtn").addEventListener("click", (event) => loadRulesText(event.currentTarget));

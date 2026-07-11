@@ -374,6 +374,10 @@
   display: flex; align-items: center; justify-content: center; gap: 12px;
   background: rgba(10, 18, 24, 0.74); border-radius: inherit;
 }
+/* The class sets display:flex, which beats the UA [hidden]{display:none}
+   rule; without this the absolutely-positioned overlay stays on top of the
+   card and silently swallows every click even when "hidden". */
+.busy-overlay[hidden] { display: none; }
 .busy-spinner {
   width: 20px; height: 20px; flex: 0 0 auto;
   border: 3px solid #2c3f52; border-top-color: #e6d34a; border-radius: 50%;

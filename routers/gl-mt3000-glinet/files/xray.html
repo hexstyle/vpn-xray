@@ -253,9 +253,6 @@
             <div class="label" style="margin-bottom:8px;">Current Rules State</div>
             <div id="rulesSummaryChips" class="chip-row"></div>
           </div>
-          <div class="button-wrap" style="margin-top:0;">
-            <button id="rulesApplyBtn">Apply Local Rules</button>
-          </div>
         </div>
         <div class="field field-full" style="margin-top:12px;">
           <label for="rulesModeToggle">Routing Mode On This Router</label>
@@ -279,6 +276,7 @@
           </div>
           <div class="button-wrap" style="margin-top:12px;">
             <button id="rulesLoadTextBtn">Load Current List</button>
+            <button id="rulesApplyBtn" class="primary">Save &amp; Sync List</button>
           </div>
           <textarea id="rulesText" class="mono" spellcheck="false" style="min-height:240px;"></textarea>
         </div>
@@ -364,7 +362,10 @@
             <summary class="label" style="cursor:pointer;">Current Router SSH Public Key</summary>
             <pre id="rulesGitSshPublicKey" style="margin-top:12px;">No router SSH key yet.</pre>
           </details>
-          <div class="button-wrap" style="margin-top:12px;">
+          <!-- Manual Pull/Push replaced by the automatic two-way sync in
+               "Save & Sync List" (Local tab) + the background sync loop. Kept
+               hidden so existing handlers/state wiring stay valid. -->
+          <div class="button-wrap" style="margin-top:12px;" hidden>
             <button class="warn-btn" id="rulesPullBtn">Pull From Git</button>
             <button class="warn-btn" id="rulesPushBtn">Push To Git</button>
           </div>
@@ -412,8 +413,8 @@
       </div>
 
       <div class="button-wrap" style="margin-top:16px;padding-top:12px;border-top:1px solid #2c3f52;">
-        <button id="rulesSaveConfigBtn">Save Settings</button>
-        <span class="hint" style="margin-left:12px;">Saves every tab (routing mode, Git config, external sources) in one shot.</span>
+        <button id="rulesSaveConfigBtn">Save &amp; Check Settings</button>
+        <span class="hint" style="margin-left:12px;">Saves the settings (routing mode, Git config, external sources) and, when Git sync is on, checks the repository is reachable and has the shared list. The shared list itself is saved and synced with <strong>Save &amp; Sync List</strong> next to the editor.</span>
       </div>
     </section>
 

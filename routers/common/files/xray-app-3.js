@@ -407,9 +407,13 @@
       const workingCopyDetail = rulesWorkingCopyDetail(state.rules);
       const editor = document.getElementById("rulesText");
       if (applyButton) {
-        applyButton.textContent = state.rulesDirty ? "Save Local + Apply" : "Apply Local Rules";
+        // The unified list action: two-way Git sync when Git is on, plain
+        // local save+apply otherwise (see saveSyncList).
+        applyButton.textContent = (gitSyncEnabled && gitConfigured) ? "Save & Sync List" : "Save & Apply List";
         applyButton.disabled = state.foregroundBusy || backendJobRunning;
-        applyButton.title = "";
+        applyButton.title = (gitSyncEnabled && gitConfigured)
+          ? "Save the local list, then two-way sync with Git (pull + merge + push if enabled) and apply."
+          : "Save the local list and apply it on this router.";
       }
       if (pullButton) {
         pullButton.textContent = state.rulesDirty ? "Pull + Merge Into Local" : "Pull From Git";
@@ -438,7 +442,13 @@
       }
       if (loadButton) {
         loadButton.textContent = state.rulesTextLoaded ? "Reload Current List" : "Load Current List";
-        loadButton.disabled = state.foregroundBusy || state.rulesBusy || backendJobRunning;
+        // NOTE: renderRules() (which calls this) only runs from inside
+        // refreshRules() while state.rulesBusy is true, so gating on rulesBusy
+        // here would leave the button permanently disabled. rulesBusy is just
+        // refreshRules' reentrancy guard, not a long-operation signal — the
+        // real "operation in progress" is foregroundBusy (loadRulesText opens a
+        // foreground task) and a running backend job.
+        loadButton.disabled = state.foregroundBusy || backendJobRunning;
       }
       if (hint) {
         const applyScope = runtimeSwitchOn && selectiveMode

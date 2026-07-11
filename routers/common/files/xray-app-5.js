@@ -136,6 +136,21 @@
       return runRulesSync(button, "push");
     }
 
+    // The one "Save & Sync List" action next to the editor. It saves the local
+    // list (runRulesSync sends the dirty editor text) and, when Git sync is on,
+    // does the automatic two-way sync: pull remote, merge (union — both unique
+    // sides kept, no manual conflict step), push when push is ready, then apply.
+    // With Git off it just saves + applies locally. No separate Pull/Push.
+    async function saveSyncList(button) {
+      const rules = state.rules || {};
+      const gitSyncEnabled = !!rules.git_sync_enabled && !!rules.git_configured;
+      let mode = "apply"; // local save + apply
+      if (gitSyncEnabled) {
+        mode = rules.git_push_ready ? "push" : "pull"; // push = bidirectional, pull = fetch+merge+apply
+      }
+      return runRulesSync(button, mode);
+    }
+
     function triggerDownload(text, filename) {
       const blob = new Blob([text], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
