@@ -110,9 +110,22 @@
     paint(data.nodes);
   }
 
+  function flashMsg(text, ok, ms) {
+    var flash = document.getElementById("flash");
+    if (!flash) return;
+    flash.textContent = text;
+    flash.className = "flash " + (ok ? "ok" : "err");
+    setTimeout(function () { flash.textContent = ""; flash.className = "flash"; }, ms || 8000);
+  }
+
+  // The single, whole-path Diagnose & Repair. Walks the tree bottom-up: first
+  // the router-side layers (tree_repair restarts runtime / redsocks / transport),
+  // then — only if the path is still down — it escalates to the VPS server repair
+  // by triggering the existing VPS flow (its creds prompt / progress / report),
+  // which owns node 6 and config apply. One button for the whole tree.
   async function onWalkClick(btn) {
     if (repairBusy) return;
-    if (!window.confirm("Auto-Fix the router path?\nThis restarts the broken router-side layers (runtime / redsocks / transport), briefly interrupting client traffic. It does NOT touch the VPS server — for that, use Diagnose & Repair in the Selected VPS card.")) {
+    if (!window.confirm("Diagnose & Repair the whole path?\nThis restarts the broken router-side layers (runtime / redsocks / transport). If the path is still down because of the VPS server or config, it then runs the VPS repair (which may ask for the VPS password). Client traffic is briefly interrupted.")) {
       return;
     }
     repairBusy = true;
@@ -127,18 +140,32 @@
       });
       var data = await resp.json();
       if (data && data.tree && Array.isArray(data.tree.nodes)) paint(data.tree.nodes);
-      var flash = document.getElementById("flash");
-      if (flash) {
-        flash.textContent = (data && data.message) || "Path repair finished.";
-        flash.className = "flash " + (data && data.ok ? "ok" : "err");
-        setTimeout(function () { flash.textContent = ""; flash.className = "flash"; }, 8000);
+      if (data && data.ok) {
+        // Router walk fixed it (or nothing router-side was broken and the path
+        // is healthy). Done — no need to touch the VPS.
+        flashMsg((data && data.message) || "Path is healthy.", true);
+      } else {
+        // Path still down after the router layers — the cause is the VPS server
+        // or config. Escalate to the VPS repair, reusing its full flow.
+        var vpsBtn = document.getElementById("diagnoseRepairBtn");
+        if (vpsBtn && !vpsBtn.disabled) {
+          flashMsg((data && data.message ? data.message + " " : "") + "Running VPS repair…", false, 6000);
+          repairBusy = false; // hand off to the VPS flow (it manages its own busy/progress)
+          btn.disabled = false;
+          btn.textContent = label;
+          vpsBtn.click();
+          return;
+        }
+        flashMsg((data && data.message) || "Path still down; run the VPS repair.", false);
       }
     } catch (_err) {
       /* next poll refreshes the tree */
     } finally {
-      repairBusy = false;
-      btn.disabled = false;
-      btn.textContent = label;
+      if (repairBusy) {
+        repairBusy = false;
+        btn.disabled = false;
+        btn.textContent = label;
+      }
     }
   }
 

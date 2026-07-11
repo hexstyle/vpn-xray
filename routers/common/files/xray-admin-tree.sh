@@ -169,16 +169,21 @@ tree_repair_json() {
 		[ -n "$target" ] || break
 		node_repair_run "$target" || true
 		walked="$walked $target"
-		[ "$(tree_node_status 7 | cut -f1)" = 'ok' ] && break
 	done
+	# Refresh the cached smoke so node 7 (end-to-end) reflects the POST-repair
+	# reality, not a stale pre-repair result — the caller decides whether to
+	# escalate to the VPS repair based on this.
+	smoke_json >/dev/null 2>&1 || true
 	local e2e msg
 	e2e="$(tree_node_status 7 | cut -f1)"
-	if [ -z "$walked" ]; then
-		msg='No router-side layer was broken. If the client path still fails, the cause is the VPS or config — run Diagnose & Repair above.'
+	if [ -z "$walked" ] && [ "$e2e" = 'ok' ]; then
+		msg='No router-side layer was broken and the path is healthy.'
 	elif [ "$e2e" = 'ok' ]; then
-		msg="Repaired layer(s)${walked}. End-to-end client path is healthy."
+		msg="Repaired router layer(s)${walked}. End-to-end client path is healthy."
+	elif [ -z "$walked" ]; then
+		msg='No router-side layer needed fixing, but the path is still down — the cause is the VPS or config.'
 	else
-		msg="Repaired layer(s)${walked}, but the path is still not healthy — the remaining cause is VPS or config. Run Diagnose & Repair above."
+		msg="Repaired router layer(s)${walked}, but the path is still down — the remaining cause is the VPS or config."
 	fi
 	printf '{'
 	printf '"ok":'; json_bool "$([ "$e2e" = 'ok' ] && printf 1 || printf 0)"; printf ','

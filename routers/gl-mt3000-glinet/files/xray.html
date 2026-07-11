@@ -40,9 +40,9 @@
     <section class="card" id="pathHealthCard">
       <div class="path-health-head">
         <h2>Path Health</h2>
-        <button class="primary" id="pathHealthWalkBtn" type="button">Auto-Fix Router Path ▸</button>
+        <button class="primary" id="pathHealthWalkBtn" type="button">Diagnose &amp; Repair ▸</button>
       </div>
-      <p class="subcopy">Live decision tree — each layer checked top to bottom; the deepest broken layer is what to fix first. <strong>Auto-Fix Router Path</strong> restarts the broken <em>router-side</em> layers here (runtime / redsocks / transport). For a broken <em>VPS server</em> (node 6) or config drift (node 8), use <strong>Diagnose &amp; Repair</strong> in the Selected VPS card — the tree also tells you which one applies.</p>
+      <p class="subcopy">Live decision tree — each layer checked top to bottom; the deepest broken layer is fixed first. <strong>Diagnose &amp; Repair</strong> walks the whole tree bottom-up: it restarts the broken router-side layers (runtime / redsocks / transport) and, if the path is still down because of the VPS server or config, it runs the VPS repair too (progress and results appear in the Selected VPS card below). One button for the whole path.</p>
       <div id="pathHealthTree" class="tree">Loading path health…</div>
     </section>
 
@@ -102,13 +102,12 @@
         <div class="readonly-pane" style="margin-top:12px;background:#1a2733;border:1px solid #2c3f52;">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
             <div>
-              <div class="label" style="color:#e6d34a;">Diagnose &amp; Repair</div>
+              <div class="label" style="color:#e6d34a;">VPS Server Repair</div>
               <div class="hint" style="margin-top:4px;">
-                Runs one connected pipeline: SSH check → binary → systemd unit → dirs → permissions → TLS cert → config → firewall → runtime.
-                Each step self-heals when it can. Use this after a VPS reboot, reprovision, or when the path stops working.
+                The VPS-side half of <strong>Diagnose &amp; Repair</strong> (run it from Path Health above): SSH check → binary → systemd unit → dirs → permissions → TLS cert → config → firewall → runtime. Each step self-heals when it can. Progress, any password prompt, and the per-step result appear here.
               </div>
             </div>
-            <button class="warn-btn" id="diagnoseRepairBtn" style="min-width:180px;">Diagnose &amp; Repair</button>
+            <button class="warn-btn" id="diagnoseRepairBtn" style="min-width:180px;" hidden>Diagnose &amp; Repair</button>
           </div>
           <div id="repairProgress" style="margin-top:12px;display:none;padding:10px 12px;background:#141d26;border-radius:4px;border-left:3px solid #e6d34a;">
             <div style="display:flex;align-items:center;gap:10px;">
