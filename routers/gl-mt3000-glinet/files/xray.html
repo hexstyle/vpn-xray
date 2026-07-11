@@ -40,9 +40,9 @@
     <section class="card" id="pathHealthCard">
       <div class="path-health-head">
         <h2>Path Health</h2>
-        <button class="primary" id="pathHealthWalkBtn" type="button">Diagnose &amp; Repair Path ▸</button>
+        <button class="primary" id="pathHealthWalkBtn" type="button">Auto-Fix Router Path ▸</button>
       </div>
-      <p class="subcopy">Live decision tree — each layer is checked top to bottom; fix the deepest broken layer first. Reflects the real transparent client path (redsocks + nat), not just the direct proxy port. Diagnose &amp; Repair Path walks the tree and fixes the router-side layers bottom-up.</p>
+      <p class="subcopy">Live decision tree — each layer checked top to bottom; the deepest broken layer is what to fix first. <strong>Auto-Fix Router Path</strong> restarts the broken <em>router-side</em> layers here (runtime / redsocks / transport). For a broken <em>VPS server</em> (node 6) or config drift (node 8), use <strong>Diagnose &amp; Repair</strong> in the Selected VPS card — the tree also tells you which one applies.</p>
       <div id="pathHealthTree" class="tree">Loading path health…</div>
     </section>
 

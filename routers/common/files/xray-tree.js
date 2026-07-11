@@ -112,7 +112,7 @@
 
   async function onWalkClick(btn) {
     if (repairBusy) return;
-    if (!window.confirm("Diagnose & Repair the whole path?\nThis walks the tree and restarts the broken router-side layers (runtime / transparent proxy / transport), briefly interrupting client traffic.")) {
+    if (!window.confirm("Auto-Fix the router path?\nThis restarts the broken router-side layers (runtime / redsocks / transport), briefly interrupting client traffic. It does NOT touch the VPS server — for that, use Diagnose & Repair in the Selected VPS card.")) {
       return;
     }
     repairBusy = true;
