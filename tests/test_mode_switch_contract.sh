@@ -47,7 +47,7 @@ mode_timeout_ms="$(sed -n 's/^[[:space:]]*const RULES_MODE_TIMEOUT_MS = \([0-9][
 grep -q 'callApi(rulesApi, "set_mode", { mode }, { timeoutMs: RULES_STATUS_TIMEOUT_MS })' $HTML_FILE_IMPL \
 	|| fail "set_mode must start through a short-lived status request in xray.html"
 
-grep -q 'beginForegroundTask(`Applying ${mode} routing mode with hard cutover...`, RULES_MODE_TIMEOUT_MS);' $HTML_FILE_IMPL \
+grep -q 'beginForegroundTask(`Applying ${mode} routing mode with hard cutover...`, RULES_MODE_TIMEOUT_MS' $HTML_FILE_IMPL \
 	|| fail "mode foreground task must use RULES_MODE_TIMEOUT_MS in xray.html"
 
 grep -q 'async function waitForRulesJob' $HTML_FILE_IMPL \
