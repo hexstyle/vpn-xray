@@ -1,0 +1,156 @@
+#!/bin/sh
+# vpn-xray-uplink-guard — lightweight upstream/bridge keep-alive.
+#
+# Every POLL seconds it does a near-zero-cost probe of the current WAN uplink
+# (the repeater/bridge/tethering link that feeds the tunnel). When the link is
+# down it heals it: re-associate the uplink interface, re-pin the VPS host-route
+# for the (possibly new) gateway, and flush stale conntrack so xray reconnects
+# immediately — instead of the tunnel hanging until someone runs a fix by hand.
+#
+# SAFE: never unloads kernel modules (no mtk_warp_proxy), never reloads/bounces
+# the whole network, never touches the LAN AP, never changes persistent config.
+# Only acts on the WAN-side uplink interface + the VPS host-route + conntrack.
+#
+# Run modes:
+#   foreground loop (procd/service):  vpn-xray-uplink-guard
+#   one-shot check+heal (for testing): vpn-xray-uplink-guard once
+
+PATH="/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
+
+CONFIG="/etc/xray/codex-xray.json"
+READY="/etc/xray/codex-xray.ready"
+STATE_DIR="/var/run"
+LAST_HEAL_FILE="$STATE_DIR/vpn-xray-uplink-guard.last-heal"
+TAG="uplink-guard"
+
+POLL="${VPN_XRAY_GUARD_POLL:-30}"          # probe interval, seconds
+FAIL_THRESHOLD="${VPN_XRAY_GUARD_FAILS:-2}" # consecutive fails before healing
+HEAL_COOLDOWN="${VPN_XRAY_GUARD_COOLDOWN:-25}" # min seconds between heals
+PING_WAIT="${VPN_XRAY_GUARD_PING_WAIT:-2}"  # per-probe timeout, seconds
+
+# Use the project's authoritative switch/config helpers (current_switch_state
+# reads the physical GL switch GPIO; config_ready checks the ready file) rather
+# than re-deriving them. VX_CONFIG* must be set before sourcing.
+VX_CONFIG="$CONFIG"
+VX_CONFIG_READY="$READY"
+. "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}" 2>/dev/null || {
+	# Fallback if the lib is missing: degrade to a simple readiness check and
+	# assume the tunnel is requested, so the guard still runs.
+	config_ready() { [ -f "$READY" ] && [ -s "$CONFIG" ]; }
+	path_requested() { config_ready; }
+}
+
+log() { logger -t "$TAG" "$*" 2>/dev/null || printf '%s %s\n' "$TAG" "$*"; }
+
+ifstatus_val() { ifstatus "$1" 2>/dev/null | jsonfilter -e "$2" 2>/dev/null | sed -n '1p'; }
+
+# The logical uplink interface actually feeding the internet right now, plus its
+# device + gateway. Preference matches codex-xray: wired wan -> repeater/bridge
+# (wwan) -> tethering.
+current_uplink() {
+	local iface dev gw
+	for iface in wan wwan tethering; do
+		[ "$(ifstatus_val "$iface" '@.up')" = "true" ] || continue
+		dev="$(ifstatus_val "$iface" '@.l3_device')"
+		[ -n "$dev" ] || dev="$(ifstatus_val "$iface" '@.device')"
+		[ -n "$dev" ] || continue
+		gw="$(ifstatus_val "$iface" '@.route[0].nexthop')"
+		printf '%s|%s|%s\n' "$iface" "$dev" "$gw"
+		return 0
+	done
+	return 1
+}
+
+vps_ips() {
+	local addr
+	addr="$(jsonfilter -i "$CONFIG" -e '@.outbounds[0].settings.vnext[0].address' 2>/dev/null | sed -n '1p')"
+	[ -n "$addr" ] || return 0
+	case "$addr" in
+		*[!0-9.]*) nslookup "$addr" 2>/dev/null | sed -n 's/^Address [0-9]*: //p' | grep -E '^[0-9]+(\.[0-9]+){3}$' | sort -u ;;
+		*) printf '%s\n' "$addr" ;;
+	esac
+}
+
+# Light probe: is the uplink gateway reachable? A single ICMP to the local
+# gateway — this is the cheapest signal that the bridge/station link is alive.
+link_ok() {
+	local gw="$1"
+	[ -n "$gw" ] || return 1
+	ping -c1 -W"$PING_WAIT" "$gw" >/dev/null 2>&1
+}
+
+seconds_since() {
+	local f="$1" now mtime
+	[ -f "$f" ] || { printf '999999\n'; return; }
+	now="$(date +%s 2>/dev/null || echo 0)"
+	mtime="$(date -r "$f" +%s 2>/dev/null || echo 0)"
+	printf '%s\n' "$(( now - mtime ))"
+}
+
+heal() {
+	local iface="$1" dev="$2" ip
+	if [ "$(seconds_since "$LAST_HEAL_FILE")" -lt "$HEAL_COOLDOWN" ]; then
+		return 0
+	fi
+	: > "$LAST_HEAL_FILE" 2>/dev/null
+	log "uplink '${iface:-none}' link down — healing (reassociate + re-pin route + flush conntrack)"
+
+	# 1. Reconnect the uplink interface only (never the LAN AP, never a full
+	#    network reload). The link is already down here, so a full down/up bounce
+	#    is safe and reliably re-associates a dropped MediaTek client station
+	#    (apcli0 / wwan) — a bare `ifup` often does not re-trigger association.
+	if [ -n "$iface" ]; then
+		ifdown "$iface" >/dev/null 2>&1 || true
+		sleep 2
+		ifup "$iface" >/dev/null 2>&1 || true
+	else
+		for i in wan wwan tethering; do ifup "$i" >/dev/null 2>&1 || true; done
+	fi
+	sleep 6
+
+	# 2. Re-pin the VPS host-route for the (possibly new) gateway.
+	[ -x /etc/init.d/codex-xray ] && /etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true
+
+	# 3. Flush stale conntrack to the VPS so xray reconnects on the fresh path.
+	if command -v conntrack >/dev/null 2>&1; then
+		for ip in $(vps_ips); do
+			conntrack -D -d "$ip" >/dev/null 2>&1 || true
+		done
+	fi
+	ip -4 route flush cache >/dev/null 2>&1 || true
+}
+
+check_once() {
+	local up iface dev gw
+	config_ready || return 0
+	path_requested || return 0
+
+	up="$(current_uplink || true)"
+	iface="${up%%|*}"; up="${up#*|}"; dev="${up%%|*}"; gw="${up##*|}"
+
+	if link_ok "$gw"; then
+		FAILS=0
+		return 0
+	fi
+
+	FAILS=$((FAILS + 1))
+	if [ "$FAILS" -ge "$FAIL_THRESHOLD" ]; then
+		heal "$iface" "$dev"
+		FAILS=0
+	fi
+}
+
+FAILS=0
+case "${1:-loop}" in
+	once)
+		FAIL_THRESHOLD=1
+		check_once
+		;;
+	*)
+		log "started (poll=${POLL}s, fail_threshold=${FAIL_THRESHOLD}, cooldown=${HEAL_COOLDOWN}s)"
+		while :; do
+			check_once
+			sleep "$POLL"
+		done
+		;;
+esac
