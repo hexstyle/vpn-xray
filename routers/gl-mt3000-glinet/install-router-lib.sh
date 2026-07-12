@@ -146,6 +146,21 @@ wait_for_router_background_services_ready() {
   return 1
 }
 
+wait_for_transparent_path_ready() {
+  local attempt max_attempts sleep_seconds
+
+  max_attempts="${ROUTER_TRANSPROXY_READY_ATTEMPTS:-15}"
+  sleep_seconds="${ROUTER_TRANSPROXY_READY_INTERVAL:-2}"
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if router_ssh 'netstat -ltn 2>/dev/null | grep -q ":12345 " && iptables -t nat -S PREROUTING 2>/dev/null | grep -q CODEX_TRANSPROXY'; then
+      return 0
+    fi
+    sleep "$sleep_seconds"
+  done
+
+  return 1
+}
+
 cleanup() {
   rm -rf "$tmpdir"
 }
@@ -333,19 +348,53 @@ else
   echo "VPS_SSH is not configured; skipping admin panel VPS profile bootstrap."
 fi
 
-install_progress_begin "Reload router network"
-# Network reload is the last step — it drops all active SSH connections
-# to the router, so no SSH commands should follow it.
+install_progress_begin "Apply firewall/DNS config, keep WAN up"
+# History: this step used to run a full `/etc/init.d/network reload`, which
+# bounces EVERY interface including the WAN. That dropped xray's route to the
+# VPS ("dial ...:443: connect: no route to host") and flushed the transparent
+# nat, and the WAN then took ~90s to re-DHCP and re-assert — the recurring
+# outage that repeatedly took the router down mid-install.
+#
+# The install changes only `firewall` (WAN proxy rules) and `dhcp`/dns config
+# by default; it changes /etc/config/network ONLY under ISOLATE_WIFI_LAN_ONLY.
+# So in the normal case we apply exactly those with `firewall reload` +
+# `dnsmasq reload`, which touch no interface state and never drop SSH — the WAN
+# and xray's VPS connection stay up the whole time. A full network reload is
+# used only when the topology actually changed.
 if [[ "$NETWORK_RELOAD" == "1" ]]; then
-  router_ssh "nohup sh -c 'sleep 1; /etc/init.d/network reload >/tmp/vpn-xray-network-reload.log 2>&1 || true' >/dev/null 2>&1 &" >/dev/null 2>&1 || true
-  echo "Queued async network reload on $ROUTER_HOST"
-  echo "Waiting for router SSH to recover after network reload..."
-  sleep 3
-  if wait_for_router_after_network_reload; then
-    echo "Router is reachable again over SSH after network reload"
+  if [[ "${ISOLATE_WIFI_LAN_ONLY:-0}" == "1" ]]; then
+    # Rare path: ISOLATE_WIFI_LAN_ONLY rewrote /etc/config/network (LAN ports),
+    # which genuinely needs a full network reload. It drops SSH, so queue it
+    # async and wait for SSH to recover.
+    router_ssh "nohup sh -c 'sleep 1; /etc/init.d/network reload >/tmp/vpn-xray-network-reload.log 2>&1 || true' >/dev/null 2>&1 &" >/dev/null 2>&1 || true
+    echo "Queued async network reload on $ROUTER_HOST (ISOLATE_WIFI_LAN_ONLY topology change)"
+    echo "Waiting for router SSH to recover after network reload..."
+    sleep 3
+    if wait_for_router_after_network_reload; then
+      echo "Router is reachable again over SSH after network reload"
+    else
+      install_progress_fail "Router did not come back over SSH after network reload" "Verify both wired and Wi-Fi management access before re-running the install."
+      exit 1
+    fi
   else
-    install_progress_fail "Router did not come back over SSH after network reload" "Verify both wired and Wi-Fi management access before re-running the install."
-    exit 1
+    router_ssh "/etc/init.d/firewall reload >/dev/null 2>&1 || true; /etc/init.d/dnsmasq reload >/dev/null 2>&1 || /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+    echo "Applied firewall + DNS config on $ROUTER_HOST without bouncing the WAN"
+  fi
+
+  # `firewall reload` (and a full network reload) rebuild the nat table and drop
+  # the runtime CODEX_TRANSPROXY chain, which codex-transproxy adds via raw
+  # iptables outside uci. Re-assert the transparent path only if it is actually
+  # down (never tear down a working one), and wait for it to come back.
+  if router_ssh 'netstat -ltn 2>/dev/null | grep -q ":12345 " && iptables -t nat -S PREROUTING 2>/dev/null | grep -q CODEX_TRANSPROXY'; then
+    echo "Transparent path still up after config apply"
+  else
+    echo "Transparent path was flushed by the reload; re-asserting redsocks + CODEX_TRANSPROXY..."
+    router_ssh "/etc/init.d/codex-transproxy restart >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+    if wait_for_transparent_path_ready; then
+      echo "Transparent path re-asserted"
+    else
+      echo "Warning: transparent path not confirmed up yet; the checks below will verify and report."
+    fi
   fi
 fi
 
@@ -390,6 +439,23 @@ if [[ "${XRAY_RULES_MODE:-full}" == "selective" ]] \
 fi
 
 install_progress_begin "End-to-end probe through router proxy"
+# Final safety net: the config-apply step above already re-asserts the
+# transparent path, but heal it here too if anything (a late service restart)
+# left it down, so the probe below tests a real path. Only acts when actually
+# down — never tears down a working path. Safe: codex-transproxy stop()/start()
+# only touch redsocks + nat, never mtk_warp_proxy.
+if router_ssh 'netstat -ltn 2>/dev/null | grep -q ":12345 " && iptables -t nat -S PREROUTING 2>/dev/null | grep -q CODEX_TRANSPROXY'; then
+  echo "  Transparent path up"
+else
+  echo "  Transparent path down; re-asserting redsocks + CODEX_TRANSPROXY..."
+  router_ssh "/etc/init.d/codex-transproxy restart >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+  if wait_for_transparent_path_ready; then
+    echo "  Transparent path re-asserted"
+  else
+    echo "  Transparent path not confirmed up yet; the checks below will verify and report."
+  fi
+fi
+
 # Verify the data plane works the way the user actually consumes it.
 # Two-stage probe through the router HTTP-proxy port:
 #  1. Reachability: any HTTP response from chatgpt.com proves TCP+TLS+HTTP
