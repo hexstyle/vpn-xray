@@ -2,7 +2,61 @@
 # xray-admin-probe.sh — candidate probe, config build, and runtime control
 # for the xray-admin CGI. Deployed to /usr/share/vpn-xray/xray-admin-probe.sh
 # Sourced by /www/cgi-bin/xray-admin after lib-common.sh (shares its scope,
-# constants, and helper functions). Defines functions only; runs no code.
+# constants, and helper functions).
+
+# Self-contained defaults so the diagnostic helpers (probe/status/tree) give
+# CORRECT results when sourced standalone — e.g. the installer's node self-heal
+# or a shell one-liner — not just from the CGI. The CGI sets these before
+# sourcing, so ':=' keeps the CGI's values; standalone callers get the standard
+# router runtime layout (identical across profiles). Without these, node checks
+# like `service_running "$XRAY_PID"` see an empty var and falsely report the
+# node "failed", which would make a self-heal restart a healthy runtime.
+: "${BIN:=/usr/local/bin/codex-xray-core}"
+: "${XRAY_CONFIG:=/etc/xray/codex-xray.json}"
+: "${XRAY_PID:=/var/run/codex-xray.pid}"
+: "${REDSOCKS_PID:=/var/run/redsocks.pid}"
+: "${CONFIG_READY_FILE:=/etc/xray/codex-xray.ready}"
+: "${STATUS_FILE:=/tmp/xray-admin.status}"
+: "${LIVE_HTTP_PORT:=1083}"
+: "${LIVE_SOCKS_PORT:=1084}"
+: "${LOCAL_HTTP_PROXY:=http://127.0.0.1:1083}"
+: "${PROBE_CONFIG:=/tmp/codex-xray-probe.json}"
+: "${PROBE_PID:=/var/run/codex-xray-probe.pid}"
+: "${PROBE_STDOUT:=/tmp/codex-xray-probe.stdout}"
+: "${PROBE_HTTP_PORT:=18083}"
+: "${PROBE_SOCKS_PORT:=18084}"
+: "${SWITCH_SYNC_WAIT_SECONDS:=25}"
+: "${VX_CONFIG:=$XRAY_CONFIG}"
+: "${VX_CONFIG_READY:=$CONFIG_READY_FILE}"
+
+# Runtime/status helpers the diagnostic tree depends on. These are ALSO defined
+# inline in the admin CGI (which uses them before it sources this lib); defining
+# them here too makes the tree usable standalone (installer self-heal, one-liner
+# diagnostics). Keep the two copies identical — test_admin_helpers_shared guards
+# the drift.
+status_file_value() {
+	sed -n "s/^$1=//p" "$STATUS_FILE" 2>/dev/null | sed -n '1p'
+}
+status_file_set() {
+	local key="$1" value="$2" tmp
+	tmp="$(mktemp)"
+	if [ -f "$STATUS_FILE" ]; then
+		grep -v "^${key}=" "$STATUS_FILE" > "$tmp" || true
+	fi
+	printf '%s=%s\n' "$key" "$value" >> "$tmp"
+	mv "$tmp" "$STATUS_FILE"
+}
+service_running() {
+	local pidfile="$1" pid=''
+	pid="$(cat "$pidfile" 2>/dev/null || true)"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+listen_present() {
+	netstat -ltnp 2>/dev/null | grep -q ":$1 "
+}
+nat_rule_present() {
+	iptables -t nat -S PREROUTING 2>/dev/null | grep -q 'CODEX_TRANSPROXY'
+}
 
 build_config_file() {
 	local outfile="$1"
