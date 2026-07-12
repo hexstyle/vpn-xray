@@ -11,7 +11,7 @@ DIAG_MANIFEST="${VX_DIAG_MANIFEST:-/usr/share/vpn-xray/diag/nodes.manifest}"
 # tree_node_status <id> -> "status<TAB>detail"
 # status is one of: ok | degraded | failed | unknown | na
 tree_node_status() {
-	local id="$1" sw hs eg st istate isf
+	local id="$1" sw hs eg st istate isf gw3
 	sw="$(current_switch_state)"
 	case "$id" in
 		1)
@@ -23,10 +23,21 @@ tree_node_status() {
 				printf 'failed\tplatform files missing or stale — re-run install'
 			fi ;;
 		3)
-			if ip route show default 2>/dev/null | grep -q .; then
-				printf 'ok\tdefault route present'
-			else
+			# "default route present" is not enough: a bridge/repeater/tethering
+			# uplink can keep a stale default route while the link is actually
+			# dead (the 2026 flaky-upstream outages — route via 10.0.0.1 but no
+			# traffic). Probe the gateway so the node reflects real reachability.
+			if ! ip route show default 2>/dev/null | grep -q .; then
 				printf 'failed\tno default route — router uplink is down'
+			else
+				gw3="$(ip route show default 2>/dev/null | sed -n 's/.*via \([0-9.][0-9.]*\).*/\1/p' | sed -n '1p')"
+				if [ -z "$gw3" ]; then
+					printf 'ok\tuplink up (point-to-point, no gateway)'
+				elif ping -c1 -W1 "$gw3" >/dev/null 2>&1; then
+					printf 'ok\tuplink gateway reachable'
+				else
+					printf 'failed\tuplink gateway unreachable — upstream/bridge link down'
+				fi
 			fi ;;
 		4)
 			[ "$sw" = 'on' ] || { printf 'na\thardware switch is off'; return 0; }
@@ -98,13 +109,46 @@ tree_node_status() {
 	esac
 }
 
+# tree_uplink_iface — the logical uplink interface (wan/wwan/tethering) that is
+# currently up, for reconnecting a dropped bridge/repeater/tethering station.
+# Mirrors the uplink-guard's detection.
+tree_uplink_iface() {
+	local i
+	for i in wan wwan tethering; do
+		[ "$(ifstatus "$i" 2>/dev/null | jsonfilter -e '@.up' 2>/dev/null)" = 'true' ] && {
+			printf '%s\n' "$i"; return 0
+		}
+	done
+	return 1
+}
+
 # node_repair_run <id> — DO the router-side repair for one node. Returns
 # rc 0 = success (verified), 1 = ran but did not converge, 2 = no router repair.
 # Action only, no output — shared by single-node repair and the tree walk.
 # Only known-safe (recoverable) router-side repairs; VPS runtime (node 6) and
 # config apply (node 8) stay in the guarded diagnose_repair.
 node_repair_run() {
+	local u3 gw3r
 	case "$1" in
+		3)
+			# Uplink/bridge link down or stale route. Reconnect the current
+			# uplink interface (the same heal the uplink-guard runs — validated
+			# to reassociate the MediaTek apcli0 station in ~6s) and re-pin the
+			# VPS route. Never touches the LAN AP, never a full network reload.
+			u3="$(tree_uplink_iface || true)"
+			if [ -n "$u3" ]; then
+				ifdown "$u3" >/dev/null 2>&1 || true
+				sleep 2
+				ifup "$u3" >/dev/null 2>&1 || true
+			else
+				for u3 in wan wwan tethering; do ifup "$u3" >/dev/null 2>&1 || true; done
+			fi
+			sleep 6
+			[ -x /etc/init.d/codex-xray ] && /etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true
+			# success = default route present and its gateway reachable again
+			gw3r="$(ip route show default 2>/dev/null | sed -n 's/.*via \([0-9.][0-9.]*\).*/\1/p' | sed -n '1p')"
+			[ -z "$gw3r" ] && { ip route show default 2>/dev/null | grep -q . ; return $?; }
+			ping -c1 -W2 "$gw3r" >/dev/null 2>&1 ;;
 		4)
 			restart_runtime_from_saved_config >/dev/null 2>&1 ;;
 		4.1)
@@ -117,6 +161,11 @@ node_repair_run() {
 			sleep 1
 			listen_present 12345 && nat_rule_present ;;
 		5)
+			# Transport can fail from a stale VPS route after an uplink change
+			# ("no route to host"), not just a cert drift — re-pin the egress
+			# route first (this is what Repair was missing), then re-pin the cert
+			# if drifted and restart.
+			[ -x /etc/init.d/codex-xray ] && /etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true
 			[ -x /usr/bin/vpn-xray-repin-cert ] && /usr/bin/vpn-xray-repin-cert >/dev/null 2>&1
 			restart_runtime_from_saved_config >/dev/null 2>&1 ;;
 		*)
@@ -127,6 +176,8 @@ node_repair_run() {
 # node_repair_msg <id> <rc> — human message for a node_repair_run result.
 node_repair_msg() {
 	case "$1:$2" in
+		3:0)   printf 'Reconnected the uplink and re-pinned the VPS route; the gateway is reachable again.' ;;
+		3:1)   printf 'Reconnected the uplink but it still has no reachable gateway — the upstream (hotspot/repeater/cable) is down. Fix the upstream connection.' ;;
 		4:0)   printf 'Xray runtime restarted and re-synced to the hardware switch.' ;;
 		4.1:0) printf 'Transparent proxy restarted; redsocks is listening on :12345 and CODEX_TRANSPROXY is active.' ;;
 		5:0)   printf 'Re-pinned the VPS cert (if drifted) and restarted the runtime.' ;;
@@ -160,8 +211,14 @@ tree_repair_json() {
 	while [ "$rounds" -lt 5 ]; do
 		rounds=$((rounds + 1))
 		target=''
-		# dependency order (most foundational first): runtime, transproxy, transport
-		for st in 4 4.1 5; do
+		# dependency order (most foundational first): uplink, runtime,
+		# transproxy, transport. Uplink is first — nothing above it can be fixed
+		# while the router has no working internet.
+		for st in 3 4 4.1 5; do
+			# Attempt each node at most once per walk — a node that will not
+			# converge (e.g. node 3 when the upstream itself is dead) must not be
+			# repaired 5 times in a row (that would thrash the uplink).
+			case " $walked " in *" $st "*) continue ;; esac
 			if [ "$(tree_node_status "$st" | cut -f1)" = 'failed' ]; then
 				target="$st"; break
 			fi
