@@ -432,6 +432,28 @@ if [[ "${XRAY_RULES_MODE:-full}" == "selective" ]] \
 fi
 
 install_progress_begin "End-to-end probe through router proxy"
+# Self-heal the router runtime path with the SAME decision tree as the UI's
+# Diagnose & Repair before probing (installer-as-tree): if the Xray runtime
+# (node 4) or the transparent proxy (node 4.1) is down after the deploy/restart
+# churn, run its exact node_repair_run and re-verify. The tree is self-contained
+# (test_diag_tree_standalone). Each node is repaired at most once.
+router_ssh '
+  . /usr/share/vpn-xray/lib-common.sh 2>/dev/null || true
+  . /usr/share/vpn-xray/xray-admin-probe.sh 2>/dev/null || true
+  . /usr/share/vpn-xray/xray-admin-tree.sh 2>/dev/null || true
+  for n in 4 4.1; do
+    if [ "$(tree_node_status "$n" 2>/dev/null | cut -f1)" = failed ]; then
+      printf "  self-heal: node %s down after deploy; running its repair...\n" "$n"
+      node_repair_run "$n" >/dev/null 2>&1 || true
+      if [ "$(tree_node_status "$n" 2>/dev/null | cut -f1)" = failed ]; then
+        printf "  self-heal: node %s STILL down after repair\n" "$n"
+      else
+        printf "  self-heal: node %s recovered\n" "$n"
+      fi
+    fi
+  done
+' 2>&1 || true
+
 # Verify the data plane works the way the user actually consumes it.
 # Two-stage probe through the router HTTP-proxy port:
 #  1. Reachability: any HTTP response from chatgpt.com proves TCP+TLS+HTTP
@@ -523,10 +545,18 @@ if [[ "${e2e_ok:-0}" == "1" ]]; then
       echo "✓ Transparent path healthy: redsocks running and CODEX_TRANSPROXY active"
       ;;
     *)
-      install_progress_fail \
-        "Direct proxy works but the TRANSPARENT client path is down (${tp_state}); LAN clients would be blocked." \
-        "Bring it up: ssh $ROUTER_SSH '/etc/init.d/codex-transproxy restart; /etc/gl-switch.d/xray.sh on'. Then run Live Smoke in the UI to confirm."
-      e2e_ok=0
+      # Self-heal instead of failing hard (same as node 4.1 in Diagnose & Repair);
+      # the tunnel egress above already proved the VPS path works.
+      echo "  Transparent client path down (${tp_state}); self-healing..."
+      router_ssh "/etc/init.d/codex-transproxy restart >/dev/null 2>&1 || true; [ -x /etc/gl-switch.d/xray.sh ] && /etc/gl-switch.d/xray.sh on >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+      if wait_for_transparent_path_ready; then
+        echo "✓ Transparent path healed: redsocks running and CODEX_TRANSPROXY active"
+      else
+        install_progress_fail \
+          "Transparent client path stayed down after self-heal (${tp_state}); LAN clients would be blocked." \
+          "Recover: ssh $ROUTER_SSH '/etc/init.d/codex-transproxy restart'. Then run Live Smoke in the UI to confirm."
+        e2e_ok=0
+      fi
       ;;
   esac
 fi
