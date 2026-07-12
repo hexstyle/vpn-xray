@@ -495,7 +495,15 @@ for e2e_attempt in 1 2 3 4 5; do
   e2e_status="$(router_ssh "curl --proxy http://127.0.0.1:${PROXY_PORT} -ksS -o /dev/null -m ${e2e_timeout} -w '%{http_code}' $(shell_quote "$e2e_target") 2>/dev/null || true" 2>"$e2e_curl_err" | tr -d '\r' | sed -n '1p')"
   case "$e2e_status" in
     ''|000)
-      sleep 3
+      if [ "$e2e_attempt" = "2" ]; then
+        # Self-heal the transport (node 5): re-pin the VPS route + restart, in
+        # case an uplink change left a stale "no route to host". Once.
+        echo "  Reachability still failing; self-healing transport (re-pin VPS route + restart)..."
+        router_ssh '/etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true; /etc/init.d/codex-xray restart >/dev/null 2>&1 || true' >/dev/null 2>&1 || true
+        sleep 5
+      else
+        sleep 3
+      fi
       continue
       ;;
     *)
@@ -505,17 +513,14 @@ for e2e_attempt in 1 2 3 4 5; do
 done
 
 case "$e2e_status" in
-  '')
+  ''|000)
+    # Router runtime/transparent path were self-healed above and the transport
+    # re-pinned; if the tunnel still will not carry traffic the remaining cause
+    # is the router's internet uplink or the VPS/config.
     e2e_msg="$(sed -n '1p' "$e2e_curl_err" 2>/dev/null || true)"
     install_progress_fail \
-      "Could not reach ${e2e_target} through ${e2e_proxy}${e2e_msg:+ (${e2e_msg})}" \
-      "Check that the router HTTP proxy on port ${PROXY_PORT} is listening and the VPS Xray endpoint is reachable. Run: ssh $ROUTER_SSH 'logread -e codex-xray | tail'"
-    e2e_ok=0
-    ;;
-  000)
-    install_progress_fail \
-      "Router proxy did not respond for ${e2e_target} (curl reported HTTP 000)" \
-      "Confirm xray-core is running and listening on ${PROXY_PORT}. Run: ssh $ROUTER_SSH 'pgrep -af codex-xray-core; netstat -ltn | grep ${PROXY_PORT}'"
+      "Tunnel still not carrying traffic to ${e2e_target} (curl ${e2e_status:-no-response}${e2e_msg:+; ${e2e_msg}}) after self-healing the router path" \
+      "The router runtime is up, so the cause is upstream: (1) the router's own internet uplink (check it reaches 1.1.1.1), or (2) the VPS / config. Open the web UI and run Diagnose & Repair — it probes and repairs the VPS with the managed key. Router logs: ssh $ROUTER_SSH 'logread -e codex-xray | tail'"
     e2e_ok=0
     ;;
   *)
