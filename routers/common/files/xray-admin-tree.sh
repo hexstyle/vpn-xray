@@ -208,6 +208,10 @@ node_repair_json() {
 # Diagnose & Repair. Bounded to 5 rounds so a non-converging node cannot churn.
 tree_repair_json() {
 	local walked='' rounds=0 target st
+	# Refresh the smoke once up front so the transport node (5) is judged on
+	# current reality, not a stale cached result — otherwise the walk could skip
+	# a genuinely-failing transport or repair a healthy one.
+	smoke_json >/dev/null 2>&1 || true
 	while [ "$rounds" -lt 5 ]; do
 		rounds=$((rounds + 1))
 		target=''
