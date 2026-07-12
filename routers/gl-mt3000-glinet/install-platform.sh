@@ -227,6 +227,8 @@ EOF
 	copy_if_changed "$PROFILE_DIR/files/codex-xray-uplink.hotplug" /etc/hotplug.d/iface/95-codex-xray-uplink
 	copy_if_changed "$PROFILE_DIR/files/xray-switch-watchdog.init" /etc/init.d/xray-switch-watchdog
 	copy_if_changed "$PROFILE_DIR/files/xray-health-monitor.init" /etc/init.d/xray-health-monitor
+	copy_if_changed "$PROFILE_DIR/files/xray-uplink-guard.init" /etc/init.d/xray-uplink-guard
+	copy_if_changed "$PROFILE_DIR/files/vpn-xray-uplink-guard" /usr/bin/vpn-xray-uplink-guard
 	copy_if_changed "$COMMON_DIR/files/router-rules-sync.init" /etc/init.d/router-rules-sync
 	copy_if_changed "$COMMON_DIR/files/lib-common.sh" /usr/share/vpn-xray/lib-common.sh
 	copy_if_changed "$COMMON_DIR/files/xray-admin-probe.sh" /usr/share/vpn-xray/xray-admin-probe.sh
@@ -316,7 +318,7 @@ EOF
 		/www/xray-app-7.js \
 		/www/xray-tree.js \
 		/www/xray.html
-	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/xray-health-monitor /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/bin/vpn-xray-repin-cert /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/xray-admin-probe.sh /usr/share/vpn-xray/xray-admin-status.sh /usr/share/vpn-xray/xray-rules-jobs.sh /usr/share/vpn-xray/xray-rules-actions.sh /usr/share/vpn-xray/xray-rules-scripts.sh /usr/share/vpn-xray/xray-vps-profile.sh xray-vps-ssh.sh xray-vps-render.sh xray-vps-inspect.sh xray-vps-actions.sh xray-vps-setup.sh xray-vps-repair.sh /usr/share/vpn-xray/router-rules-external.py /usr/share/vpn-xray/router-rules-config.sh /usr/share/vpn-xray/router-rules-git.sh /usr/share/vpn-xray/router-rules-repo.sh /usr/share/vpn-xray/router-rules-remote.sh /usr/share/vpn-xray/router-rules-rulestree.sh /usr/share/vpn-xray/router-rules-external-a.sh /usr/share/vpn-xray/router-rules-external-b.sh /usr/share/vpn-xray/router-rules-ipset.sh /usr/share/vpn-xray/router-rules-apply.sh /usr/share/vpn-xray/router-rules-status.sh /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
+	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/xray-health-monitor /etc/init.d/xray-uplink-guard /usr/bin/vpn-xray-uplink-guard /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/bin/vpn-xray-repin-cert /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/xray-admin-probe.sh /usr/share/vpn-xray/xray-admin-status.sh /usr/share/vpn-xray/xray-rules-jobs.sh /usr/share/vpn-xray/xray-rules-actions.sh /usr/share/vpn-xray/xray-rules-scripts.sh /usr/share/vpn-xray/xray-vps-profile.sh xray-vps-ssh.sh xray-vps-render.sh xray-vps-inspect.sh xray-vps-actions.sh xray-vps-setup.sh xray-vps-repair.sh /usr/share/vpn-xray/router-rules-external.py /usr/share/vpn-xray/router-rules-config.sh /usr/share/vpn-xray/router-rules-git.sh /usr/share/vpn-xray/router-rules-repo.sh /usr/share/vpn-xray/router-rules-remote.sh /usr/share/vpn-xray/router-rules-rulestree.sh /usr/share/vpn-xray/router-rules-external-a.sh /usr/share/vpn-xray/router-rules-external-b.sh /usr/share/vpn-xray/router-rules-ipset.sh /usr/share/vpn-xray/router-rules-apply.sh /usr/share/vpn-xray/router-rules-status.sh /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
 	chmod 644 /www/xray.html /www/xray-base.css /www/xray-components.css /www/xray-app-1.js /www/xray-app-2.js /www/xray-app-3.js /www/xray-app-4.js /www/xray-app-5.js /www/xray-app-6.js /www/xray-app-7.js /www/xray-tree.js
 
 	rm -rf /usr/share/vpn-xray/vps
@@ -432,6 +434,7 @@ EOF
 		/etc/init.d/xray-switch-watchdog enable >/dev/null 2>&1 || true
 		/etc/init.d/xray-health-monitor enable >/dev/null 2>&1 || true
 		/etc/init.d/xray-health-monitor start >/dev/null 2>&1 || true
+		/etc/init.d/xray-uplink-guard enable >/dev/null 2>&1 || true
 		/etc/init.d/router-rules-sync enable >/dev/null 2>&1 || true
 		/etc/init.d/gl_switch_button_check stop >/dev/null 2>&1 || true
 		/etc/init.d/gl_switch_button_check disable >/dev/null 2>&1 || true
@@ -441,6 +444,7 @@ EOF
 		else
 			/usr/bin/router-rules sync-apply-xray >/dev/null 2>&1 || true
 			/etc/init.d/xray-switch-watchdog start >/dev/null 2>&1 || true
+			/etc/init.d/xray-uplink-guard start >/dev/null 2>&1 || true
 		fi
 		/etc/init.d/router-rules-sync start >/dev/null 2>&1 || true
 		mark_done services
