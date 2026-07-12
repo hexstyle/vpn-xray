@@ -439,22 +439,31 @@ if [[ "${XRAY_RULES_MODE:-full}" == "selective" ]] \
 fi
 
 install_progress_begin "End-to-end probe through router proxy"
-# Final safety net: the config-apply step above already re-asserts the
-# transparent path, but heal it here too if anything (a late service restart)
-# left it down, so the probe below tests a real path. Only acts when actually
-# down — never tears down a working path. Safe: codex-transproxy stop()/start()
-# only touch redsocks + nat, never mtk_warp_proxy.
-if router_ssh 'netstat -ltn 2>/dev/null | grep -q ":12345 " && iptables -t nat -S PREROUTING 2>/dev/null | grep -q CODEX_TRANSPROXY'; then
-  echo "  Transparent path up"
-else
-  echo "  Transparent path down; re-asserting redsocks + CODEX_TRANSPROXY..."
-  router_ssh "/etc/init.d/codex-transproxy restart >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
-  if wait_for_transparent_path_ready; then
-    echo "  Transparent path re-asserted"
-  else
-    echo "  Transparent path not confirmed up yet; the checks below will verify and report."
-  fi
-fi
+# Self-heal the router runtime path with the SAME decision tree as the UI's
+# Diagnose & Repair before probing (installer-as-tree): if the Xray runtime
+# (node 4) or the transparent proxy (node 4.1) is down after the deploy/restart
+# churn, run its exact node_repair_run and re-verify — so a transient disruption
+# is fixed here instead of failing the install. The tree is self-contained
+# (test_diag_tree_standalone), so a standalone source reports the real status.
+# Node 3 (uplink) is intentionally left to the uplink-guard: a Wi-Fi bounce
+# during the short install window would be counter-productive. Each node is
+# repaired at most once.
+router_ssh '
+  . /usr/share/vpn-xray/lib-common.sh 2>/dev/null || true
+  . /usr/share/vpn-xray/xray-admin-probe.sh 2>/dev/null || true
+  . /usr/share/vpn-xray/xray-admin-tree.sh 2>/dev/null || true
+  for n in 4 4.1; do
+    if [ "$(tree_node_status "$n" 2>/dev/null | cut -f1)" = failed ]; then
+      printf "  self-heal: node %s down after deploy; running its repair...\n" "$n"
+      node_repair_run "$n" >/dev/null 2>&1 || true
+      if [ "$(tree_node_status "$n" 2>/dev/null | cut -f1)" = failed ]; then
+        printf "  self-heal: node %s STILL down after repair\n" "$n"
+      else
+        printf "  self-heal: node %s recovered\n" "$n"
+      fi
+    fi
+  done
+' 2>&1 || true
 
 # Verify the data plane works the way the user actually consumes it.
 # Two-stage probe through the router HTTP-proxy port:
