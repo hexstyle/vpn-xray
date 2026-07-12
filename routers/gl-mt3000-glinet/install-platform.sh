@@ -138,6 +138,9 @@ install_platform() {
 
 	if ! is_done deps; then
 		info "Stopping vpn-xray runtime before file updates..."
+		# Pause the uplink-guard first so it cannot bounce the Wi-Fi upstream
+		# (a heal) in the middle of the install runtime restart and fight it.
+		/etc/init.d/xray-uplink-guard stop >/dev/null 2>&1 || true
 		/etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
 		/etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
 		/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true

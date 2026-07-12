@@ -553,10 +553,22 @@ if [[ "${e2e_ok:-0}" == "1" ]]; then
       echo "✓ Transparent path healthy: redsocks running and CODEX_TRANSPROXY active"
       ;;
     *)
-      install_progress_fail \
-        "Direct proxy works but the TRANSPARENT client path is down (${tp_state}); LAN clients would be blocked." \
-        "Bring it up: ssh $ROUTER_SSH '/etc/init.d/codex-transproxy restart; /etc/gl-switch.d/xray.sh on'. Then run Live Smoke in the UI to confirm."
-      e2e_ok=0
+      # Self-heal instead of failing hard. A runtime restart, a rules cutover,
+      # or an upstream Wi-Fi re-association mid-install can transiently drop the
+      # transparent path; the tunnel egress above already proved the VPS path
+      # works. Re-assert the transparent path (the same repair the UI's
+      # Diagnose & Repair node 4.1 runs) and re-verify — only fail if it truly
+      # will not come back. Safe: codex-transproxy touches only redsocks + nat.
+      echo "  Transparent client path down (${tp_state}); self-healing..."
+      router_ssh "/etc/init.d/codex-transproxy restart >/dev/null 2>&1 || true; /etc/gl-switch.d/xray.sh on >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+      if wait_for_transparent_path_ready; then
+        echo "✓ Transparent path healed: redsocks running and CODEX_TRANSPROXY active"
+      else
+        install_progress_fail \
+          "Transparent client path stayed down after self-heal (${tp_state}); LAN clients would be blocked." \
+          "Recover: ssh $ROUTER_SSH '/etc/init.d/codex-transproxy restart; /etc/gl-switch.d/xray.sh on'. Then run Live Smoke in the UI to confirm."
+        e2e_ok=0
+      fi
       ;;
   esac
 fi
