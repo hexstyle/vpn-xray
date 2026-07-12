@@ -77,6 +77,7 @@ usage() {
 	cat <<'EOF'
 router-rules commands:
   status-json
+  mode-json
   check-remote-rules
   ensure-git-key
   sync
@@ -117,6 +118,18 @@ case "$cmd" in
 			exit 0
 		fi
 		status_json
+		;;
+	mode-json)
+		# Lightweight, lock-free routing-mode probe. The full status_json forks
+		# ~100 subprocesses (git, ipset, external sources) and takes ~3.5s on the
+		# router; the UI toggle only needs the mode plus any in-flight set_mode
+		# job. This returns in a few ms so the toggle paints instantly and
+		# correctly instead of waiting on (or losing a lock race to) status_json.
+		printf '{"ok":true,"xray_mode":"%s","ui_job_state":"%s","ui_job_kind":"%s","ui_job_target_mode":"%s"}' \
+			"$(xray_mode)" \
+			"$(status_get ui_job_state)" \
+			"$(status_get ui_job_kind)" \
+			"$(status_get ui_job_target_mode)"
 		;;
 	check-remote-rules)
 		with_lock check_remote_rules_internal

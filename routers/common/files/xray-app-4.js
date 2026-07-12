@@ -160,6 +160,11 @@
           { include_rules_text: "0" },
           { timeoutMs: RULES_STATUS_TIMEOUT_MS }
         );
+        // A busy/error response carries no real job state — skip it instead of
+        // poisoning the render (which would flash a false mode/list).
+        if (data && data.ok === false) {
+          continue;
+        }
         state.rules = data;
         renderRules(data);
 
@@ -179,39 +184,73 @@
       throw new Error(`${label} is still not finished. Last router status: ${state.rules?.ui_job_message || state.rules?.sync_phase_message || "no final state yet"}`);
     }
 
+    // Poll the fast, lock-free mode probe until the router CONFIRMS the target
+    // mode with the set_mode job finished (or throw on failure/timeout). The
+    // immediate set_mode response's job state can be stale (the previous run's
+    // "success") before the new job registers as running — trusting it made the
+    // toggle bounce back to the old mode mid-apply. Confirming against
+    // mode_status (a few ms) also lets the UI observe completion quickly instead
+    // of waiting on 3.5s full-status polls.
+    async function confirmRulesMode(target, timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      await sleep(RULES_JOB_STATUS_DELAY_MS);
+      while (Date.now() < deadline) {
+        let data = null;
+        try {
+          data = await callApi(rulesApi, "mode_status", null, { timeoutMs: RULES_STATUS_TIMEOUT_MS });
+        } catch (err) {
+          data = null;
+        }
+        if (data && data.ok !== false && data.xray_mode) {
+          state.rulesModeQuick = data;
+          renderRulesModeUi(state.rules);
+          const jobRunning = data.ui_job_state === "running";
+          if (!jobRunning && (data.ui_job_state === "error" || data.ui_job_state === "failed")
+              && data.ui_job_target_mode === target && data.xray_mode !== target) {
+            throw new Error("router reported the mode change failed");
+          }
+          if (!jobRunning && data.xray_mode === target) {
+            return data;
+          }
+          flashLoading(`Applying ${target} routing mode... still working on the router.`);
+        }
+        await sleep(RULES_JOB_POLL_MS);
+      }
+      throw new Error(`${target} routing mode did not confirm in time`);
+    }
+
     async function setRulesMode(mode, input) {
-      state.pendingRulesPreviousMode = state.rules?.xray_mode || (mode === "selective" ? "full" : "selective");
+      state.pendingRulesPreviousMode = state.rules?.xray_mode
+        || state.rulesModeQuick?.xray_mode
+        || (mode === "selective" ? "full" : "selective");
       state.pendingRulesMode = mode;
+      // Pin the toggle to the TARGET immediately and keep it there (disabled,
+      // "Applying...") until the router confirms — no bounce-back.
       renderRulesModeUi(state.rules);
       updateRulesActionState();
       beginForegroundTask(`Applying ${mode} routing mode with hard cutover...`, RULES_MODE_TIMEOUT_MS, "rules");
       setBusy(input, true);
       try {
-        const data = await callApi(rulesApi, "set_mode", { mode }, { timeoutMs: RULES_STATUS_TIMEOUT_MS });
-        if (data.ok === false) {
-          throw new Error(data.error || "backend error");
+        const start = await callApi(rulesApi, "set_mode", { mode }, { timeoutMs: RULES_STATUS_TIMEOUT_MS });
+        if (start && start.ok === false) {
+          throw new Error(start.error || "backend error");
         }
-        state.rules = data;
-        renderRules(data);
-        const finalData = data.ui_job_state === "running"
-          ? await waitForRulesJob(`Applying ${mode} routing mode`, RULES_MODE_TIMEOUT_MS, data.ui_job_id || "")
-          : data;
+        await confirmRulesMode(mode, RULES_MODE_TIMEOUT_MS);
         state.pendingRulesMode = "";
         state.pendingRulesPreviousMode = "";
-        state.rules = finalData;
-        renderRules(finalData);
         await refreshAll(false, false, true);
+        await refreshRules(false, true);
         flash(`Routing mode applied locally with hard cutover: ${mode}.`, "good");
       } catch (err) {
         const rollbackMode = state.pendingRulesPreviousMode || (mode === "selective" ? "full" : "selective");
         state.pendingRulesMode = "";
         state.pendingRulesPreviousMode = "";
-        if (state.rules) {
-          renderRules(state.rules);
-        } else if (input) {
+        // Repaint the router's REAL state rather than guessing.
+        await refreshRulesMode();
+        if (!state.rulesModeQuick && input) {
           input.checked = rollbackMode === "selective";
-          renderRulesModeUi({ xray_mode: rollbackMode });
         }
+        renderRulesModeUi(state.rules);
         flash(`Routing mode change failed: ${err.message}`, "bad");
         document.getElementById("rulesTraceOutput").textContent = `Routing mode change failed: ${err.message}`;
       } finally {

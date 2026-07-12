@@ -256,14 +256,14 @@
         </div>
         <div class="field field-full" style="margin-top:12px;">
           <label for="rulesModeToggle">Routing Mode On This Router</label>
-          <div class="toggle-row">
+          <div class="toggle-row toggle-loading">
             <span class="toggle-label">Full</span>
             <label class="toggle-switch" for="rulesModeToggle">
-              <input type="checkbox" id="rulesModeToggle" aria-label="Selective routing mode">
+              <input type="checkbox" id="rulesModeToggle" aria-label="Selective routing mode" disabled>
               <span class="toggle-slider"></span>
             </label>
             <span class="toggle-label">Selective</span>
-            <span class="toggle-state" id="rulesModeStateText">Applying current mode...</span>
+            <span class="toggle-state loading" id="rulesModeStateText">Loading routing mode…</span>
           </div>
           <div class="hint" id="rulesModeHint">
             This switch applies locally on this router only and performs an immediate reset/cutover so the new mode is active right away. Shared addresses affect traffic only when the GL.iNet VPN switch is ON and this mode is set to <code>selective</code>. <code>full</code> keeps the current behavior. <code>selective</code> redirects literal IP/CIDR entries directly and tracks domain entries through <code>dnsmasq -&gt; ipset</code>.

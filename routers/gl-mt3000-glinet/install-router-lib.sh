@@ -407,10 +407,32 @@ e2e_ip_target="${VPN_XRAY_E2E_IP_TARGET:-https://api.ipify.org}"
 set +e
 e2e_status=''
 e2e_curl_err=''
+# The rules/mode apply just before this step can force-restart xray; a single
+# probe fired while it is still coming up returns HTTP 000 and used to fail the
+# whole install (and blink the UI red) even though the router recovers seconds
+# later. Retry the reachability probe a few times — only 000/empty (not-ready)
+# are retriable; any real HTTP status (incl. antibot 4xx) counts as reachable.
+e2e_attempts="${VPN_XRAY_E2E_ATTEMPTS:-5}"
+e2e_retry_sleep="${VPN_XRAY_E2E_RETRY_SLEEP:-3}"
 if command -v curl >/dev/null 2>&1; then
   e2e_curl_err="$(mktemp)"
-  e2e_status="$(curl --proxy "$e2e_proxy" -ksS -o /dev/null -m "$e2e_timeout" \
-    -w '%{http_code}' "$e2e_target" 2>"$e2e_curl_err" || true)"
+  e2e_i=1
+  while [ "$e2e_i" -le "$e2e_attempts" ]; do
+    e2e_status="$(curl --proxy "$e2e_proxy" -ksS -o /dev/null -m "$e2e_timeout" \
+      -w '%{http_code}' "$e2e_target" 2>"$e2e_curl_err" || true)"
+    case "$e2e_status" in
+      ''|000)
+        if [ "$e2e_i" -lt "$e2e_attempts" ]; then
+          echo "  Reachability attempt ${e2e_i}/${e2e_attempts}: proxy not ready yet (xray may still be restarting); retrying in ${e2e_retry_sleep}s..."
+          sleep "$e2e_retry_sleep"
+        fi
+        ;;
+      *)
+        break
+        ;;
+    esac
+    e2e_i=$((e2e_i + 1))
+  done
 fi
 
 case "$e2e_status" in

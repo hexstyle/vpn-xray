@@ -321,3 +321,32 @@
       color: var(--muted);
     }
 
+    /* Indeterminate switch = routing mode not known yet (loading). Neutral
+       track with the knob centred so it reads as "unset", not Full/Selective. */
+    .toggle-switch input:indeterminate + .toggle-slider {
+      background: #9fb0c0;
+      opacity: 0.7;
+    }
+    .toggle-switch input:indeterminate + .toggle-slider::after {
+      transform: translateX(12px);
+    }
+    .toggle-row.toggle-loading .toggle-label { opacity: 0.55; }
+
+    /* Spinner while the routing mode is loading or being applied — makes it
+       obvious the switch is working rather than showing a stale/false state. */
+    .toggle-state.loading,
+    .toggle-state.applying {
+      color: var(--accent);
+      gap: 8px;
+    }
+    .toggle-state.loading::before,
+    .toggle-state.applying::before {
+      content: "";
+      width: 13px;
+      height: 13px;
+      border: 2px solid rgba(11, 95, 255, 0.3);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: repairspin 0.7s linear infinite;
+    }
+

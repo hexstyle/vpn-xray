@@ -215,18 +215,42 @@
 
     function renderRulesModeUi(data = state.rules) {
       const mode = effectiveRulesMode(data);
-      const pending = !!state.pendingRulesMode || (data?.ui_job_state === "running" && data?.ui_job_kind === "set_mode");
+      const applying = !!state.pendingRulesMode
+        || (backendPendingRulesMode(data) !== "");
       const modeToggle = document.getElementById("rulesModeToggle");
-      if (modeToggle) {
-        modeToggle.checked = mode === "selective";
-      }
       const modeStateText = document.getElementById("rulesModeStateText");
+      const row = modeToggle ? modeToggle.closest(".toggle-row") : null;
+
+      // Unknown/loading: the router's real mode is not known yet (nothing
+      // loaded, or only a busy/error response arrived). Show a loader and an
+      // indeterminate switch instead of a misleading Full/Selective.
+      if (!mode) {
+        if (modeToggle) {
+          modeToggle.indeterminate = true;
+          modeToggle.disabled = true;
+        }
+        if (row) row.classList.add("toggle-loading");
+        if (modeStateText) {
+          modeStateText.textContent = "Loading routing mode…";
+          modeStateText.className = "toggle-state loading";
+        }
+        return;
+      }
+
+      if (row) row.classList.remove("toggle-loading");
+      if (modeToggle) {
+        modeToggle.indeterminate = false;
+        modeToggle.checked = mode === "selective";
+        // While applying, keep the switch on the TARGET mode but locked so it
+        // cannot bounce back to the old state; otherwise it tracks live state.
+        modeToggle.disabled = applying || state.foregroundBusy || !state.uiReady;
+      }
       if (modeStateText) {
-        if (pending) {
+        if (applying) {
           modeStateText.textContent = mode === "selective"
-            ? "Applying selective routing on this router..."
-            : "Applying full routing on this router...";
-          modeStateText.className = "toggle-state warn";
+            ? "Applying selective routing on this router…"
+            : "Applying full routing on this router…";
+          modeStateText.className = "toggle-state applying";
         } else {
           modeStateText.textContent = mode === "selective"
             ? "Selective routing is active on this router."

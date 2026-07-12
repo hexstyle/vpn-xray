@@ -45,6 +45,8 @@
       rulesConfigDirty: false,
       pendingRulesMode: "",
       pendingRulesPreviousMode: "",
+      rulesModeQuick: null,
+      rulesLoaded: false,
       rulesEditorBaseHead: "",
       rulesTextLoaded: false,
       rulesTextChecksum: "",
@@ -407,8 +409,12 @@
     }
 
     function backendPendingRulesMode(data = state.rules) {
-      if (data?.ui_job_state === "running" && data?.ui_job_kind === "set_mode" && data?.ui_job_target_mode) {
-        return data.ui_job_target_mode;
+      // Prefer the full status when it is a real payload; otherwise fall back to
+      // the fast mode probe so an in-flight set_mode is still reflected while
+      // the heavy status is loading or lost a lock race (returned busy).
+      const src = (data && data.ok !== false) ? data : (state.rulesModeQuick || data);
+      if (src?.ui_job_state === "running" && src?.ui_job_kind === "set_mode" && src?.ui_job_target_mode) {
+        return src.ui_job_target_mode;
       }
       return "";
     }
@@ -448,7 +454,13 @@
       }, RULES_JOB_POLL_MS);
     }
 
+    // Returns "" when the real routing mode is not known yet — nothing loaded,
+    // or only a busy/error response arrived. Callers must treat "" as "loading"
+    // and must NOT fall back to a concrete mode, so the UI never shows a
+    // misleading "Full" before the router's real state is known.
     function effectiveRulesMode(data = state.rules) {
-      return state.pendingRulesMode || backendPendingRulesMode(data) || data?.xray_mode || "full";
+      const fullMode = (data && data.ok !== false) ? (data.xray_mode || "") : "";
+      const quickMode = state.rulesModeQuick?.xray_mode || "";
+      return state.pendingRulesMode || backendPendingRulesMode(data) || fullMode || quickMode || "";
     }
 

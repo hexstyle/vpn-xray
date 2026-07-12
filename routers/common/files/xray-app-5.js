@@ -15,7 +15,16 @@
           { include_rules_text: includeRulesText ? "1" : "0" },
           { timeoutMs: includeRulesText ? RULES_TEXT_TIMEOUT_MS : RULES_STATUS_TIMEOUT_MS }
         );
+        // A busy/error response (e.g. a concurrent status query lost the
+        // non-blocking lock) carries no real mode or list. Do NOT overwrite the
+        // last good state with it — that is what used to flip the toggle to a
+        // false "Full" and blank the list. Keep the last render; the next poll
+        // (and the fast mode probe) will refresh.
+        if (data && data.ok === false) {
+          return;
+        }
         state.rules = data;
+        state.rulesLoaded = true;
         renderRules(data);
         if (
           !includeRulesText &&
@@ -29,11 +38,31 @@
             { include_rules_text: "1" },
             { timeoutMs: RULES_TEXT_TIMEOUT_MS }
           );
+          if (fullData && fullData.ok === false) {
+            return;
+          }
           state.rules = fullData;
           renderRules(fullData);
         }
       } finally {
         state.rulesBusy = false;
+      }
+    }
+
+    // Fast, lock-free routing-mode probe (action=mode_status). Returns in a few
+    // ms instead of the ~3.5s full status, so the toggle paints the router's
+    // real mode immediately on load and stays correct even while the heavy
+    // status is loading, busy, or lost a lock race. Best-effort: the full
+    // status remains the fallback source of the mode.
+    async function refreshRulesMode() {
+      try {
+        const data = await callApi(rulesApi, "mode_status", null, { timeoutMs: RULES_STATUS_TIMEOUT_MS });
+        if (data && data.ok !== false && data.xray_mode) {
+          state.rulesModeQuick = data;
+          renderRulesModeUi(state.rules);
+        }
+      } catch (err) {
+        /* best-effort; toggle falls back to the full status */
       }
     }
 

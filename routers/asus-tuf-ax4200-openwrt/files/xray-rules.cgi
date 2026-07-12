@@ -235,6 +235,13 @@ case "$(request_value action)" in
 	''|status)
 		status_action
 		;;
+	mode_status)
+		# Fast, lock-free routing-mode probe for the toggle (see router-rules
+		# mode-json). Lets the UI paint the real mode in a few ms instead of
+		# waiting on the ~3.5s full status.
+		emit_header
+		/usr/bin/router-rules mode-json
+		;;
 	save_config)
 		save_config_action
 		;;

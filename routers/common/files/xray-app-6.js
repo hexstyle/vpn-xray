@@ -414,6 +414,19 @@
     setStartupControlsDisabled(true);
     flashLoading("Loading current router and VPS state...");
 
+    // Paint the routing-mode loader immediately (no misleading Full), then hit
+    // the fast lock-free probe so the real mode shows in ~ms rather than after
+    // the ~3.5s full status.
+    renderRulesModeUi();
+    refreshRulesMode();
+
+    // Same for the shared-rules list: show a loader until the first real status
+    // arrives, so the summary never reads a stale/empty "0 rules" while loading.
+    const rulesChipsEl = document.getElementById("rulesSummaryChips");
+    if (rulesChipsEl) {
+      rulesChipsEl.innerHTML = '<span class="chip loading">Loading rules…</span>';
+    }
+
     callApi(runtimeApi, "status", null, { timeoutMs: 8000 })
       .then((runtime) => {
         state.runtime = runtime;
@@ -440,5 +453,6 @@
     setInterval(() => {
       refreshAll(false, false).catch(() => {});
       refreshRules(false).catch(() => {});
+      refreshRulesMode();
     }, 15000);
 

@@ -461,6 +461,11 @@ set_mode_cutover_internal() {
 	local mode="$1"
 
 	set_xray_mode_internal "$mode" || return 1
+	# Must be a FULL cutover: switching full->selective has to (re)build the
+	# complete selective ipset. The fast path (REUSE_RESOLVED_CACHE +
+	# INCREMENTAL_IPSET) only adds diffs and leaves the set incomplete after a
+	# mode change, which silently drops listed targets (e.g. 2ip.io) from
+	# selective routing. Correctness over speed here.
 	hard_cutover_xray_internal
 }
 
