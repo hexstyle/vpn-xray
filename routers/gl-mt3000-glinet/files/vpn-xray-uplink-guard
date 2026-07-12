@@ -95,15 +95,18 @@ heal() {
 	: > "$LAST_HEAL_FILE" 2>/dev/null
 	log "uplink '${iface:-none}' link down — healing (reassociate + re-pin route + flush conntrack)"
 
-	# 1. Re-associate / re-DHCP the uplink interface only (never the LAN AP,
-	#    never a full network reload). Bring up whichever candidate exists so a
-	#    dropped bridge/repeater station reconnects.
+	# 1. Reconnect the uplink interface only (never the LAN AP, never a full
+	#    network reload). The link is already down here, so a full down/up bounce
+	#    is safe and reliably re-associates a dropped MediaTek client station
+	#    (apcli0 / wwan) — a bare `ifup` often does not re-trigger association.
 	if [ -n "$iface" ]; then
+		ifdown "$iface" >/dev/null 2>&1 || true
+		sleep 2
 		ifup "$iface" >/dev/null 2>&1 || true
 	else
 		for i in wan wwan tethering; do ifup "$i" >/dev/null 2>&1 || true; done
 	fi
-	sleep 5
+	sleep 6
 
 	# 2. Re-pin the VPS host-route for the (possibly new) gateway.
 	[ -x /etc/init.d/codex-xray ] && /etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true
