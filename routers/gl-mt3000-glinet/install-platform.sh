@@ -425,6 +425,10 @@ EOF
 	exec </dev/null
 	if [ "$FILES_CHANGED" = '1' ] || ! is_done services; then
 		info "Restarting router services..."
+		# Pause the uplink-guard here too (not only in the deps block): on a
+		# re-install where deps is already done, only this block runs, and the
+		# guard must not bounce the Wi-Fi uplink during the runtime restart.
+		/etc/init.d/xray-uplink-guard stop >/dev/null 2>&1 || true
 		/etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
 		/etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
 		/etc/init.d/firewall reload >/dev/null 2>&1 || true

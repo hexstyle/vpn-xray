@@ -235,12 +235,18 @@ tree_repair_json() {
 	# reality, not a stale pre-repair result — the caller decides whether to
 	# escalate to the VPS repair based on this.
 	smoke_json >/dev/null 2>&1 || true
-	local e2e msg
+	local e2e msg uplink
 	e2e="$(tree_node_status 7 | cut -f1)"
+	uplink="$(tree_node_status 3 | cut -f1)"
 	if [ -z "$walked" ] && [ "$e2e" = 'ok' ]; then
 		msg='No router-side layer was broken and the path is healthy.'
 	elif [ "$e2e" = 'ok' ]; then
 		msg="Repaired router layer(s)${walked}. End-to-end client path is healthy."
+	elif [ "$uplink" = 'failed' ]; then
+		# Distinguish the uplink cause from VPS/config: if node 3 will not come
+		# back, the router itself has no working internet (upstream hotspot/
+		# repeater/cable is down) — no tunnel repair can fix that.
+		msg="Tried to reconnect the uplink${walked:+ (repaired${walked})}, but the router still has no working internet — the upstream connection (hotspot/repeater/cable) is down. Fix the upstream; this is not the tunnel or the VPS."
 	elif [ -z "$walked" ]; then
 		msg='No router-side layer needed fixing, but the path is still down — the cause is the VPS or config.'
 	else
