@@ -32,4 +32,7 @@ Use these as primary checks:
 - `https://www.google.com`
 - `https://ifconfig.me/ip`
 - `https://ipinfo.io/ip`
+
+Advisory only (VPS IP reputation can cause blocks even when transport is healthy):
+
 - `https://api.openai.com/v1/models`

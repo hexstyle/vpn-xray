@@ -9,7 +9,10 @@ This folder contains shared bootstrap and validation helpers used by:
 - `init-env.sh`
   - fills `install.env` from `install.env.example`
   - derives hosts from SSH targets
-  - generates the Xray UUID, Reality keypair, and short ID
+  - generates the Xray UUID, keypair, and short ID
+- `adopt-vps-meta.sh`
+  - reads authoritative Xray keys from the VPS managed meta over SSH
+  - writes them into `install.env` before validation so keys never drift
 - `validate-env.sh`
   - verifies that the chosen router and VPS profiles exist
   - checks that the required SSH and Xray values are no longer placeholders

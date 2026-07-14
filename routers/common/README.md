@@ -10,3 +10,5 @@ Current shared pieces:
   - background sync service
 - `router-rules.config.template`
   - rendered router-side config for the shared-rules tool
+- `files/xray-diag-capture.sh`
+  - rate-limited (30 min), single-instance diagnostic snapshot; preserves 5 most recent captures

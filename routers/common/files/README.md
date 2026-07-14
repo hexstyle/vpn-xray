@@ -8,3 +8,5 @@ These files are copied to supported OpenWrt-based routers and reused by more tha
   - background sync service
 - `router-rules.config.template`
   - rendered config for the shared-rules tool
+- `xray-diag-capture.sh`
+  - rate-limited (30 min), single-instance diagnostic snapshot; preserves 5 most recent captures

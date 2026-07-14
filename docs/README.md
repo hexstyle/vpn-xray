@@ -11,10 +11,6 @@ Read these in order:
 5. [Shared Rules](./SHARED-RULES.md)
 6. [Architecture](./ARCHITECTURE.md)
 
-Optional background:
-
-- [UI Extensibility Notes](./UI-EXTENSIBILITY.md)
-
 ## Human / Agent Index
 
 The same documentation should work for both a person and automation:
