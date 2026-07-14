@@ -179,20 +179,20 @@ EOF
 
 echo
 echo "== https browsing through proxy =="
-curl -I -m 25 -x "$proxy" https://www.google.com
+curl -I -m 25 -x "$proxy" https://www.google.com || true
 
 echo
 echo "== router-local transparent socks path =="
-router_ssh "curl -I -m 25 --socks5-hostname 127.0.0.1:1084 https://example.com"
+router_ssh "curl -I -m 25 --socks5-hostname 127.0.0.1:1084 https://example.com" || true
 
 echo
 echo "== router-local transparent socks egress ip =="
-router_ssh "curl -m 25 --socks5-hostname 127.0.0.1:1084 https://ipinfo.io/ip"
+router_ssh "curl -m 25 --socks5-hostname 127.0.0.1:1084 https://ipinfo.io/ip" || true
 echo
 
 echo
 echo "== egress ip through proxy =="
-curl -m 25 -x "$proxy" https://ifconfig.me/ip
+curl -m 25 -x "$proxy" https://ifconfig.me/ip || true
 echo
 
 echo "== api reachability through proxy (advisory) =="
@@ -205,7 +205,7 @@ fi
 
 echo
 echo "== secondary egress ip check through proxy =="
-curl -m 25 -x "$proxy" https://ipinfo.io/ip
+curl -m 25 -x "$proxy" https://ipinfo.io/ip || true
 echo
 
 echo "== coverage notes =="

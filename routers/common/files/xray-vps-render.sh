@@ -206,6 +206,7 @@ render_server_config() {
 	template_path="$(vps_profile_file_path "$vps_profile" "$template_rel")"
 	[ -f "$template_path" ] || return 1
 	render_vps_profile_template "$profile_id" "$template_path" "$path"
+	chmod 600 "$path"
 }
 
 render_remote_meta() {

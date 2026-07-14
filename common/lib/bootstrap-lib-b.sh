@@ -317,7 +317,8 @@ router_bootstrap_key_works() {
     return 1
   }
 
-  if router_ssh "ssh -i '$remote_key' -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -p '$VPS_SSH_PORT' '$VPS_SSH_USER@$VPS_SSH_HOST' 'echo ok' >/dev/null 2>&1"; then
+  # UserKnownHostsFile=/dev/null: throwaway connectivity probe, intentionally unverified.
+  if router_ssh "ssh -i '$remote_key' -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p '$VPS_SSH_PORT' '$VPS_SSH_USER@$VPS_SSH_HOST' 'echo ok' >/dev/null 2>&1"; then
     rc=0
   fi
 
