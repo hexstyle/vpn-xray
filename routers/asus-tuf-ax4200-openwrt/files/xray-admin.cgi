@@ -12,7 +12,7 @@ PROBE_PID='/var/run/codex-xray-probe.pid'
 PROBE_STDOUT='/tmp/codex-xray-probe.stdout'
 PROBE_HTTP_PORT='18083'
 PROBE_SOCKS_PORT='18084'
-LOCAL_HTTP_PROXY='http://127.0.0.1:1083'
+LOCAL_HTTP_PROXY="${LOCAL_HTTP_PROXY:-http://127.0.0.1:1083}"
 LIVE_HTTP_PORT='1083'
 LIVE_SOCKS_PORT='1084'
 CONFIG_READY_FILE='/etc/xray/codex-xray.ready'
@@ -86,9 +86,17 @@ live_socks_port() {
 . "${VX_ADMIN_STATUS_LIB:-/usr/share/vpn-xray/xray-admin-status.sh}"
 . "${VX_ADMIN_TREE_LIB:-/usr/share/vpn-xray/xray-admin-tree.sh}"
 
+_wait_for_xray_pid() {
+	_i=0
+	while [ "$_i" -lt 5 ] && ! cat /var/run/codex-xray.pid >/dev/null 2>&1; do
+		sleep 1
+		_i=$((_i + 1))
+	done
+}
+
 action_sync() {
 	if sync_to_hardware_switch; then
-		sleep 2
+		_wait_for_xray_pid
 		emit_ok_with_status sync
 	else
 		emit_error sync 'Failed to resync runtime state from the hardware switch.'
@@ -97,7 +105,7 @@ action_sync() {
 
 action_restart() {
 	if restart_runtime_from_saved_config; then
-		sleep 2
+		_wait_for_xray_pid
 		emit_ok_with_status restart
 	else
 		emit_error restart 'Failed to restart runtime and reapply the current hardware-switch state.'
@@ -106,7 +114,7 @@ action_restart() {
 
 action_recover() {
 	if restart_runtime_from_saved_config; then
-		sleep 2
+		_wait_for_xray_pid
 		emit_ok_with_status recover
 	else
 		emit_error recover 'Failed to clear fail-safe hold and restart the Xray path.'
@@ -192,7 +200,7 @@ action_save() {
 		return 0
 	fi
 
-	sleep 2
+	_wait_for_xray_pid
 	emit_header
 	printf '{'
 	printf '"ok":true,'
