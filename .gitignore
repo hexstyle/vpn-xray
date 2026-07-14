@@ -5,3 +5,4 @@ tmp/
 install.env
 install.*.env
 /todo.md
+docs/CURRENT-LAB-STATE.md
