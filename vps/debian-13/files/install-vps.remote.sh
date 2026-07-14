@@ -165,14 +165,19 @@ step_binary() {
 	fi
 
 	# Last-resort: try official install script if the VPS has internet.
+	# TODO: pin _install_url to a known-good commit hash, e.g.:
+	#   https://github.com/XTLS/Xray-install/raw/<commit>/install-release.sh
+	# The sha256 printed below helps identify the exact version that ran.
+	local _install_url='https://github.com/XTLS/Xray-install/raw/main/install-release.sh'
 	local tmp='/tmp/install-xray-fallback.sh'
 	if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
 		if command -v curl >/dev/null 2>&1; then
-			curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh -o "$tmp" 2>/dev/null || rm -f "$tmp"
+			curl -fsSL "$_install_url" -o "$tmp" 2>/dev/null || rm -f "$tmp"
 		else
-			wget -qO "$tmp" https://github.com/XTLS/Xray-install/raw/main/install-release.sh 2>/dev/null || rm -f "$tmp"
+			wget -qO "$tmp" "$_install_url" 2>/dev/null || rm -f "$tmp"
 		fi
 		if [ -s "$tmp" ]; then
+			echo "install-release.sh sha256: $(sha256sum "$tmp" | cut -d' ' -f1)" >&2
 			bash "$tmp" install >/dev/null 2>&1
 			rm -f "$tmp"
 		fi
