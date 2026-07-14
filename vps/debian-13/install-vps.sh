@@ -154,10 +154,14 @@ render_template() {
   local output="$2"
   python3 - <<'PY' "$input" "$output"
 import os, pathlib, re, sys
-template = pathlib.Path(sys.argv[1]).read_text()
+template_path = pathlib.Path(sys.argv[1])
+template = template_path.read_text()
 def repl(match):
     key = match.group(1)
-    return os.environ[key]
+    try:
+        return os.environ[key]
+    except KeyError:
+        raise SystemExit(f"Template {template_path} requires env variable {key}, but it is missing")
 pathlib.Path(sys.argv[2]).write_text(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
 PY
 }
