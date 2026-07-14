@@ -289,6 +289,22 @@ UI behavior in `xray.html`:
 - when that toggle is `ON`, the router expects `lists/shared-targets.txt` to exist in the configured repository
 - if that file is missing or Git auth fails, the Git sync check fails and the router falls back to local-only mode
 
+## Recovery — If Installation Fails Mid-Way
+
+- **SSH dropped during WAN bounce (step 7)** — config was applied but SSH lost. Wait 30s, then re-run the installer. It is idempotent and will pick up where it left off.
+
+- **Xray config fails validation (step 5)** — the previous config is preserved. Fix `install.env` (keys/address), then re-run.
+
+- **VPS SSH registration failed (step 6)** — admin panel VPS sync will not work until the key is registered. Run `make register-vps-key` or re-run the full installer to retry.
+
+- **Router SSH unreachable after deploy (step 8)** — power-cycle the router, then re-run the installer. The installer uses its own known_hosts cache (`tmp/ssh/known_hosts`), not `~/.ssh/known_hosts`.
+
+- **Redsocks/xray left stopped after an interrupted install** — the health monitor Guard 6 will auto-restart redsocks within 90s; xray-switch-watchdog recovers xray in under 30s. To recover manually:
+
+  ```sh
+  ssh root@<router> '/etc/init.d/codex-transproxy start && /etc/init.d/codex-xray start'
+  ```
+
 ## Verification Notes
 
 The physical GL.iNet switch is still the source of truth.
