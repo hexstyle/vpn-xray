@@ -100,8 +100,8 @@ This quick start now also:
 | `VPS_PASSWORD` | recommended for first run; required in password mode | unset | Required when `VPS_AUTH_MODE=password`. In `auto`, keep it set even if your workstation already has key-based VPS access, because the script may still need password fallback if the router cannot use the temporary key. |
 | `VPS_SSH_USER` / `VPS_SSH_PORT` | optional | `root` / `22` | Used both by the workstation preflight checks and by the router profile that gets applied. |
 | `VPS_SSH_HOST` | optional | `VPS_HOST` | Used only by the workstation while seeding temporary SSH access. The router still stores and later uses `VPS_HOST` as its SSH host. |
-| `XRAY_SERVER` | optional | `VPS_HOST` | Public Xray endpoint. Override this only when the Reality/Xray server address must differ from the SSH host saved in the router profile. |
-| `XRAY_SERVER_NAME` | optional | selected VPS profile default | Reality `serverName`. Set it only when you intentionally want a different value than the profile default. |
+| `XRAY_SERVER` | optional | `VPS_HOST` | Public Xray endpoint. Override this only when the Xray server address must differ from the SSH host saved in the router profile. |
+| `XRAY_SERVER_NAME` | optional | selected VPS profile default | TLS `serverName`. Set it only when you intentionally want a different value than the profile default. |
 | `XRAY_PORT` | optional | `443` | Xray service port. Independent from `VPS_SSH_PORT`. |
 | `VPS_AUTH_MODE` | optional | `auto` | `auto` tries workstation key access first and falls back when needed. `password` requires `VPS_PASSWORD`. `private_key` still benefits from `VPS_PASSWORD` as a fallback. |
 | `PROFILE_ID` / `PROFILE_LABEL` | optional | derived from `VPS_HOST` / `VPS $VPS_HOST` | Changes only how the profile is named and stored on the router. |

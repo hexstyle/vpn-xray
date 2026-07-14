@@ -57,6 +57,8 @@ For OpenWrt-based router profiles, `profile.env` is also the place to declare pr
 
 - `gl-mt3000-glinet`
   - GL.iNet GL-MT3000 on GL.iNet OpenWrt firmware
+- `asus-tuf-ax4200-openwrt`
+  - Asus TUF-AX4200 on standard OpenWrt firmware
 
 ## Shared Router Files
 

@@ -184,7 +184,7 @@ Parameter matrix:
 | `VPS_SSH_PORT` | optional | `22` | workstation and router | Same SSH port is used for workstation preflight and saved router profile. |
 | `VPS_SSH_HOST` | optional | `VPS_HOST` | workstation | Used only by the workstation during bootstrap key seeding and validation. It does not change the router profile's saved `ssh_host`. |
 | `XRAY_SERVER` | optional | `VPS_HOST` | router runtime and verification | Public Xray address written into the router profile. It does not change SSH destination selection. |
-| `XRAY_SERVER_NAME` | optional | selected VPS profile default | router and VPS config rendering | Reality `serverName`. If unset, the profile default is used. |
+| `XRAY_SERVER_NAME` | optional | selected VPS profile default | router and VPS config rendering | TLS `serverName`. If unset, the profile default is used. |
 | `XRAY_PORT` | optional | `443` | router and VPS config rendering | Xray transport port. Independent from `VPS_SSH_PORT`. |
 | `VPS_AUTH_MODE` | optional | `auto` | workstation and router payload | `auto` tries workstation key access first, then falls back when needed. `password` requires `VPS_PASSWORD`. `private_key` still benefits from `VPS_PASSWORD` as fallback. |
 | `PROFILE_ID` | optional | derived from `VPS_HOST` | router profile storage | Stable profile key on the router. Useful when reusing the same profile name across reruns. |

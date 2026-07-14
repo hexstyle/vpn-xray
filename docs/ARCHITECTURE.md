@@ -33,7 +33,7 @@ That keeps the public interface small: the operator only needs router SSH first,
 - env loading
 - placeholder rejection
 - profile resolution
-- auto-generation of UUID / Reality values
+- auto-generation of UUID and Xray transport key values
 
 The advanced local path only asks the operator for:
 

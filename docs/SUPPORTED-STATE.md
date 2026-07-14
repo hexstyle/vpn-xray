@@ -11,7 +11,7 @@ This file describes the supported reference state without embedding personal dat
 ## What Is Expected To Work
 
 - transparent TCP forwarding for LAN clients
-- `VLESS + Reality` over the selected VPS
+- `VLESS + WS+TLS` over the selected VPS
 - physical switch as the source of truth for path on / off
 - router-side switching between saved VPS profiles
 - router-side provisioning of supported VPS profiles over SSH

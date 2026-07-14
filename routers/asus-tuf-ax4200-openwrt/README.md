@@ -1,15 +1,12 @@
-# GL.iNet GL-MT3000
+# Asus TUF-AX4200
 
-This is the main supported router profile.
-
-It is documented here as a profile for a router-managed tunneling / proxy-client lab setup, not as a jurisdiction-specific circumvention guide.
+Secondary supported router profile on standard OpenWrt firmware.
 
 If you are installing from scratch, start with [`../../README.md`](../../README.md) and [`../../docs/GETTING-STARTED.md`](../../docs/GETTING-STARTED.md) first.
 
 ## Firmware Family
 
-- GL.iNet firmware on top of OpenWrt
-- hardware switch available on the front edge of the device
+- Standard OpenWrt firmware (not GL.iNet)
 - transparent TCP forwarding implemented with:
   - `xray-core`
   - `redsocks`
@@ -18,8 +15,8 @@ If you are installing from scratch, start with [`../../README.md`](../../README.
 
 This profile expects:
 
-- GL.iNet hardware model `mt3000`
-- OpenWrt / GL runtime with `uci`, `jsonfilter`, `iptables`, `ipset`, `dnsmasq`, `start-stop-daemon`, and `opkg`
+- OpenWrt hardware model `asus,tuf-ax4200`
+- OpenWrt runtime with `uci`, `jsonfilter`, `iptables`, `ipset`, `dnsmasq`, `start-stop-daemon`, and `opkg`
 - `dnsmasq` build with `ipset` support, because selective routing tracks domains through `dnsmasq -> ipset`
 
 ## What This Profile Installs
@@ -35,7 +32,7 @@ This profile expects:
 
 Primary path:
 
-- run [`../../bootstrap-router-ssh.sh`](../../bootstrap-router-ssh.sh) from a computer that has local `ssh`
+- run [`../../bootstrap-router-ssh.sh`](../../bootstrap-router-ssh.sh) from a computer that has local `ssh` with `ROUTER_PROFILE=asus-tuf-ax4200-openwrt`
 - or SSH into the router and run [`../../bootstrap-router.sh`](../../bootstrap-router.sh) there
 - finish VPS setup from `xray.html`
 
@@ -44,11 +41,6 @@ Advanced path:
 - use [`install-router.sh`](./install-router.sh) from a workstation together with the top-level [`../../install.sh`](../../install.sh)
 
 ## Ready-State Behavior
-
-This profile now separates:
-
-- platform installed
-- active VPS client profile installed
 
 The runtime stays dormant until the router has one valid client profile.
 
