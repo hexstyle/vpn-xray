@@ -223,6 +223,7 @@ XRAY_PRIVATE_KEY=$(profile_get "$profile_id" private_key)
 XRAY_PUBLIC_KEY=$(profile_get "$profile_id" public_key)
 XRAY_FLOW=$(profile_get "$profile_id" flow)
 EOF
+	chmod 600 "$path"
 }
 
 remote_install_support() {
