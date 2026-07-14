@@ -88,7 +88,9 @@ live_socks_port() {
 
 _wait_for_xray_pid() {
 	_i=0
-	while [ "$_i" -lt 5 ] && ! cat /var/run/codex-xray.pid >/dev/null 2>&1; do
+	while [ "$_i" -lt 5 ]; do
+		_pid="$(cat /var/run/codex-xray.pid 2>/dev/null || true)"
+		[ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null && return 0
 		sleep 1
 		_i=$((_i + 1))
 	done

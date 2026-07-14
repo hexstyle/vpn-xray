@@ -295,7 +295,7 @@ UI behavior in `xray.html`:
 
 - **Xray config fails validation (step 5)** — the previous config is preserved. Fix `install.env` (keys/address), then re-run.
 
-- **VPS SSH registration failed (step 6)** — admin panel VPS sync will not work until the key is registered. Run `make register-vps-key` or re-run the full installer to retry.
+- **VPS SSH registration failed (step 6)** — admin panel VPS sync will not work until the key is registered. Re-run the full installer to retry (step 6 is idempotent).
 
 - **Router SSH unreachable after deploy (step 8)** — power-cycle the router, then re-run the installer. The installer uses its own known_hosts cache (`tmp/ssh/known_hosts`), not `~/.ssh/known_hosts`.
 

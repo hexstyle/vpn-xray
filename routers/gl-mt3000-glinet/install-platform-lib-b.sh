@@ -384,7 +384,7 @@ preflight() {
 	_fw_ver="$(grep DISTRIB_REVISION /etc/openwrt_release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo unknown)"
 	[ -n "$_fw_ver" ] || _fw_ver=unknown
 	case "$_fw_ver" in
-		3.*) : ;;  # known good
+		3.*|v3.*) : ;;  # known good
 		unknown) warn "preflight: could not read firmware version — verify redsocks compatibility manually" ;;
 		*) warn "preflight: firmware version $_fw_ver not validated against bundled redsocks packages (built for 3.x); redsocks may fail — check /tmp/vpn-xray-bundled-opkg.log after install" ;;
 	esac

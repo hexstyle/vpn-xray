@@ -84,6 +84,7 @@ run_repair_pipeline() {
 	rm -rf "$stage"; mkdir -p "$stage"
 	cp "$rendered" "$stage/codex-router-vps-config.json"
 	cp "$meta" "$stage/codex-router-meta.env"
+	chmod 600 "$stage/codex-router-meta.env"
 	cp "$rendered_install" "$stage/install-vps.remote.sh"
 	if ! tar -C "$stage" -cf "$bundle_tar" . 2>/dev/null; then
 		log_step "FAILED to build the upload bundle tar"
