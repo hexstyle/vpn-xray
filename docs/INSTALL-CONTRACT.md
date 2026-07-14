@@ -47,6 +47,19 @@ Silent failures are not acceptable. If a parameter is missing and the
 operator declines to fill it, abort with a clear message naming the
 parameter and what it controls.
 
+## VPS-First Key Adoption
+
+The VPS managed meta (`codex-router-meta.env`) is the authoritative source
+for the Xray endpoint identity (`XRAY_UUID`, `XRAY_PRIVATE_KEY`,
+`XRAY_PUBLIC_KEY`, `XRAY_SHORT_ID`, `XRAY_SERVER_NAME`, `XRAY_PORT`).
+Before validation the installer reads the meta over SSH
+(`common/adopt-vps-meta.sh`) and writes those values into `install.env`.
+Locally generated keys are pushed only when the VPS has no managed meta
+yet (fresh VPS). An unreachable VPS does not abort this step — the VPS
+preflight reports real SSH problems later. This prevents a re-run of the
+installer from rotating keys under a live endpoint and prevents
+router-vs-VPS key drift when `install.env` is stale.
+
 ## Step Plan and Live Progress
 
 The installer has a fixed plan. It must:

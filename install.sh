@@ -50,6 +50,10 @@ PREFLIGHT_ONLY="${PREFLIGHT_ONLY:-0}"
 export ENV_FILE
 
 "$ROOT_DIR/common/init-env.sh" "$ENV_FILE"
+# VPS-first key adoption: when the VPS already carries provisioned keys
+# in its managed meta, they win over whatever install.env holds; locally
+# generated values are only pushed to a VPS that has none.
+"$ROOT_DIR/common/adopt-vps-meta.sh" "$ENV_FILE"
 "$ROOT_DIR/common/validate-env.sh" "$ENV_FILE"
 
 load_env_file "$ENV_FILE" "$(default_install_env_example "$ROOT_DIR")"
