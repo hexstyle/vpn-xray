@@ -333,7 +333,7 @@ port="$(uci -q get xray_vps.$profile_id.ssh_port 2>/dev/null || true)"
 ssh -i "$key" \
   -o BatchMode=yes \
   -o ConnectTimeout=8 \
-  -o StrictHostKeyChecking=no \
+  -o StrictHostKeyChecking=accept-new \
   -o UserKnownHostsFile=/etc/xray/known_hosts \
   -p "$port" \
   "$user@$host" 'sh -s' <<'"'"'INNER'"'"'

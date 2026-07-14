@@ -95,7 +95,7 @@ git_env_setup() {
 	case "$(git_auth_mode)" in
 		ssh)
 			if [ -f "$(ssh_key_path)" ]; then
-				export GIT_SSH_COMMAND="ssh -i $(ssh_key_path) -o BatchMode=yes -o StrictHostKeyChecking=no"
+				export GIT_SSH_COMMAND="ssh -i $(ssh_key_path) -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
 			fi
 			;;
 		https)
@@ -117,7 +117,7 @@ git_push_env_setup() {
 	case "$url" in
 		git@*|ssh://*)
 			if [ -f "$(ssh_key_path)" ]; then
-				export GIT_SSH_COMMAND="ssh -i $(ssh_key_path) -o BatchMode=yes -o StrictHostKeyChecking=no"
+				export GIT_SSH_COMMAND="ssh -i $(ssh_key_path) -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
 			fi
 			;;
 		http://*|https://*)
