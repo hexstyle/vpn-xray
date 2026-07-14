@@ -203,7 +203,7 @@ install_managed_key_with_password() {
 	# $HOME is expanded remotely; `id -gn` picks the login user's primary
 	# group so we don't hard-code root.
 	SSHPASS="$password" sshpass -e ssh \
-		-o StrictHostKeyChecking=no \
+		-o StrictHostKeyChecking=accept-new \
 		-o UserKnownHostsFile="$KNOWN_HOSTS" \
 		-o ConnectTimeout=6 \
 		-p "$port" \

@@ -48,7 +48,7 @@ ssh_exec_with_identity() {
 			-o ConnectionAttempts=2 \
 			-o ServerAliveInterval=15 \
 			-o ServerAliveCountMax=4 \
-			-o StrictHostKeyChecking=no \
+			-o StrictHostKeyChecking=accept-new \
 			-o UserKnownHostsFile="$KNOWN_HOSTS" \
 			-p "$port" \
 			"$user@$host" "$cmd" 2>>"$SSH_RAW_LOG_PATH"
@@ -59,7 +59,7 @@ ssh_exec_with_identity() {
 			-o ConnectionAttempts=2 \
 			-o ServerAliveInterval=15 \
 			-o ServerAliveCountMax=4 \
-			-o StrictHostKeyChecking=no \
+			-o StrictHostKeyChecking=accept-new \
 			-o UserKnownHostsFile="$KNOWN_HOSTS" \
 			-p "$port" \
 			"$user@$host" "$cmd"
@@ -84,7 +84,7 @@ ssh_stdin_with_identity() {
 			-o ConnectionAttempts=2 \
 			-o ServerAliveInterval=15 \
 			-o ServerAliveCountMax=4 \
-			-o StrictHostKeyChecking=no \
+			-o StrictHostKeyChecking=accept-new \
 			-o UserKnownHostsFile="$KNOWN_HOSTS" \
 			-p "$port" \
 			"$user@$host" "$remote_cmd" < "$stdin_path" 2>>"$SSH_RAW_LOG_PATH"
@@ -95,7 +95,7 @@ ssh_stdin_with_identity() {
 			-o ConnectionAttempts=2 \
 			-o ServerAliveInterval=15 \
 			-o ServerAliveCountMax=4 \
-			-o StrictHostKeyChecking=no \
+			-o StrictHostKeyChecking=accept-new \
 			-o UserKnownHostsFile="$KNOWN_HOSTS" \
 			-p "$port" \
 			"$user@$host" "$remote_cmd" < "$stdin_path"
