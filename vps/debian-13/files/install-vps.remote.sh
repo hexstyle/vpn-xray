@@ -146,6 +146,11 @@ UNIT
 	systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
+# -------- cleanup trap --------
+
+_cleanup_tmp() { rm -f /tmp/codex-router-vps-config.json /tmp/codex-router-meta.env; }
+trap _cleanup_tmp EXIT
+
 # -------- steps --------
 
 step_binary() {
@@ -573,6 +578,19 @@ step_runtime() {
 	fi
 	return 1
 }
+
+# -------- NTP pre-flight --------
+
+# Reality (XTLS) auth fails silently when VPS clock is skewed >30s.
+if command -v timedatectl >/dev/null 2>&1; then
+    if ! timedatectl status 2>/dev/null | grep -q 'synchronized: yes'; then
+        echo "WARNING: NTP not synchronized on VPS — Reality may fail with clock skew" >&2
+    fi
+elif command -v chronyc >/dev/null 2>&1; then
+    if chronyc tracking 2>/dev/null | grep -q 'Leap status.*Not'; then
+        echo "WARNING: chrony reports clock not synchronized — Reality may fail" >&2
+    fi
+fi
 
 # -------- main --------
 
