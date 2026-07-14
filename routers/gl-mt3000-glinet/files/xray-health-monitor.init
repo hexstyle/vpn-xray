@@ -56,7 +56,10 @@ tick=0
 last_restart_tick=0
 last_failsafe_tick=0
 xray_down_streak=0
+redsocks_down_streak=0
+last_redsocks_restart_tick=0
 FAILSAFE_HOLD_SECONDS=300
+AI_CHECK_EVERY_TICKS=2
 
 . /usr/share/vpn-xray/lib-common.sh
 
@@ -79,6 +82,25 @@ rotate() {
 	fi
 }
 
+# Reachable = any final HTTP status except 403/5xx. Unauthenticated
+# probes normally answer 401; 403 means the edge rejects our egress IP
+# and 5xx/000 mean the endpoint is effectively down — all three are
+# "claude/codex недоступен" from the client point of view.
+ai_probe() {
+	local url="$1" try code
+	for try in 1 2; do
+		code=$(curl -ksS -o /dev/null -w "%{http_code}" -m 8 \
+			--socks5-hostname 127.0.0.1:1084 "$url" 2>/dev/null)
+		case "$code" in
+			[1234][0-9][0-9])
+				[ "$code" != "403" ] && return 0
+				;;
+		esac
+		sleep 2
+	done
+	return 1
+}
+
 guard_restart_xray() {
 	local reason="$1"
 	local cooldown=$((CRUMB_INT * 2))
@@ -89,6 +111,22 @@ guard_restart_xray() {
 	alert "GUARD_RESTART reason=$reason"
 	/etc/init.d/codex-xray restart >/dev/null 2>&1 || true
 	last_restart_tick=$tick
+}
+
+# redsocks is half the transparent path: if it dies the client loses
+# egress even while xray is fine. Nothing else brings it back (the switch
+# watchdog only reacts to switch changes, and an interrupted install can
+# leave it stopped), so recover it here on its own cooldown.
+guard_restart_redsocks() {
+	local reason="$1"
+	local cooldown=$((CRUMB_INT * 2))
+	xray_failsafe_hold_active && return 0
+	if [ $((tick - last_redsocks_restart_tick)) -lt "$cooldown" ]; then
+		return 0
+	fi
+	alert "GUARD_RESTART_REDSOCKS reason=$reason"
+	/etc/init.d/codex-transproxy restart >/dev/null 2>&1 || true
+	last_redsocks_restart_tick=$tick
 }
 
 guard_failsafe_hold() {
@@ -170,6 +208,30 @@ while true; do
 		alert "GUARD_CONNTRACK_FLUSH ct=$ct"
 	fi
 
+	# --- AI-path diagnostic capture ---
+	# Two triggers, both throttled by the capture-script lock + the
+	# 30-minute rate limit, so backgrounding on every hit is safe. Skipped
+	# under a failsafe hold (the path is intentionally down there).
+	if [ $((tick % AI_CHECK_EVERY_TICKS)) -eq 0 ] && ! xray_failsafe_hold_active; then
+		if [ "$xup" = "1" ] && [ "$rup" = "1" ]; then
+			# Path daemons are up: reachability is the question. Probe the AI
+			# endpoints and capture only when one is actually unreachable.
+			claude_ok=1; codex_ok=1
+			ai_probe https://api.anthropic.com/v1/models || claude_ok=0
+			ai_probe https://api.openai.com/v1/models || codex_ok=0
+			if [ "$claude_ok" = "0" ] || [ "$codex_ok" = "0" ]; then
+				alert "AI_UNREACHABLE claude=$claude_ok codex=$codex_ok"
+				/usr/share/vpn-xray/xray-diag-capture.sh "ai-claude${claude_ok}-codex${codex_ok}" >/dev/null 2>&1 &
+			fi
+		else
+			# A path daemon is down: claude/codex are unreachable by
+			# definition. Skip the (pointless) probes and capture the state
+			# that explains why — this is exactly the redsocks-down case that
+			# previously went uncaptured.
+			/usr/share/vpn-xray/xray-diag-capture.sh "path-down-xu${xup}-ru${rup}" >/dev/null 2>&1 &
+		fi
+	fi
+
 	# Guard 5: xray down for >2 consecutive checks — attempt restart
 	if [ "$xup" = "0" ]; then
 		xray_down_streak=$((xray_down_streak + 1))
@@ -179,6 +241,19 @@ while true; do
 		fi
 	else
 		xray_down_streak=0
+	fi
+
+	# Guard 6: redsocks down for >2 consecutive checks — attempt restart.
+	# Only when xray is up: if xray itself is down, Guard 5 owns recovery
+	# and codex-transproxy has nothing to point redsocks at yet.
+	if [ "$rup" = "0" ] && [ "$xup" = "1" ]; then
+		redsocks_down_streak=$((redsocks_down_streak + 1))
+		if [ "$redsocks_down_streak" -ge 3 ]; then
+			guard_restart_redsocks "REDSOCKS_DOWN_SUSTAINED streak=$redsocks_down_streak"
+			redsocks_down_streak=0
+		fi
+	else
+		redsocks_down_streak=0
 	fi
 
 	xpid_prev="$xpid"

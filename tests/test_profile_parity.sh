@@ -20,7 +20,7 @@ fail() {
 }
 
 # Files that must be identical across profiles (profile-independent logic).
-for f in xray-vps.cgi xray-admin.cgi xray.html codex-transproxy.init codex-xray.init codex-xray-uplink.hotplug; do
+for f in xray-vps.cgi xray-admin.cgi xray.html codex-transproxy.init codex-xray.init codex-xray-uplink.hotplug xray-health-monitor.init; do
 	[ -f "$GL/$f" ] || fail "missing $GL/$f"
 	[ -f "$ASUS/$f" ] || fail "missing $ASUS/$f"
 	if ! diff -q "$GL/$f" "$ASUS/$f" >/dev/null 2>&1; then
