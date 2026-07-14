@@ -379,6 +379,16 @@ preflight() {
 	[ -n "$model" ] || fail "Could not detect the GL.iNet hardware model on the router."
 	[ "$model" = "$ROUTER_EXPECTED_MODEL" ] || fail "Unsupported router model '$model'. This profile expects '$ROUTER_EXPECTED_MODEL'."
 
+	# Bundled redsocks packages require GL.iNet firmware 3.x (OpenWrt 21.02.x).
+	# On 4.x/5.x the libevent ABI changed; warn and let the operator decide.
+	_fw_ver="$(grep DISTRIB_REVISION /etc/openwrt_release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo unknown)"
+	[ -n "$_fw_ver" ] || _fw_ver=unknown
+	case "$_fw_ver" in
+		3.*) : ;;  # known good
+		unknown) warn "preflight: could not read firmware version — verify redsocks compatibility manually" ;;
+		*) warn "preflight: firmware version $_fw_ver not validated against bundled redsocks packages (built for 3.x); redsocks may fail — check /tmp/vpn-xray-bundled-opkg.log after install" ;;
+	esac
+
 	if [ "${ROUTER_REQUIRES_DNSMASQ_IPSET:-0}" = '1' ]; then
 		dnsmasq --help 2>/dev/null | grep -qi 'ipset' || fail "This router firmware does not expose dnsmasq ipset support, which selective routing requires."
 	fi
