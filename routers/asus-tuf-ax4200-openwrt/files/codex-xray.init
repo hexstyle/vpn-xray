@@ -388,7 +388,7 @@ start() {
 		done
 	fi
 
-	export GOMEMLIMIT=120MiB
+	export GOMEMLIMIT=80MiB
 	export GOGC=50
 	start-stop-daemon -S -b -m -p "$PIDFILE" -x "$BIN" -- run -config "$CONFIG"
 }

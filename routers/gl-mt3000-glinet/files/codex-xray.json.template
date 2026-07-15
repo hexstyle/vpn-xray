@@ -89,6 +89,11 @@
           "host": "${XRAY_SERVER_NAME}"
         }
       },
+      "mux": {
+        "enabled": true,
+        "concurrency": 8,
+        "xudpConcurrency": 16
+      }
     }
   ]
 }
