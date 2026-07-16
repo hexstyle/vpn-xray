@@ -87,7 +87,7 @@ build_config_file() {
 	cat > "$outfile" <<EOF
 {
   "log": {
-    "loglevel": "info",
+    "loglevel": "warning",
     "access": "${access_log}",
     "error": "${error_log}"
   },
