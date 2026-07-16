@@ -161,7 +161,7 @@ install_platform() {
 		mark_done deps
 	fi
 
-	mkdir -p /usr/local/bin /etc/xray /var/log/xray /etc/router-rules/generated /etc/router-rules/ssh /usr/share/vpn-xray /www/cgi-bin /etc/gl-switch.d "$PLATFORM_DIR"
+	mkdir -p /usr/local/bin /etc/xray/logs /etc/router-rules/generated /etc/router-rules/ssh /usr/share/vpn-xray /www/cgi-bin /etc/gl-switch.d "$PLATFORM_DIR"
 	if [ -f "$ROUTER_BIN" ]; then
 		local old_h new_h
 		old_h="$(sha256_file "$ROUTER_BIN")"

@@ -135,7 +135,7 @@ probe_url() {
 	ipset list xray_selective_dst 2>/dev/null | sed -n '1,7p' || true
 
 	section "xray error log (tail)"
-	tail -n 80 /var/log/xray/codex-xray-error.log 2>/dev/null || true
+	tail -n 80 /etc/xray/logs/codex-xray-error.log 2>/dev/null || true
 
 	section "syslog: redsocks/xray/uplink (tail)"
 	logread 2>/dev/null | grep -iE 'redsocks|xray|uplink' | grep -v failsafe | tail -n 60 || true

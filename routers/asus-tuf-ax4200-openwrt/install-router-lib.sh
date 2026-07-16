@@ -242,7 +242,7 @@ router_ssh "sed -i 's/\r$//' $remote_source_root/routers/$ROUTER_PROFILE/install
 
 # Deploy configs BEFORE install-platform.sh so they survive if the router
 # reboots during platform setup (e.g. network/wireless reload).
-router_ssh 'mkdir -p /etc/xray /var/log/xray'
+router_ssh 'mkdir -p /etc/xray/logs'
 router_ssh 'cat > /etc/xray/codex-xray.json && chmod 600 /etc/xray/codex-xray.json' < "$json_cfg"
 router_ssh 'cat > /etc/redsocks.conf && chmod 600 /etc/redsocks.conf' < "$redsocks_cfg"
 # Push the VPS-side TLS cert fetched by install-vps.sh, falling back to

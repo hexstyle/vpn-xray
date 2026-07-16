@@ -144,8 +144,8 @@ status_json() {
 logs_json() {
 	local switch_logs access_logs error_logs
 	switch_logs="$(logread | grep -E 'gl-switch|gl-switch-xray' | tail -n 40 || true)"
-	access_logs="$(tail -n 40 /var/log/xray/codex-xray-access.log 2>/dev/null || true)"
-	error_logs="$(tail -n 60 /var/log/xray/codex-xray-error.log 2>/dev/null || true)"
+	access_logs="$(tail -n 40 /etc/xray/logs/codex-xray-access.log 2>/dev/null || true)"
+	error_logs="$(tail -n 60 /etc/xray/logs/codex-xray-error.log 2>/dev/null || true)"
 
 	printf '{'
 	printf '"switch_logs":"%s",' "$(json_escape "$switch_logs")"

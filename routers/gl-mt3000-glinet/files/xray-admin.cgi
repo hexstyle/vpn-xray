@@ -170,7 +170,7 @@ action_save() {
 	live_socks_port_value="$LIVE_SOCKS_PORT"
 	backup="${XRAY_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
 	target="/etc/xray/codex-xray.tmp.json"
-	mkdir -p /etc/xray /var/log/xray
+	mkdir -p /etc/xray/logs
 
 	build_config_file \
 		"$target" \
@@ -183,8 +183,8 @@ action_save() {
 		"$public_key" \
 		"$short_id" \
 		"$flow" \
-		'/var/log/xray/codex-xray-access.log' \
-		'/var/log/xray/codex-xray-error.log'
+		'/etc/xray/logs/codex-xray-access.log' \
+		'/etc/xray/logs/codex-xray-error.log'
 
 	test_output="$("$BIN" run -test -config "$target" 2>&1 || true)"
 	if ! printf '%s' "$test_output" | grep -q 'Configuration OK.'; then

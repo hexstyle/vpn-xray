@@ -82,6 +82,17 @@ rotate() {
 	fi
 }
 
+rotate_xray_logs() {
+	local f sz
+	for f in /etc/xray/logs/codex-xray-access.log /etc/xray/logs/codex-xray-error.log; do
+		[ -f "$f" ] || continue
+		sz=$(stat -c%s "$f" 2>/dev/null) || continue
+		[ "${sz:-0}" -gt 20971520 ] || continue
+		: > "$f"
+		alert "XRAY_LOG_ROTATED $(basename "$f") sz=${sz}"
+	done
+}
+
 # Reachable = any final HTTP status except 403/5xx. Unauthenticated
 # probes normally answer 401; 403 means the edge rejects our egress IP
 # and 5xx/000 mean the endpoint is effectively down — all three are
@@ -273,6 +284,7 @@ while true; do
 	fi
 
 	rotate
+	rotate_xray_logs
 
 	sleep "$INT"
 done

@@ -1,8 +1,8 @@
 {
   "log": {
     "loglevel": "warning",
-    "access": "/var/log/xray/codex-xray-access.log",
-    "error": "/var/log/xray/codex-xray-error.log"
+    "access": "/etc/xray/logs/codex-xray-access.log",
+    "error": "/etc/xray/logs/codex-xray-error.log"
   },
   "inbounds": [
     {

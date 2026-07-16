@@ -12,7 +12,7 @@ BIN="/usr/local/bin/codex-xray-core"
 CONFIG="/etc/xray/codex-xray.json"
 PIDFILE="/var/run/${NAME}.pid"
 MPTCP_STATE_FILE="/var/run/${NAME}.mptcp"
-LOG_DIR="/var/log/xray"
+LOG_DIR="/etc/xray/logs"
 LOCAL_MANGLE_CHAIN="CODEX_XRAY_LOCAL"
 SERVER_ROUTE_STATE_FILE="/var/run/${NAME}.server-routes"
 UPLINK_STATE_FILE="/var/run/${NAME}.uplink"
@@ -388,9 +388,6 @@ start() {
 		done
 	fi
 
-	mkdir -p /var/log/xray
-	: > /var/log/xray/codex-xray-access.log
-	: > /var/log/xray/codex-xray-error.log
 	export GOMEMLIMIT=80MiB
 	export GOGC=50
 	start-stop-daemon -S -b -m -p "$PIDFILE" -x "$BIN" -- run -config "$CONFIG"
