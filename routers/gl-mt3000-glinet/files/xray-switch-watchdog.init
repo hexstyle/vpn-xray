@@ -138,6 +138,23 @@ maybe_smoke_recover() {
 	[ "$(seconds_since_file "$LAST_RECOVERY_FILE")" -ge "$SMOKE_SETTLE_SECONDS" ] || return 0
 	[ "$(seconds_since_file "$LAST_SMOKE_FILE")" -ge "$SMOKE_MIN_INTERVAL" ] || return 0
 
+	# Skip smoke and reset failure counters when the WAN gateway is unreachable.
+	# Smoke failures during upstream outages are expected; counting them and then
+	# calling restart_runtime only creates a restart storm that cannot fix a 4G/
+	# WAN-side issue.  Resetting here ensures the counters start fresh after WAN
+	# returns, so a genuine VPS-side failure still triggers recovery promptly.
+	_def_route=$(ip route show default 2>/dev/null | head -1)
+	_wan_gw=""
+	case "$_def_route" in
+		*" via "*) _wan_gw="${_def_route#* via }"; _wan_gw="${_wan_gw%% *}" ;;
+	esac
+	if [ -z "$_wan_gw" ] || ! ping -c1 -W2 "$_wan_gw" >/dev/null 2>&1; then
+		log "smoke skipped: WAN gateway unreachable (gw=${_wan_gw:-none})"
+		reset_counter "$SEVERE_FAILURE_FILE"
+		reset_counter "$OPENAI_FAILURE_FILE"
+		return 0
+	fi
+
 	record_timestamp "$LAST_SMOKE_FILE"
 	output="$(smoke_output || true)"
 
