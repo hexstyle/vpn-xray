@@ -184,6 +184,16 @@ while true; do
 		cok=0
 	fi
 
+	_def_route=$(ip route show default 2>/dev/null | head -1)
+	wan_gw=""
+	case "$_def_route" in
+		*" via "*) wan_gw="${_def_route#* via }"; wan_gw="${wan_gw%% *}" ;;
+	esac
+	wok=0
+	[ -n "$wan_gw" ] && ping -c1 -W2 "$wan_gw" >/dev/null 2>&1 && wok=1
+
+	ra0_up=$(ip link show ra0 2>/dev/null | grep -c "LOWER_UP") || ra0_up=0
+
 	now=$(date +%s)
 	printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
 		"$now" "$ma" "$la" "$xrss" "$xfd" "$xth" "$ct" "$rxe" "$xup" "$rup" "$cok" >> "$LOG"
@@ -191,10 +201,11 @@ while true; do
 	# --- Alerts (observational) ---
 	[ "$ma" -lt 80000 ] && alert "LOW_MEM avail=${ma}kB"
 	[ "${xrss:-0}" -gt 60000 ] 2>/dev/null && alert "XRAY_RSS_HIGH ${xrss}kB"
-	[ "${xfd:-0}" -gt 500 ] 2>/dev/null && alert "XRAY_FD_HIGH $xfd"
+	[ "${xfd:-0}" -gt 650 ] 2>/dev/null && alert "XRAY_FD_HIGH $xfd"
 	[ "${ct:-0}" -gt 12000 ] 2>/dev/null && alert "CONNTRACK_HIGH $ct"
 	[ "$xup" = "0" ] && alert "XRAY_DOWN"
 	[ "$rup" = "0" ] && alert "REDSOCKS_DOWN"
+	[ "${ra0_up:-1}" = "0" ] && alert "RA0_DOWN"
 	[ -n "$xpid_prev" ] && [ "$xpid" != "$xpid_prev" ] && alert "XRAY_RESTARTED old=$xpid_prev new=$xpid"
 
 	# --- Proactive guards (preventive) ---
@@ -243,12 +254,20 @@ while true; do
 		fi
 	fi
 
-	# Guard 5: xray down for >2 consecutive checks — attempt restart
+	# Guard 5: xray down for >2 consecutive checks — attempt restart.
+	# Skip when WAN gateway is unreachable (wok=0): xray failures during
+	# upstream outages are expected and restarting only creates a storm.
+	# The streak accumulates while WAN is down so we restart immediately
+	# when WAN returns (wok flips to 1 and streak >= 3 is already true).
 	if [ "$xup" = "0" ]; then
 		xray_down_streak=$((xray_down_streak + 1))
 		if [ "$xray_down_streak" -ge 3 ]; then
-			guard_restart_xray "XRAY_DOWN_SUSTAINED streak=$xray_down_streak"
-			xray_down_streak=0
+			if [ "$wok" = "1" ]; then
+				guard_restart_xray "XRAY_DOWN_SUSTAINED streak=$xray_down_streak"
+				xray_down_streak=0
+			else
+				alert "XRAY_DOWN_WAN_UNAVAIL streak=$xray_down_streak wok=0"
+			fi
 		fi
 	else
 		xray_down_streak=0
@@ -257,14 +276,28 @@ while true; do
 	# Guard 6: redsocks down for >2 consecutive checks — attempt restart.
 	# Only when xray is up: if xray itself is down, Guard 5 owns recovery
 	# and codex-transproxy has nothing to point redsocks at yet.
+	# Same wok suppression as Guard 5.
 	if [ "$rup" = "0" ] && [ "$xup" = "1" ]; then
 		redsocks_down_streak=$((redsocks_down_streak + 1))
 		if [ "$redsocks_down_streak" -ge 3 ]; then
-			guard_restart_redsocks "REDSOCKS_DOWN_SUSTAINED streak=$redsocks_down_streak"
+			if [ "$wok" = "1" ]; then
+				guard_restart_redsocks "REDSOCKS_DOWN_SUSTAINED streak=$redsocks_down_streak"
+			else
+				alert "REDSOCKS_DOWN_WAN_UNAVAIL streak=$redsocks_down_streak wok=0"
+			fi
 			redsocks_down_streak=0
 		fi
 	else
 		redsocks_down_streak=0
+	fi
+
+	# Guard 7 (GL-specific): LAN AP (ra0) down while WAN is reachable.
+	# The MTK radio driver may fail to auto-restore ra0 after apcli0
+	# reconnects.  The hotplug (96-codex-ra0-guard) is the fast path;
+	# this is the 30s fallback in case hotplug missed it.
+	if [ "${ra0_up:-1}" = "0" ] && [ "$wok" = "1" ]; then
+		ifconfig ra0 up 2>/dev/null || true
+		alert "GUARD_RA0_RECOVERED"
 	fi
 
 	xpid_prev="$xpid"

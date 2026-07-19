@@ -1,0 +1,17 @@
+#!/bin/sh
+# Restore LAN AP interfaces after upstream Wi-Fi reconnect.
+# The MTK radio driver may briefly deauth ra0/rax0 clients during
+# gl-repeater's apcli0 reconnect cycle.  Fire on wwan ifup (apcli0
+# obtained a DHCP lease) and re-enable any AP that went down.
+
+[ "$INTERFACE" = "wwan" ] || exit 0
+[ "$ACTION"    = "ifup"  ] || exit 0
+
+(
+	sleep 3
+	for iface in ra0 rax0; do
+		ip link show "$iface" 2>/dev/null | grep -q "LOWER_UP" && continue
+		ifconfig "$iface" up 2>/dev/null || true
+		logger -t codex-ra0-guard "restored $iface after wwan ifup"
+	done
+) &
