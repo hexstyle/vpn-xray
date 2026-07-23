@@ -335,12 +335,35 @@ if [[ -n "${VPS_SSH:-}" && -n "${VPS_HOST:-}" ]]; then
 
   if [[ -n "$router_pubkey" ]]; then
     echo "Registering router managed SSH key on VPS ($VPS_HOST)..."
-    printf '%s\n' "$router_pubkey" | ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "
-      mkdir -p ~/.ssh && chmod 700 ~/.ssh
-      touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-      PUB=\$(cat)
-      grep -qxF \"\$PUB\" ~/.ssh/authorized_keys 2>/dev/null || printf '%s\n' \"\$PUB\" >> ~/.ssh/authorized_keys
-    " 2>/dev/null || echo "Warning: could not register router SSH key on VPS. Admin panel VPS sync will need manual key setup." >&2
+    # The workstation reaches the VPS over its OWN uplink, which — when the
+    # workstation is a LAN client of this router — briefly drops during the
+    # router service restarts earlier in this run. So a single ssh here can fail
+    # transiently even though the VPS is fine and the key is often already
+    # registered from a prior install. Make this idempotent + resilient:
+    # the remote exits 0 when the key is already present, and we retry a few
+    # times, so we only warn on a genuine, sustained failure to reach the VPS.
+    register_router_key_on_vps() {
+      printf '%s\n' "$router_pubkey" | ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "
+        mkdir -p ~/.ssh && chmod 700 ~/.ssh
+        touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+        PUB=\$(cat)
+        grep -qxF \"\$PUB\" ~/.ssh/authorized_keys 2>/dev/null && exit 0
+        printf '%s\n' \"\$PUB\" >> ~/.ssh/authorized_keys
+      " 2>/dev/null
+    }
+    router_key_registered=0
+    for attempt in 1 2 3; do
+      if register_router_key_on_vps; then
+        router_key_registered=1
+        break
+      fi
+      if [[ "$attempt" -lt 3 ]]; then sleep 3; fi
+    done
+    if [[ "$router_key_registered" == "1" ]]; then
+      echo "Router managed SSH key present on VPS."
+    else
+      echo "Warning: could not register router SSH key on VPS after 3 attempts. Admin panel VPS sync will need manual key setup." >&2
+    fi
   else
     echo "Warning: router did not produce a managed SSH public key. Admin panel VPS sync will need manual key setup." >&2
   fi
