@@ -189,8 +189,24 @@ while true; do
 	case "$_def_route" in
 		*" via "*) wan_gw="${_def_route#* via }"; wan_gw="${wan_gw%% *}" ;;
 	esac
+	# wok = is the WAN uplink actually carrying internet, independent of the
+	# tunnel. ICMP is not redirected by the TCP-only transparent proxy, so this
+	# stays a clean WAN-health signal even when xray is down. Probe off-net
+	# targets, not only the gateway: some ISP gateways (fiber/CGNAT) silently
+	# drop ICMP to the gateway, which would pin wok=0 forever and suppress every
+	# guard below (xray/redsocks restart, ra0 recovery) on a healthy uplink.
 	wok=0
-	[ -n "$wan_gw" ] && ping -c1 -W2 "$wan_gw" >/dev/null 2>&1 && wok=1
+	uplink_internet_ok "$wan_gw" && wok=1
+
+	# ra0 is the MediaTek LAN AP. Track it only where it exists so this block is
+	# a true no-op on hardware without ra0 (e.g. the Asus profile): an empty
+	# ra0_up makes ${ra0_up:-1} evaluate to 1 below, skipping both the RA0_DOWN
+	# alert and Guard 7 — which lets both router profiles stay byte-identical.
+	if ip link show ra0 >/dev/null 2>&1; then
+		ra0_up=$(ip link show ra0 2>/dev/null | grep -c "LOWER_UP") || ra0_up=0
+	else
+		ra0_up=
+	fi
 
 	now=$(date +%s)
 	printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
@@ -203,6 +219,7 @@ while true; do
 	[ "${ct:-0}" -gt 12000 ] 2>/dev/null && alert "CONNTRACK_HIGH $ct"
 	[ "$xup" = "0" ] && alert "XRAY_DOWN"
 	[ "$rup" = "0" ] && alert "REDSOCKS_DOWN"
+	[ "${ra0_up:-1}" = "0" ] && alert "RA0_DOWN"
 	[ -n "$xpid_prev" ] && [ "$xpid" != "$xpid_prev" ] && alert "XRAY_RESTARTED old=$xpid_prev new=$xpid"
 
 	# --- Proactive guards (preventive) ---
@@ -286,6 +303,15 @@ while true; do
 		fi
 	else
 		redsocks_down_streak=0
+	fi
+
+	# Guard 7 (GL-specific): LAN AP (ra0) down while WAN is reachable.
+	# The MTK radio driver may fail to auto-restore ra0 after apcli0
+	# reconnects.  The hotplug (96-codex-ra0-guard) is the fast path;
+	# this is the 30s fallback in case hotplug missed it.
+	if [ "${ra0_up:-1}" = "0" ] && [ "$wok" = "1" ]; then
+		ifconfig ra0 up 2>/dev/null || true
+		alert "GUARD_RA0_RECOVERED"
 	fi
 
 	xpid_prev="$xpid"

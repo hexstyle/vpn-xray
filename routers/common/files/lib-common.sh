@@ -62,6 +62,32 @@ path_requested() {
 	return 0
 }
 
+# --- Uplink reachability ---
+
+# VX_REACH_TARGETS — off-net anycast IPs used to decide whether the WAN uplink
+# is actually carrying internet. Some ISP gateways (notably certain fiber/CGNAT
+# gateways) silently drop ICMP to the gateway address itself, so a gateway-only
+# probe yields a false "uplink down" — which on the guard side drives a
+# destructive ifdown/ifup heal loop, and on the watchdog side permanently skips
+# smoke. These targets match the multiwan track IPs and answer over any working
+# uplink, wired or wireless.
+: "${VX_REACH_TARGETS:=223.5.5.5 1.1.1.1 9.9.9.9}"
+: "${VX_REACH_PING_WAIT:=2}"
+
+# uplink_internet_ok [gateway]
+# Returns 0 if the WAN uplink can reach anything off-net (or the gateway, if it
+# happens to answer ICMP); returns 1 only when the uplink is genuinely dead —
+# no gateway and no internet target reachable. Callers must treat a bare
+# unreachable gateway as "maybe fine", and only this function's 1 as "down".
+uplink_internet_ok() {
+	local gw="${1:-}" t
+	for t in $gw $VX_REACH_TARGETS; do
+		[ -n "$t" ] || continue
+		ping -c1 -W"$VX_REACH_PING_WAIT" "$t" >/dev/null 2>&1 && return 0
+	done
+	return 1
+}
+
 # --- JSON helpers ---
 
 json_escape() {

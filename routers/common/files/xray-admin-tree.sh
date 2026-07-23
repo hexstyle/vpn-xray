@@ -26,17 +26,18 @@ tree_node_status() {
 			# "default route present" is not enough: a bridge/repeater/tethering
 			# uplink can keep a stale default route while the link is actually
 			# dead (the 2026 flaky-upstream outages — route via 10.0.0.1 but no
-			# traffic). Probe the gateway so the node reflects real reachability.
+			# traffic). Probe real reachability. Do NOT ping only the gateway:
+			# some ISP gateways (fiber/CGNAT) silently drop ICMP to the gateway,
+			# which would show this node FAILED on a working uplink. uplink_internet_ok
+			# accepts the gateway OR any off-net target answering.
 			if ! ip route show default 2>/dev/null | grep -q .; then
 				printf 'failed\tno default route — router uplink is down'
 			else
 				gw3="$(ip route show default 2>/dev/null | sed -n 's/.*via \([0-9.][0-9.]*\).*/\1/p' | sed -n '1p')"
-				if [ -z "$gw3" ]; then
-					printf 'ok\tuplink up (point-to-point, no gateway)'
-				elif ping -c1 -W1 "$gw3" >/dev/null 2>&1; then
-					printf 'ok\tuplink gateway reachable'
+				if uplink_internet_ok "$gw3"; then
+					printf 'ok\tuplink reaches the internet'
 				else
-					printf 'failed\tuplink gateway unreachable — upstream/bridge link down'
+					printf 'failed\tuplink has no internet — upstream/bridge link down'
 				fi
 			fi ;;
 		4)
@@ -145,10 +146,12 @@ node_repair_run() {
 			fi
 			sleep 6
 			[ -x /etc/init.d/codex-xray ] && /etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true
-			# success = default route present and its gateway reachable again
+			# success = default route present and the uplink reaches the internet
+			# again (gateway OR any off-net target — see node 3 rationale: some
+			# ISP gateways silently drop ICMP to the gateway).
+			ip route show default 2>/dev/null | grep -q . || return 1
 			gw3r="$(ip route show default 2>/dev/null | sed -n 's/.*via \([0-9.][0-9.]*\).*/\1/p' | sed -n '1p')"
-			[ -z "$gw3r" ] && { ip route show default 2>/dev/null | grep -q . ; return $?; }
-			ping -c1 -W2 "$gw3r" >/dev/null 2>&1 ;;
+			uplink_internet_ok "$gw3r" ;;
 		4)
 			restart_runtime_from_saved_config >/dev/null 2>&1 ;;
 		4.1)

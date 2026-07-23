@@ -38,6 +38,14 @@ VX_CONFIG_READY="$READY"
 	# assume the tunnel is requested, so the guard still runs.
 	config_ready() { [ -f "$READY" ] && [ -s "$CONFIG" ]; }
 	path_requested() { config_ready; }
+	uplink_internet_ok() {
+		local gw="${1:-}" t
+		for t in $gw ${VX_REACH_TARGETS:-223.5.5.5 1.1.1.1 9.9.9.9}; do
+			[ -n "$t" ] || continue
+			ping -c1 -W"$PING_WAIT" "$t" >/dev/null 2>&1 && return 0
+		done
+		return 1
+	}
 }
 
 log() { logger -t "$TAG" "$*" 2>/dev/null || printf '%s %s\n' "$TAG" "$*"; }
@@ -71,12 +79,13 @@ vps_ips() {
 	esac
 }
 
-# Light probe: is the uplink gateway reachable? A single ICMP to the local
-# gateway — this is the cheapest signal that the bridge/station link is alive.
+# Is the uplink actually carrying internet? Probe the gateway AND off-net
+# targets: some ISP gateways (fiber/CGNAT) silently drop ICMP to the gateway
+# address, so a gateway-only probe would false-fail and drive heal() into an
+# endless ifdown/ifup loop on a perfectly healthy link. Only report "down" when
+# nothing — gateway or internet — is reachable through this uplink.
 link_ok() {
-	local gw="$1"
-	[ -n "$gw" ] || return 1
-	ping -c1 -W"$PING_WAIT" "$gw" >/dev/null 2>&1
+	uplink_internet_ok "$1"
 }
 
 seconds_since() {
