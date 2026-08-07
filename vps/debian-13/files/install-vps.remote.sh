@@ -559,7 +559,7 @@ step_runtime() {
 	# non-distro drop-in exists, move it aside and retry once. We only
 	# touch drop-ins we recognise as ours or clearly broken (the unit
 	# failed to even parse), never the distro's.
-	local dropin_dir="/etc/systemd/system/${XRAY_SERVICE}.service.d"
+	local dropin_dir="/etc/systemd/system/$XRAY_SERVICE.service.d"
 	if ! systemctl is-active "$XRAY_SERVICE" >/dev/null 2>&1 \
 		&& systemctl status "$XRAY_SERVICE" 2>&1 | grep -qiE 'bad unit file|failed to parse|not found'; then
 		if [ -d "$dropin_dir" ]; then
