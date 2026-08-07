@@ -136,17 +136,26 @@ install_platform() {
 	stage_bundled_or_download "$LIBEVENT_PACKAGE" "$libevent_pkg" "$LIBEVENT_URL" "$LIBEVENT_SHA256"
 	stage_bundled_or_download "$REDSOCKS_PACKAGE" "$redsocks_pkg" "$REDSOCKS_URL" "$REDSOCKS_SHA256"
 
-	if ! is_done deps; then
-		info "Stopping vpn-xray runtime before file updates..."
-		# Pause the uplink-guard first so it cannot bounce the Wi-Fi upstream
-		# (a heal) in the middle of the install runtime restart and fight it.
-		/etc/init.d/xray-uplink-guard stop >/dev/null 2>&1 || true
-		/etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
-		/etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
-		/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
-		/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
-		killall codex-xray-core 2>/dev/null || true
+	# Stop the running runtime before touching files — on EVERY install, not
+	# gated by is_done. On a --resume run a stale, pre-fix xray left running
+	# keeps logging (a legacy build wrote to /var/log/xray on tmpfs) and can
+	# exhaust RAM mid-install, silently corrupting the file deploy (2026-08
+	# asus outage: platform files stayed stale, old verbose config kept running).
+	info "Stopping vpn-xray runtime before file updates..."
+	# Pause the uplink-guard first so it cannot bounce the Wi-Fi upstream
+	# (a heal) in the middle of the install runtime restart and fight it.
+	/etc/init.d/xray-uplink-guard stop >/dev/null 2>&1 || true
+	/etc/init.d/xray-switch-watchdog stop >/dev/null 2>&1 || true
+	/etc/init.d/router-rules-sync stop >/dev/null 2>&1 || true
+	/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
+	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+	killall codex-xray-core 2>/dev/null || true
+	# Reclaim RAM from the legacy /var/log/xray path (current config logs to
+	# /etc/xray/logs on flash); a pre-fix runtime could leave hundreds of MB
+	# here on tmpfs and starve the deploy.
+	rm -rf /var/log/xray 2>/dev/null || true
 
+	if ! is_done deps; then
 		info "Installing router-side dependencies..."
 		opkg install "$libevent_pkg" "$redsocks_pkg" >/dev/null 2>&1 || fail "Could not install the router-side redsocks dependencies."
 		command -v redsocks >/dev/null 2>&1 || fail "redsocks is still unavailable after package install."
