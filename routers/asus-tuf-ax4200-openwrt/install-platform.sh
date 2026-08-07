@@ -68,6 +68,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 INSTALL_PROGRESS_FILE="/tmp/vpn-xray-install-progress"
+# Records every file copy_if_changed actually writes this run, for the
+# post-deploy integrity check (verify_deployed_files).
+COPY_MANIFEST="/tmp/vpn-xray-copy-manifest"
 FILES_CHANGED=0
 
 mark_done() { printf '%s\n' "$1" >> "$INSTALL_PROGRESS_FILE"; }
@@ -85,6 +88,8 @@ install_platform() {
 	if [ "$RESUME_MODE" != '1' ]; then
 		rm -f "$INSTALL_PROGRESS_FILE"
 	fi
+	# Fresh manifest every run (copies are re-verified each install, even resume).
+	: > "$COPY_MANIFEST"
 
 	info "Running router platform preflight..."
 	preflight
@@ -293,6 +298,11 @@ EOF
 	copy_if_changed "$PROFILE_DIR/files/xray-admin.cgi" /www/cgi-bin/xray-admin
 	copy_if_changed "$PROFILE_DIR/files/xray-vps.cgi" /www/cgi-bin/xray-vps
 	copy_if_changed "$PROFILE_DIR/files/xray-rules.cgi" /www/cgi-bin/xray-rules
+
+	# Fail loudly if any copy this run did not actually land (silent cp failure,
+	# exhausted tmpfs) — before we normalize/chmod/restart onto a stale platform.
+	verify_deployed_files
+
 	normalize_installed_text_files \
 		/etc/init.d/codex-xray \
 		/etc/init.d/codex-transproxy \

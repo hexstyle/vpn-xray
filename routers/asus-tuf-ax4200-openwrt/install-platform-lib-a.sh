@@ -6,6 +6,10 @@
 
 copy_if_changed() {
 	local src="$1" dst="$2"
+	# Fail loudly if the staged source is missing (e.g. an incomplete bundle
+	# extraction when tmpfs was exhausted) instead of silently leaving a stale
+	# dst — the 2026-08 asus outage.
+	[ -f "$src" ] || fail "install source missing: $src (staging bundle incomplete)"
 	if [ -f "$dst" ]; then
 		local src_h dst_h
 		src_h="$(sha256_file "$src")"
@@ -14,8 +18,35 @@ copy_if_changed() {
 			return 0
 		fi
 	fi
-	cp "$src" "$dst"
+	cp "$src" "$dst" || fail "failed to deploy $dst from $src"
 	FILES_CHANGED=1
+	# Record for the post-deploy integrity check (verify_deployed_files).
+	printf '%s\t%s\n' "$src" "$dst" >> "${COPY_MANIFEST:-/dev/null}"
+}
+
+verify_deployed_files() {
+	# Post-deploy integrity check: re-hash every file this run actually copied
+	# and confirm the deployed copy matches its source. Catches a copy that did
+	# not land (silently failed cp, exhausted tmpfs) so the install fails loudly
+	# instead of reporting success over a stale platform (the 2026-08 asus
+	# outage: platform files stayed at June while the install reported 10/10).
+	# Runs before normalize_installed_text_files so each dst is still a byte-exact
+	# copy of its source.
+	local manifest="${COPY_MANIFEST:-}" src dst src_h dst_h bad=0 tab
+	[ -n "$manifest" ] && [ -f "$manifest" ] || return 0
+	tab="$(printf '\t')"
+	while IFS="$tab" read -r src dst; do
+		[ -n "$dst" ] || continue
+		if [ ! -f "$dst" ]; then
+			warn "post-deploy: expected file missing: $dst"
+			bad=1
+			continue
+		fi
+		src_h="$(sha256_file "$src")"
+		dst_h="$(sha256_file "$dst")"
+		[ "$src_h" = "$dst_h" ] || { warn "post-deploy: $dst does not match its source"; bad=1; }
+	done < "$manifest"
+	[ "$bad" = '0' ] || fail "post-deploy verification failed — deployed files do not match source; the platform deploy did not land (see warnings above)"
 }
 
 uci_set_if_different() {

@@ -90,6 +90,7 @@ vps_ssh_probe() {
   [[ -n "$target" ]] || return 1
   ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
     -o UserKnownHostsFile="$(installer_known_hosts_file "$ROOT_DIR")" \
+    $(ssh_mux_opts) \
     "$target" 'true' >/dev/null 2>&1
 }
 

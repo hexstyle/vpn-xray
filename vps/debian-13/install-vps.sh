@@ -29,6 +29,9 @@ VPS_SSH_OPTS=(
   -o StrictHostKeyChecking=accept-new
   -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
 )
+# Reuse one master SSH connection across the many vps_ssh calls below so the
+# install does not trip the VPS's per-source SSH rate limit / fail2ban.
+VPS_SSH_OPTS+=( $(ssh_mux_opts) )
 
 vps_ssh_with_password() {
   local err="$1"
@@ -226,6 +229,18 @@ printf 'PORT_OWNER=%s\n' "$port_owner"
 printf 'OUTBOUND_HTTPS=%s\n' "$outbound_https"
 EOF
 )"
+
+# A successful remote probe always emits the OS_ID line. If it is absent the
+# SSH session never ran the script — the VPS is unreachable. Fail clearly here
+# instead of falling through to the OS-version check, which would otherwise
+# report the misleading "Unsupported VPS OS ... got unknown" for what is really
+# a connectivity problem (VPS down, or the workstation uplink flapping).
+if ! printf '%s\n' "$remote_facts" | grep -q '^OS_ID='; then
+  echo "VPS ${VPS_HOST:-$VPS_SSH} is unreachable over SSH — could not read remote facts." >&2
+  echo "This is a connectivity problem, not an unsupported OS. The VPS must be powered on and reachable on port 22 from this machine before install can proceed." >&2
+  echo "Check the VPS and your own internet uplink, then retry." >&2
+  exit 1
+fi
 
 remote_os_id="$(printf '%s\n' "$remote_facts" | sed -n 's/^OS_ID=//p' | sed -n '1p')"
 remote_os_version="$(printf '%s\n' "$remote_facts" | sed -n 's/^OS_VERSION=//p' | sed -n '1p')"

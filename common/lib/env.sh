@@ -245,6 +245,24 @@ installer_known_hosts_file() {
   printf '%s/known_hosts\n' "$(installer_ssh_dir "$root_dir")"
 }
 
+# ssh_mux_opts — SSH connection-multiplexing options (whitespace-separated -o
+# tokens) for talking to the VPS. An install makes many ssh calls in quick
+# succession; without multiplexing each opens a fresh TCP+auth, which trips the
+# strict per-source SSH rate limit / fail2ban that hardened VPSes run and makes
+# the host look "unreachable" mid-install (the 2026-08 install failures).
+# ControlMaster=auto shares one master connection; ControlPath uses %C (a short
+# hash of user@host:port) to stay under the unix-socket path length limit;
+# ControlPersist keeps the master briefly so separate installer stages
+# (adopt-meta, preflight, install, router key push) reuse the same connection.
+# Callers splice this into their bash ssh option array:
+#   VPS_SSH_OPTS+=( $(ssh_mux_opts) )
+ssh_mux_opts() {
+  local dir="${VPN_XRAY_SSH_MUX_DIR:-/tmp/vpn-xray-ssh-$(id -u 2>/dev/null || echo 0)}"
+  mkdir -p "$dir" 2>/dev/null || true
+  chmod 700 "$dir" 2>/dev/null || true
+  printf -- '-o ControlMaster=auto -o ControlPath=%s/cm-%%C -o ControlPersist=120s' "$dir"
+}
+
 ensure_installer_ssh_state() {
   local root_dir="$1"
   local dir

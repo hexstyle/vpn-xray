@@ -86,6 +86,9 @@ VPS_SSH_OPTS=(
   -o StrictHostKeyChecking=accept-new
   -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
 )
+# Reuse the shared master SSH connection to the VPS (managed-key push + meta
+# sync) so this stage does not add fresh connections that trip its rate limit.
+VPS_SSH_OPTS+=( $(ssh_mux_opts) )
 
 RULES_GIT_SYNC_ENABLED="${RULES_GIT_SYNC_ENABLED:-}"
 RULES_REPO_FETCH_URL="${RULES_REPO_FETCH_URL:-}"
