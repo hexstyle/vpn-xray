@@ -123,7 +123,7 @@ install_bundled_opkg_single() {
 	local bundled
 
 	[ -d "$opkg_bundle_dir" ] || return 1
-	bundled="$(find "$opkg_bundle_dir" -name "${package}_*.ipk" 2>/dev/null | head -1)"
+	bundled="$(find "$opkg_bundle_dir" -name "${package}_*.ipk" ! -name '._*' 2>/dev/null | head -1)"
 	[ -n "$bundled" ] && [ -f "$bundled" ] || return 1
 	opkg install "$bundled" >/dev/null 2>&1
 }
@@ -133,7 +133,7 @@ install_bundled_opkg_packages() {
 	local ipk_list
 
 	[ -d "$opkg_bundle_dir" ] || return 1
-	ipk_list="$(find "$opkg_bundle_dir" -name '*.ipk' 2>/dev/null | sort)"
+	ipk_list="$(find "$opkg_bundle_dir" -name '*.ipk' ! -name '._*' 2>/dev/null | sort)"
 	[ -n "$ipk_list" ] || return 1
 
 	info "Installing packages from offline bundle..."

@@ -62,11 +62,19 @@ ensure_python3_runtime() {
 	fi
 
 	info "Ensuring Python 3 runtime for external shared-rules imports..."
-	if ensure_pkg_installed_or_fallback python3-light "external shared-rules import"; then
+	# python3 is ONLY needed for the optional external shared-rules importer
+	# (RULES_EXTERNAL_SOURCE_ENABLED, off by default). Never abort the core
+	# install over it — try the bundled packages best-effort and degrade to a
+	# warning if unavailable, so the xray tunnel still comes up on a clean or
+	# air-gapped router (the 2026-08 clean-router failure aborted right here).
+	if try_pkg_install python3-light "external shared-rules import"; then
 		python3_supports_external_fetcher && return 0
 	fi
-	ensure_pkg_installed_or_fallback python3 "external shared-rules import"
-	python3_supports_external_fetcher || fail "python3 is installed, but it still cannot import the modules required for external shared-rules imports."
+	if try_pkg_install python3 "external shared-rules import"; then
+		python3_supports_external_fetcher && return 0
+	fi
+	warn "python3 unavailable; the optional external shared-rules importer will be skipped. Core routing is unaffected."
+	return 1
 }
 
 ensure_vps_ssh_dependencies() {

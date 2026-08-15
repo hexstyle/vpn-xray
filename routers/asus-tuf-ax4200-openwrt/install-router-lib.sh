@@ -339,7 +339,12 @@ redsocks_cfg="$tmpdir/redsocks.conf"
 router_rules_cfg="$tmpdir/router-rules.config"
 
 install_progress_begin "Render router config templates"
-tar -C "$ROOT_DIR" -cf "$source_bundle" common routers vps
+# COPYFILE_DISABLE=1 stops macOS bsdtar from emitting AppleDouble "._*" members
+# for files carrying xattrs (com.apple.provenance on the bundled .ipk packages);
+# --exclude drops any that already exist on disk. Without this the router's
+# `find *.ipk` picks up "._python3-light_*.ipk" and opkg aborts with "Malformed
+# package file", so python3 never installs (the 2026-08 clean-router failure).
+COPYFILE_DISABLE=1 tar --exclude='._*' -C "$ROOT_DIR" -cf "$source_bundle" common routers vps
 render_template "$ROUTER_PROFILE_DIR/files/codex-xray.json.template" "$json_cfg"
 render_template "$ROUTER_PROFILE_DIR/files/redsocks.conf.template" "$redsocks_cfg"
 render_template "$ROUTER_COMMON_DIR/files/router-rules.config.template" "$router_rules_cfg"
