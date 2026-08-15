@@ -134,7 +134,10 @@ install_platform() {
 		try_pkg_install git "Git-backed shared rules sync" || true
 		try_pkg_install git-http "Git-backed shared rules sync" || true
 		ensure_git_sync_dependencies
-		ensure_python3_runtime
+		# Best-effort: python3 is only for the optional external shared-rules
+		# importer. It returns non-zero when unavailable; under `set -e` that must
+		# not abort the core install, so swallow it explicitly.
+		ensure_python3_runtime || true
 		mark_done packages
 	fi
 

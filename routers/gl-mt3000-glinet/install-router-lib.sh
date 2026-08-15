@@ -55,11 +55,12 @@ router_ssh() {
     break
   done
 
-  # Last resort: if key auth is not (yet) established but we hold the admin
-  # password for this session, satisfy the call over password auth instead of
-  # failing the whole install. Covers the brief window before the key lands and
-  # transient drops when the router restarts sshd mid-install.
-  if [ -n "${ROUTER_PASSWORD:-}" ]; then
+  # ssh returns 255 only for a genuine transport/auth failure; any other
+  # non-zero code is the REMOTE command's own exit status (e.g. a benign
+  # `[ -f ... ]` probe returning 1). Password fallback and the "SSH failed"
+  # banner apply only to the former — otherwise every non-zero remote command
+  # would be misreported as a broken SSH connection (the 2026-08 noisy install).
+  if [ "$rc" = 255 ] && [ -n "${ROUTER_PASSWORD:-}" ]; then
     err="$(mktemp)"
     if router_ssh_with_password "$err" "$@"; then
       rm -f "$err"
@@ -70,9 +71,11 @@ router_ssh() {
     rm -f "$err"
   fi
 
-  echo "Router SSH failed for $ROUTER_SSH." >&2
-  echo "Checks: the router should be reachable at $ROUTER_HOST, SSH must accept the current admin password, and the installer uses its own host-key cache at $INSTALLER_KNOWN_HOSTS." >&2
-  echo "If the router was factory-reset or replaced, rerun the install. The stale key in ~/.ssh/known_hosts is no longer relevant to this installer." >&2
+  if [ "$rc" = 255 ]; then
+    echo "Router SSH failed for $ROUTER_SSH." >&2
+    echo "Checks: the router should be reachable at $ROUTER_HOST, SSH must accept the current admin password, and the installer uses its own host-key cache at $INSTALLER_KNOWN_HOSTS." >&2
+    echo "If the router was factory-reset or replaced, rerun the install. The stale key in ~/.ssh/known_hosts is no longer relevant to this installer." >&2
+  fi
   return "$rc"
 }
 
