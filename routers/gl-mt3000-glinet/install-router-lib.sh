@@ -672,7 +672,7 @@ e2e_curl_err=''
 # whole install (and blink the UI red) even though the router recovers seconds
 # later. Retry the reachability probe a few times — only 000/empty (not-ready)
 # are retriable; any real HTTP status (incl. antibot 4xx) counts as reachable.
-e2e_attempts="${VPN_XRAY_E2E_ATTEMPTS:-5}"
+e2e_attempts="${VPN_XRAY_E2E_ATTEMPTS:-7}"
 e2e_retry_sleep="${VPN_XRAY_E2E_RETRY_SLEEP:-3}"
 if command -v curl >/dev/null 2>&1; then
   e2e_curl_err="$(mktemp)"
@@ -683,12 +683,17 @@ if command -v curl >/dev/null 2>&1; then
     case "$e2e_status" in
       ''|000)
         if [ "$e2e_i" = "2" ]; then
-          # Still not reachable after a couple tries — self-heal the transport
-          # (node 5): re-pin the VPS route (in case an uplink change left a stale
-          # "no route to host") and restart. Once.
-          echo "  Reachability still failing; self-healing transport (re-pin VPS route + restart)..."
-          router_ssh '/etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true; /etc/init.d/codex-xray restart >/dev/null 2>&1 || true' >/dev/null 2>&1 || true
-          sleep 5
+          # Still not reachable after a couple tries — self-heal the transport.
+          # Re-pin the VPS cert FIRST: a fresh or replaced VPS serves a new
+          # self-signed leaf the router does not yet trust ("x509: certificate
+          # signed by unknown authority for www.cloudflare.com"), which no route
+          # change or restart alone can fix. vpn-xray-repin-cert fetches the cert
+          # the VPS actually serves right now and pins it; then re-pin the VPS
+          # route (stale "no route to host" after an uplink change) and restart
+          # so xray reloads the corrected pin.
+          echo "  Reachability still failing; self-healing transport (re-pin VPS cert + route + restart)..."
+          router_ssh '/usr/bin/vpn-xray-repin-cert >/dev/null 2>&1 || true; /etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true; /etc/init.d/codex-xray restart >/dev/null 2>&1 || true' >/dev/null 2>&1 || true
+          sleep 8
         elif [ "$e2e_i" -lt "$e2e_attempts" ]; then
           echo "  Reachability attempt ${e2e_i}/${e2e_attempts}: proxy not ready yet (xray may still be restarting); retrying in ${e2e_retry_sleep}s..."
           sleep "$e2e_retry_sleep"

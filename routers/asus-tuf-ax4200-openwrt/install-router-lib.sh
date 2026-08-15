@@ -666,16 +666,20 @@ e2e_curl_err="$(mktemp)"
 # in which case a Mac-side probe would fail for routing reasons unrelated
 # to the Xray path actually being broken. Probing on the router keeps the
 # test focused on what we actually want to verify.
-for e2e_attempt in 1 2 3 4 5; do
+for e2e_attempt in 1 2 3 4 5 6 7; do
   e2e_status="$(router_ssh "curl --proxy http://127.0.0.1:${PROXY_PORT} -ksS -o /dev/null -m ${e2e_timeout} -w '%{http_code}' $(shell_quote "$e2e_target") 2>/dev/null || true" 2>"$e2e_curl_err" | tr -d '\r' | sed -n '1p')"
   case "$e2e_status" in
     ''|000)
       if [ "$e2e_attempt" = "2" ]; then
-        # Self-heal the transport (node 5): re-pin the VPS route + restart, in
-        # case an uplink change left a stale "no route to host". Once.
-        echo "  Reachability still failing; self-healing transport (re-pin VPS route + restart)..."
-        router_ssh '/etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true; /etc/init.d/codex-xray restart >/dev/null 2>&1 || true' >/dev/null 2>&1 || true
-        sleep 5
+        # Self-heal the transport. Re-pin the VPS cert FIRST: a fresh or replaced
+        # VPS serves a new self-signed leaf the router does not yet trust ("x509:
+        # certificate signed by unknown authority"), which no route change or
+        # restart alone can fix. vpn-xray-repin-cert fetches the cert the VPS
+        # actually serves now and pins it; then re-pin the route (stale "no route
+        # to host") and restart so xray reloads the corrected pin.
+        echo "  Reachability still failing; self-healing transport (re-pin VPS cert + route + restart)..."
+        router_ssh '/usr/bin/vpn-xray-repin-cert >/dev/null 2>&1 || true; /etc/init.d/codex-xray refresh_egress_route >/dev/null 2>&1 || true; /etc/init.d/codex-xray restart >/dev/null 2>&1 || true' >/dev/null 2>&1 || true
+        sleep 8
       else
         sleep 3
       fi
