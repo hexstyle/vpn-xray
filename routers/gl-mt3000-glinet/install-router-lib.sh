@@ -90,7 +90,7 @@ _vx_cleanup_router_askpass() {
 }
 
 router_key_auth_works() {
-  ssh -o BatchMode=yes -o PreferredAuthentications=publickey \
+  ssh -o BatchMode=yes -o PreferredAuthentications=publickey -o ControlPath=none \
     "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" 'true' >/dev/null 2>&1
 }
 

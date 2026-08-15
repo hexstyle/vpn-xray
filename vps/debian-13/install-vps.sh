@@ -113,7 +113,10 @@ shell_quote() {
 }
 
 vps_key_auth_works() {
-  ssh -o BatchMode=yes -o PreferredAuthentications=publickey \
+  # ControlPath=none forces a fresh connection so this measures REAL key auth,
+  # not a multiplexed master that a prior password connection may have opened
+  # (which would falsely report key auth as working).
+  ssh -o BatchMode=yes -o PreferredAuthentications=publickey -o ControlPath=none \
     "${VPS_SSH_OPTS[@]}" "$VPS_SSH" 'true' >/dev/null 2>&1
 }
 
