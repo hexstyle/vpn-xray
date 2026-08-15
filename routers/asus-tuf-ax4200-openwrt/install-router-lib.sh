@@ -12,9 +12,9 @@ install_progress_after_update() {
   [ -n "${ROUTER_SSH:-}" ] || return 0
   [ -n "${INSTALLER_KNOWN_HOSTS:-}" ] || return 0
   [ -f "${_VX_PROGRESS_STATUS_FILE:-}" ] || return 0
-  ssh \
-    -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new \
-    -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS" \
+  # Ride the shared master connection (ROUTER_SSH_OPTS carries mux + identity)
+  # and never prompt — telemetry must not block the install.
+  ssh -o BatchMode=yes "${ROUTER_SSH_OPTS[@]}" \
     "$ROUTER_SSH" "cat > $ROUTER_INSTALL_STATUS_FILE.tmp && mv $ROUTER_INSTALL_STATUS_FILE.tmp $ROUTER_INSTALL_STATUS_FILE" \
     < "$_VX_PROGRESS_STATUS_FILE" >/dev/null 2>&1 || true
 }
@@ -55,17 +55,161 @@ router_ssh() {
     break
   done
 
+  # Last resort: if key auth is not (yet) established but we hold the admin
+  # password for this session, satisfy the call over password auth instead of
+  # failing the whole install. Covers the brief window before the key lands and
+  # transient drops when the router restarts sshd mid-install.
+  if [ -n "${ROUTER_PASSWORD:-}" ]; then
+    err="$(mktemp)"
+    if router_ssh_with_password "$err" "$@"; then
+      rm -f "$err"
+      return 0
+    fi
+    rc=$?
+    cat "$err" >&2
+    rm -f "$err"
+  fi
+
   echo "Router SSH failed for $ROUTER_SSH." >&2
   echo "Checks: the router should be reachable at $ROUTER_HOST, SSH must accept the current admin password, and the installer uses its own host-key cache at $INSTALLER_KNOWN_HOSTS." >&2
   echo "If the router was factory-reset or replaced, rerun the install. The stale key in ~/.ssh/known_hosts is no longer relevant to this installer." >&2
   return "$rc"
 }
 
+# --- Router key-auth bootstrap ---------------------------------------------
+# A clean/factory router trusts no key, so every router_ssh would prompt for the
+# admin password (the "typed the password 100 times" report). These helpers
+# install the workstation public key on the router after at most ONE password
+# prompt, then pin key auth so the rest of the install is prompt-free.
+
+ROUTER_PASSWORD="${ROUTER_PASSWORD:-}"
+_VX_ROUTER_ASKPASS=''
+
+_vx_cleanup_router_askpass() {
+  [ -n "$_VX_ROUTER_ASKPASS" ] && rm -f "$_VX_ROUTER_ASKPASS" 2>/dev/null || true
+}
+
+router_key_auth_works() {
+  ssh -o BatchMode=yes -o PreferredAuthentications=publickey \
+    "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" 'true' >/dev/null 2>&1
+}
+
+# router_ssh_with_password <errfile> <remote-cmd...> — one ssh using the cached
+# admin password (sshpass if present, else a throwaway SSH_ASKPASS helper).
+router_ssh_with_password() {
+  local err="$1"
+  shift
+  [ -n "${ROUTER_PASSWORD:-}" ] || return 1
+
+  if command -v sshpass >/dev/null 2>&1; then
+    SSHPASS="$ROUTER_PASSWORD" sshpass -e ssh \
+      -o BatchMode=no \
+      -o PreferredAuthentications=password,keyboard-interactive \
+      -o PubkeyAuthentication=no \
+      -o NumberOfPasswordPrompts=1 \
+      "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" "$@" 2>"$err"
+    return $?
+  fi
+
+  if [ -z "$_VX_ROUTER_ASKPASS" ]; then
+    _VX_ROUTER_ASKPASS="$(mktemp "${TMPDIR:-/tmp}/vx-router-askpass.XXXXXX")"
+    cat > "$_VX_ROUTER_ASKPASS" <<EOF
+#!/bin/sh
+printf '%s\n' $(shell_quote "$ROUTER_PASSWORD")
+EOF
+    chmod 700 "$_VX_ROUTER_ASKPASS"
+    trap _vx_cleanup_router_askpass EXIT
+  fi
+  DISPLAY=1 SSH_ASKPASS="$_VX_ROUTER_ASKPASS" SSH_ASKPASS_REQUIRE=force \
+    ssh \
+      -o BatchMode=no \
+      -o PreferredAuthentications=password,keyboard-interactive \
+      -o PubkeyAuthentication=no \
+      -o NumberOfPasswordPrompts=1 \
+      "${ROUTER_SSH_OPTS[@]}" "$ROUTER_SSH" "$@" 2>"$err"
+}
+
+ensure_router_key_auth() {
+  local pub keyline err rc
+
+  # Pin the chosen identity so the key probe tests exactly our key (and the
+  # master connection opens with it) rather than whatever the agent offers.
+  if [ -n "${ROUTER_IDENTITY:-}" ] && [ -r "${ROUTER_IDENTITY}" ]; then
+    ROUTER_SSH_OPTS+=( -o IdentityFile="$ROUTER_IDENTITY" -o IdentitiesOnly=yes )
+  fi
+
+  # 1. Already trusted? Pin key-only + BatchMode so no later hiccup can turn
+  #    into an interactive prompt, then return (the common re-install case).
+  if router_key_auth_works; then
+    ROUTER_SSH_OPTS+=( -o PreferredAuthentications=publickey -o BatchMode=yes )
+    return 0
+  fi
+
+  # 2. Need a public key to install. Prefer the detected workstation key; if the
+  #    workstation has none, generate a dedicated installer key so a keyless
+  #    machine still ends up with passwordless access.
+  pub="${ROUTER_IDENTITY_PUB:-}"
+  if [ -z "$pub" ] || [ ! -r "$pub" ]; then
+    warn "No usable local SSH public key for the router; generating an installer key."
+    mkdir -p "$(installer_ssh_dir "$ROOT_DIR")"
+    ROUTER_IDENTITY="$(installer_ssh_dir "$ROOT_DIR")/router_id_ed25519"
+    [ -f "$ROUTER_IDENTITY" ] || ssh-keygen -q -t ed25519 -N '' -f "$ROUTER_IDENTITY" -C 'vpn-xray-installer'
+    pub="${ROUTER_IDENTITY}.pub"
+    ROUTER_SSH_OPTS+=( -o IdentityFile="$ROUTER_IDENTITY" -o IdentitiesOnly=yes )
+  fi
+
+  # 3. Obtain the admin password: from env (non-interactive), else one prompt.
+  if [ -z "${ROUTER_PASSWORD:-}" ]; then
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+      warn "Router key auth is not set up and no ROUTER_PASSWORD / TTY is available; router_ssh may prompt per call."
+      return 0
+    fi
+    echo
+    echo "Key-based SSH is not set up yet for $ROUTER_SSH (clean router)."
+    read -rsp "Enter admin password for $ROUTER_SSH (one time, to install the key): " ROUTER_PASSWORD
+    echo
+    [ -n "$ROUTER_PASSWORD" ] || { warn "No password entered; continuing without key auth (expect per-call prompts)."; return 0; }
+  fi
+
+  # 4. Drop any stale host key so the password connection is not refused, then
+  #    append our pubkey to both the dropbear and ~/.ssh authorized_keys files
+  #    (OpenWrt/dropbear reads the former; belt-and-suspenders for the latter).
+  remove_hostkey_entry "$INSTALLER_KNOWN_HOSTS" "$ROUTER_HOST" 2>/dev/null || true
+  keyline="$(cat "$pub")"
+  err="$(mktemp)"
+  router_ssh_with_password "$err" "
+    mkdir -p /etc/dropbear /root/.ssh 2>/dev/null || true
+    for f in /etc/dropbear/authorized_keys /root/.ssh/authorized_keys; do
+      touch \"\$f\" 2>/dev/null || continue
+      chmod 600 \"\$f\" 2>/dev/null || true
+      grep -qxF $(shell_quote "$keyline") \"\$f\" 2>/dev/null || printf '%s\n' $(shell_quote "$keyline") >> \"\$f\"
+    done
+  "
+  rc=$?
+  rm -f "$err"
+  if [ "$rc" -ne 0 ]; then
+    warn "Could not install the SSH key on the router (admin password rejected?). Continuing; router_ssh will fall back to the password."
+    return 0
+  fi
+
+  # 5. Confirm and pin key auth so nothing silently falls back to a prompt.
+  if router_key_auth_works; then
+    ROUTER_SSH_OPTS+=( -o PreferredAuthentications=publickey -o BatchMode=yes )
+    ROUTER_PASSWORD=''
+    _vx_cleanup_router_askpass
+    _VX_ROUTER_ASKPASS=''
+    echo "Installed SSH key on the router — the rest of the install runs without password prompts."
+    return 0
+  fi
+  warn "Key auth still not confirmed after key install; router_ssh will use the cached password for this run."
+  return 0
+}
+
 router_ssh_ready() {
-  ssh \
-    -o ConnectTimeout="$ROUTER_RELOAD_PROBE_TIMEOUT" \
-    -o StrictHostKeyChecking=accept-new \
-    -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS" \
+  # Ride the shared master + identity; never prompt while polling for the
+  # router to come back after a network reload.
+  ssh -o BatchMode=yes -o ConnectTimeout="$ROUTER_RELOAD_PROBE_TIMEOUT" \
+    "${ROUTER_SSH_OPTS[@]}" \
     "$ROUTER_SSH" "true" >/dev/null 2>&1
 }
 

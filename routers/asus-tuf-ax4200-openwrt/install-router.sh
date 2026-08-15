@@ -81,6 +81,12 @@ ROUTER_SSH_OPTS=(
   -o StrictHostKeyChecking=accept-new
   -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
 )
+# Reuse ONE master SSH connection for the whole router install. A clean router
+# authenticates once (key, or a single password prompt handled below); every
+# subsequent router_ssh / progress-mirror / readiness-probe call rides the same
+# connection instead of re-authenticating — the fix for "typed the router
+# password 100 times".
+ROUTER_SSH_OPTS+=( $(ssh_mux_opts) )
 VPS_SSH_OPTS=(
   -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
   -o StrictHostKeyChecking=accept-new
@@ -211,6 +217,20 @@ reject_placeholder_vars \
   XRAY_SERVER_NAME \
   XRAY_PUBLIC_KEY \
   XRAY_SHORT_ID
+
+# Which local key to trust on the router. Reuse the workstation key already
+# auto-detected for router git access; fall back to the default id_ed25519.
+ROUTER_IDENTITY="${ROUTER_IDENTITY:-${RULES_GIT_SSH_PRIVATE_KEY_FILE:-}}"
+if [[ -z "$ROUTER_IDENTITY" && -r "$HOME/.ssh/id_ed25519" ]]; then
+  ROUTER_IDENTITY="$HOME/.ssh/id_ed25519"
+fi
+ROUTER_IDENTITY_PUB=""
+[[ -n "$ROUTER_IDENTITY" && -r "${ROUTER_IDENTITY}.pub" ]] && ROUTER_IDENTITY_PUB="${ROUTER_IDENTITY}.pub"
+
+# Establish passwordless key auth to the router before the first router_ssh so
+# a clean/factory router is set up with at most ONE password prompt, then the
+# whole install (preflight + deploy + verify) runs with zero further prompts.
+ensure_router_key_auth
 
 router_facts="$(
   router_ssh "ROUTER_REQUIRED_COMMANDS=$(shell_quote "$ROUTER_REQUIRED_COMMANDS") sh -s" <<'EOF'

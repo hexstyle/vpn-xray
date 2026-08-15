@@ -112,6 +112,58 @@ shell_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
+vps_key_auth_works() {
+  ssh -o BatchMode=yes -o PreferredAuthentications=publickey \
+    "${VPS_SSH_OPTS[@]}" "$VPS_SSH" 'true' >/dev/null 2>&1
+}
+
+# Install the workstation public key on a keyless/fresh VPS after ONE password,
+# then pin key auth — so this run and every re-run are prompt-free instead of
+# depending on the password being re-typed (the "install never reached the new
+# VPS" report). No-op when key auth already works; skipped in --preflight.
+ensure_vps_key_auth() {
+  local identity pub keyline err rc
+
+  if vps_key_auth_works; then
+    VPS_SSH_OPTS+=( -o PreferredAuthentications=publickey -o BatchMode=yes )
+    return 0
+  fi
+
+  [[ -n "$VPS_PASSWORD" ]] || return 0   # no password → nothing we can do here
+
+  identity="${VPS_IDENTITY:-}"
+  if [[ -z "$identity" && -r "$HOME/.ssh/id_ed25519" ]]; then
+    identity="$HOME/.ssh/id_ed25519"
+  fi
+  if [[ -z "$identity" || ! -r "${identity}.pub" ]]; then
+    identity="$(installer_ssh_dir "$ROOT_DIR")/vps_id_ed25519"
+    [[ -f "$identity" ]] || ssh-keygen -q -t ed25519 -N '' -f "$identity" -C 'vpn-xray-installer'
+  fi
+  pub="${identity}.pub"
+  [[ -r "$pub" ]] || return 0
+  VPS_SSH_OPTS+=( -o IdentityFile="$identity" -o IdentitiesOnly=yes )
+
+  remove_hostkey_entry "$INSTALLER_KNOWN_HOSTS" "$VPS_HOST" 2>/dev/null || true
+  keyline="$(cat "$pub")"
+  err="$(mktemp)"
+  vps_ssh_with_password "$err" "
+    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+    touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+    grep -qxF $(shell_quote "$keyline") /root/.ssh/authorized_keys 2>/dev/null || printf '%s\n' $(shell_quote "$keyline") >> /root/.ssh/authorized_keys
+  "
+  rc=$?
+  rm -f "$err"
+  if [[ "$rc" -ne 0 ]]; then
+    echo "Could not install the SSH key on the VPS (password rejected?). Continuing with password auth for this run." >&2
+    return 0
+  fi
+  if vps_key_auth_works; then
+    VPS_SSH_OPTS+=( -o PreferredAuthentications=publickey -o BatchMode=yes )
+    echo "Installed SSH key on the VPS — the rest of the install runs without password prompts."
+  fi
+  return 0
+}
+
 require_vars \
   VPS_SSH VPS_HOST XRAY_PORT XRAY_UUID XRAY_SERVER_NAME XRAY_SHORT_ID XRAY_PRIVATE_KEY XRAY_PUBLIC_KEY \
   VPS_INSTALL_SCRIPT VPS_SERVER_CONFIG_TEMPLATE VPS_REMOTE_META_PATH \
@@ -125,6 +177,13 @@ cleanup() {
   rm -rf "$tmpdir"
 }
 trap cleanup EXIT
+
+# On a full install (not preflight), make sure key auth to the VPS is set up —
+# installing the workstation key after one password if needed — so the rest of
+# the run and future runs need no password. Preflight stays read-only.
+if [[ "$PREFLIGHT_ONLY" != "1" ]]; then
+  ensure_vps_key_auth
+fi
 
 if [[ -n "${XRAY_FLOW:-}" ]]; then
   printf -v XRAY_USER_FLOW_BLOCK ',\n                "flow": "%s"' "$XRAY_FLOW"
