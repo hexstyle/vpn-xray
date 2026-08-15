@@ -199,20 +199,22 @@ render_router_rules_conf() {
 	RULES_EXTERNAL_SOURCE_URL="$(effective_external_source_url)" \
 	RULES_EXTERNAL_SOURCE_INTERVAL="$(effective_external_source_interval)" \
 	python3 - "$COMMON_DIR/files/router-rules.config.template" "$output" <<'PY'
+# Avoid pathlib: on python3.9 it imports urllib, which the router's minimal
+# python3-light package does not ship — that crash aborted the whole install
+# (2026-08). Plain open() needs only builtins present in python3-light.
 import os
-import pathlib
 import re
 import sys
 
-template_path = pathlib.Path(sys.argv[1])
-output_path = pathlib.Path(sys.argv[2])
-template = template_path.read_text()
+with open(sys.argv[1]) as _f:
+    template = _f.read()
 
 def repl(match):
     key = match.group(1)
     return os.environ.get(key, "")
 
-output_path.write_text(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
+with open(sys.argv[2], "w") as _f:
+    _f.write(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
 PY
 }
 
@@ -220,14 +222,15 @@ normalize_unix_text_file() {
 	local path="$1"
 	[ -f "$path" ] || return 0
 	python3 - "$path" <<'PY'
-import pathlib
+# No pathlib (it pulls urllib, absent in python3-light) — plain file I/O only.
 import sys
 
-path = pathlib.Path(sys.argv[1])
-data = path.read_bytes()
+with open(sys.argv[1], "rb") as _f:
+    data = _f.read()
 normalized = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 if normalized != data:
-    path.write_bytes(normalized)
+    with open(sys.argv[1], "wb") as _f:
+        _f.write(normalized)
 PY
 }
 
