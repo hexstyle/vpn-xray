@@ -243,10 +243,35 @@ smoke_json() {
 	local http_test_output https_test_output egress_output api_output
 	local http_ok https_ok egress_ok openai_ok overall_status overall_message
 
+	# Each core check gets one immediate retry on a transient curl failure.
+	# xray's client mux (concurrency: 8) occasionally head-of-line-blocks a
+	# single smoke stream behind real concurrent LAN traffic for a few
+	# seconds; that is application-layer contention, not a dead path or a
+	# firewall (node 4.7, DIAGNOSTIC-TREE.md). One retry absorbs the blip
+	# without hiding a genuine outage, which fails both attempts too.
 	http_test_output="$(curl -ksS -I -m 5 -x "$LOCAL_HTTP_PROXY" https://example.com 2>&1 | sed -n '1,20p' || true)"
+	if printf '%s' "$http_test_output" | grep -q 'curl:'; then
+		sleep 1
+		http_test_output="$(curl -ksS -I -m 5 -x "$LOCAL_HTTP_PROXY" https://example.com 2>&1 | sed -n '1,20p' || true)"
+	fi
+
 	https_test_output="$(curl -ksS -I -m 5 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://example.com 2>&1 | sed -n '1,20p' || true)"
+	if printf '%s' "$https_test_output" | grep -q 'curl:'; then
+		sleep 1
+		https_test_output="$(curl -ksS -I -m 5 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://example.com 2>&1 | sed -n '1,20p' || true)"
+	fi
+
 	egress_output="$(curl -ksS -m 5 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://ipinfo.io/ip 2>&1 | sed -n '1,8p' || true)"
+	if printf '%s' "$egress_output" | grep -q 'curl:'; then
+		sleep 1
+		egress_output="$(curl -ksS -m 5 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://ipinfo.io/ip 2>&1 | sed -n '1,8p' || true)"
+	fi
+
 	api_output="$(curl -ksS -I -m 5 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://api.openai.com/v1/models 2>&1 | sed -n '1,20p' || true)"
+	if printf '%s' "$api_output" | grep -q 'curl:'; then
+		sleep 1
+		api_output="$(curl -ksS -I -m 5 --socks5-hostname "127.0.0.1:${LIVE_SOCKS_PORT}" https://api.openai.com/v1/models 2>&1 | sed -n '1,20p' || true)"
+	fi
 
 	http_ok=0
 	if ! printf '%s' "$http_test_output" | grep -q 'curl:' && smoke_output_has_success_like_http_status "$http_test_output"; then

@@ -200,9 +200,45 @@ curl -m 8 -x http://127.0.0.1:1083 https://api.ipify.org   # expect VPS IP
 - 4.6 **error.log shows `use of closed network connection` in bulk +
   websocket dial refused** → VPS side down, go to node 6; do not restart the
   router runtime for a VPS-side failure (meta-rule 5).
+- 4.7 **Watchdog restart storm from uncorrelated single-metric smoke noise**
+  (2026-08-31). Symptom: `xray-switch-watchdog` restarts the runtime every
+  ~90-180 s around the clock; `logread` shows `runtime smoke failed` with a
+  *different* one of `https_ok`/`egress_ok`/`openai_ok` false each cycle,
+  never all together; LAN clients feel constant micro-outages on the
+  selectively-routed domains. The path itself is not broken: 15 sequential
+  and 30 parallel **completed** TCP handshakes to the VPS all succeeded
+  instantly (0% loss); `mtr --tcp` showing 47-57% "loss" to the VPS on port
+  443 **and** identically on port 22 was a red herring — that is an
+  anti-scan artifact of mtr's half-open SYN-then-immediate-RST probing
+  pattern being penalized upstream, not loss of real traffic (real,
+  completed connections are unaffected, and the effect is not port-443/VPN
+  specific since SSH shows the same number). Root cause: xray's client mux
+  (`concurrency: 8`) occasionally head-of-line-blocks a single smoke stream
+  behind genuine concurrent LAN traffic for a few seconds — a transient
+  application-layer contention blip, not a network or firewall fault. The
+  old watchdog counted *any one* core check failing on 2 consecutive
+  ~45-90s-apart probes as `severe` even when it was a different metric each
+  time (the signature of noise — a real outage fails every check, every
+  probe) → restart → the restart itself re-opens dozens of mux/LAN streams
+  at once, which is exactly the load that trips the next flaky check ~90 s
+  later. Self-sustaining, self-inflicted loop.
+  **Repair**: (a) `smoke_json` (`xray-admin-status.sh`) retries each core
+  check once immediately on a transient `curl:` failure before recording
+  it, absorbing a single in-probe blip; (b) the watchdog only counts a probe
+  as `severe` (fast 2-strike restart) when **two or more** core checks fail
+  *together in the same probe* — the correlated signature of a real
+  outage; an isolated single-metric miss instead increments the existing
+  lenient counter (renamed `PARTIAL_FAILURE_THRESHOLD`, was
+  `OPENAI_FAILURE_THRESHOLD`), which still requires 4 consecutive misses
+  before restarting. `safe` (source-only; a genuine outage still restarts
+  within 2 probes, ~90 s — only the false positives stop).
 
 **Verify** (in order): local proxy probe returns VPS IP → LAN client probe
 returns VPS IP → all three switch states behave per AGENTS.md matrix.
+For 4.7 specifically: `tests/test_xray_runtime_contract.sh` asserts the
+renamed threshold; on hardware, watchdog restarts should drop to near zero
+under steady real LAN load while a real full outage (VPS stopped) still
+restarts within ~90 s.
 
 ---
 

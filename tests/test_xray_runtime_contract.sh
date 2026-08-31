@@ -154,8 +154,11 @@ grep -q 'QUERY_STRING=action=smoke' "$WATCHDOG" \
 grep -q 'QUERY_STRING=action=restart' "$WATCHDOG" \
 	|| fail "xray-switch-watchdog must restart the runtime after repeated smoke failures"
 
-grep -q 'OPENAI_FAILURE_THRESHOLD=' "$WATCHDOG" \
-	|| fail "xray-switch-watchdog must tolerate transient OpenAI-only failures before restarting the runtime"
+grep -q 'PARTIAL_FAILURE_THRESHOLD=' "$WATCHDOG" \
+	|| fail "xray-switch-watchdog must tolerate transient single-metric smoke failures before restarting the runtime"
+
+grep -q 'fail_count' "$WATCHDOG" \
+	|| fail "xray-switch-watchdog must only take the fast severe-restart path when multiple core smoke checks fail together in the same probe (node 4.7)"
 
 grep -q 'xray_failsafe_enable()' "$LIB_COMMON" \
 	|| fail "lib-common must provide a shared client fail-safe kill switch"

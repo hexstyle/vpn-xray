@@ -34,14 +34,14 @@ SMOKE_MIN_INTERVAL=45
 SMOKE_SETTLE_SECONDS=25
 HEAL_COOLDOWN=90
 SEVERE_FAILURE_THRESHOLD=2
-OPENAI_FAILURE_THRESHOLD=4
+PARTIAL_FAILURE_THRESHOLD=4
 LAST_SMOKE_FILE="/var/run/xray-switch-watchdog.last-smoke"
 LAST_RECOVERY_FILE="/var/run/xray-switch-watchdog.last-recovery"
 SEVERE_FAILURE_FILE="/var/run/xray-switch-watchdog.severe-failures"
-OPENAI_FAILURE_FILE="/var/run/xray-switch-watchdog.openai-failures"
+PARTIAL_FAILURE_FILE="/var/run/xray-switch-watchdog.partial-failures"
 
 clear_health_state() {
-	rm -f "$LAST_SMOKE_FILE" "$LAST_RECOVERY_FILE" "$SEVERE_FAILURE_FILE" "$OPENAI_FAILURE_FILE"
+	rm -f "$LAST_SMOKE_FILE" "$LAST_RECOVERY_FILE" "$SEVERE_FAILURE_FILE" "$PARTIAL_FAILURE_FILE"
 }
 
 record_timestamp() {
@@ -87,7 +87,7 @@ reset_counter() {
 
 smoke_output() {
 	[ -x "'"$ADMIN_CGI"'" ] || return 1
-	timeout 30 env REQUEST_METHOD=GET QUERY_STRING=action=smoke "'"$ADMIN_CGI"'" 2>/dev/null \
+	timeout 50 env REQUEST_METHOD=GET QUERY_STRING=action=smoke "'"$ADMIN_CGI"'" 2>/dev/null \
 		| tr -d "\r" \
 		| sed -n "/^{/,\$p" \
 		| sed -n "1p"
@@ -132,7 +132,7 @@ restart_runtime() {
 }
 
 maybe_smoke_recover() {
-	local output="" severe_count=0 openai_count=0
+	local output="" severe_count=0 partial_count=0 fail_count=0
 
 	[ -x "'"$ADMIN_CGI"'" ] || return 0
 	[ "$(seconds_since_file "$LAST_RECOVERY_FILE")" -ge "$SMOKE_SETTLE_SECONDS" ] || return 0
@@ -163,53 +163,67 @@ maybe_smoke_recover() {
 
 	if [ -z "$output" ]; then
 		severe_count="$(increment_counter "$SEVERE_FAILURE_FILE")"
-		reset_counter "$OPENAI_FAILURE_FILE"
+		reset_counter "$PARTIAL_FAILURE_FILE"
 		log "smoke probe unavailable severe_failures=$severe_count"
 	elif smoke_status_ok "$output"; then
 		reset_counter "$SEVERE_FAILURE_FILE"
-		reset_counter "$OPENAI_FAILURE_FILE"
+		reset_counter "$PARTIAL_FAILURE_FILE"
 		return 0
-	elif ! smoke_https_ok "$output" || ! smoke_egress_ok "$output"; then
-		severe_count="$(increment_counter "$SEVERE_FAILURE_FILE")"
-		reset_counter "$OPENAI_FAILURE_FILE"
-		log "runtime smoke failed severe_failures=$severe_count output=$output"
-		if [ "$severe_count" -lt "$SEVERE_FAILURE_THRESHOLD" ]; then
-			return 0
-		fi
-		if [ "$(seconds_since_file "$LAST_RECOVERY_FILE")" -lt "$HEAL_COOLDOWN" ]; then
-			return 0
-		fi
-		xray_failsafe_enable "severe smoke failure: $output"
-		# Cert-pin drift (BOOT-PATH-DESIGN §2) presents exactly as a severe
-		# smoke failure — path up, egress dead — and a plain restart cannot
-		# fix it (the pinned cert is still wrong, so it would restart-loop
-		# forever). Re-pin the cert to what the VPS serves BEFORE the
-		# restart the watchdog was already going to do; the restart then
-		# reloads the corrected cert. Best-effort and bounded: on a healthy
-		# cert this is a no-op (exit 0), on an unreachable VPS it keeps the
-		# existing pin (exit 0), and any failure degrades to a plain restart.
-		if [ -x /usr/bin/vpn-xray-repin-cert ]; then
-			/usr/bin/vpn-xray-repin-cert
-			[ "$?" -eq 10 ] && log "re-pinned drifted VPS cert before restart"
-		fi
-		log "attempting runtime restart after severe smoke failure"
-		restart_runtime >/dev/null 2>&1 || log "runtime restart failed after severe smoke failure"
-		reset_counter "$SEVERE_FAILURE_FILE"
-		reset_counter "$OPENAI_FAILURE_FILE"
 	else
-		openai_count="$(increment_counter "$OPENAI_FAILURE_FILE")"
-		reset_counter "$SEVERE_FAILURE_FILE"
-		log "OpenAI-only smoke failed openai_failures=$openai_count output=$output"
-		if [ "$openai_count" -lt "$OPENAI_FAILURE_THRESHOLD" ]; then
-			return 0
+		# A dead/broken tunnel fails every core check on every probe. A
+		# single flaky metric — usually the xray client mux (concurrency: 8)
+		# head-of-line-blocking one smoke stream behind real LAN traffic
+		# for a few seconds — fails only one, and rarely the same one twice
+		# in a row (node 4.7, DIAGNOSTIC-TREE.md). Count how many of the
+		# three core checks failed *in this one probe* and only take the
+		# fast severe path when they failed together.
+		fail_count=0
+		smoke_https_ok "$output" || fail_count=$((fail_count + 1))
+		smoke_egress_ok "$output" || fail_count=$((fail_count + 1))
+		smoke_openai_ok "$output" || fail_count=$((fail_count + 1))
+
+		if [ "$fail_count" -ge 2 ]; then
+			severe_count="$(increment_counter "$SEVERE_FAILURE_FILE")"
+			reset_counter "$PARTIAL_FAILURE_FILE"
+			log "runtime smoke failed (fail_count=$fail_count) severe_failures=$severe_count output=$output"
+			if [ "$severe_count" -lt "$SEVERE_FAILURE_THRESHOLD" ]; then
+				return 0
+			fi
+			if [ "$(seconds_since_file "$LAST_RECOVERY_FILE")" -lt "$HEAL_COOLDOWN" ]; then
+				return 0
+			fi
+			xray_failsafe_enable "severe smoke failure: $output"
+			# Cert-pin drift (BOOT-PATH-DESIGN §2) presents exactly as a severe
+			# smoke failure — path up, egress dead — and a plain restart cannot
+			# fix it (the pinned cert is still wrong, so it would restart-loop
+			# forever). Re-pin the cert to what the VPS serves BEFORE the
+			# restart the watchdog was already going to do; the restart then
+			# reloads the corrected cert. Best-effort and bounded: on a healthy
+			# cert this is a no-op (exit 0), on an unreachable VPS it keeps the
+			# existing pin (exit 0), and any failure degrades to a plain restart.
+			if [ -x /usr/bin/vpn-xray-repin-cert ]; then
+				/usr/bin/vpn-xray-repin-cert
+				[ "$?" -eq 10 ] && log "re-pinned drifted VPS cert before restart"
+			fi
+			log "attempting runtime restart after severe smoke failure"
+			restart_runtime >/dev/null 2>&1 || log "runtime restart failed after severe smoke failure"
+			reset_counter "$SEVERE_FAILURE_FILE"
+			reset_counter "$PARTIAL_FAILURE_FILE"
+		else
+			partial_count="$(increment_counter "$PARTIAL_FAILURE_FILE")"
+			reset_counter "$SEVERE_FAILURE_FILE"
+			log "single-metric smoke failure partial_failures=$partial_count output=$output"
+			if [ "$partial_count" -lt "$PARTIAL_FAILURE_THRESHOLD" ]; then
+				return 0
+			fi
+			if [ "$(seconds_since_file "$LAST_RECOVERY_FILE")" -lt "$HEAL_COOLDOWN" ]; then
+				return 0
+			fi
+			log "attempting runtime restart after repeated single-metric smoke failures"
+			restart_runtime >/dev/null 2>&1 || log "runtime restart failed after repeated single-metric smoke failures"
+			reset_counter "$SEVERE_FAILURE_FILE"
+			reset_counter "$PARTIAL_FAILURE_FILE"
 		fi
-		if [ "$(seconds_since_file "$LAST_RECOVERY_FILE")" -lt "$HEAL_COOLDOWN" ]; then
-			return 0
-		fi
-		log "attempting runtime restart after repeated OpenAI smoke failures"
-		restart_runtime >/dev/null 2>&1 || log "runtime restart failed after repeated OpenAI smoke failures"
-		reset_counter "$SEVERE_FAILURE_FILE"
-		reset_counter "$OPENAI_FAILURE_FILE"
 	fi
 }
 
