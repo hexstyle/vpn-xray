@@ -358,9 +358,34 @@ client-side DNS cache, source-bypass rule matching the client. All repairs
 non-empty; or router dials wrong port/SNI (4.5).
 
 **States and transitions**:
-- 8.1 **Profile empty, VPS authoritative** (fresh install, reprovision-adopt):
-  copy VPS identity into profile — `adopt_remote_into_profile`. UCI-only,
-  `safe`, may run synchronously after a successful repair.
+- 8.1 **VPS authoritative** (fresh install, reprovision-adopt, or the
+  operator pointed the UI's IP/user/password form at a VPS this profile
+  never provisioned — e.g. reusing another profile's already-managed VPS):
+  copy the VPS's own identity into the profile — `adopt_remote_into_profile`.
+  UCI-only, `safe`, may run synchronously. This is now the **default,
+  UI-driven** entry point, not just a fresh-install/CLI path: `diagnose_repair_action`
+  (`xray-vps-repair.sh`, action `diagnose_repair` — the web UI's only VPS
+  write path) runs a read-only `refresh_remote_cache` right after SSH is
+  confirmed and, whenever the VPS's live `uuid` is non-empty and differs
+  from the profile's, adopts it *before* staging/pushing anything. The
+  repair pipeline that follows then re-renders from (and round-trips) the
+  now-adopted identity instead of overwriting a working server with a
+  freshly generated one. A genuinely empty VPS (`remote_uuid` empty — never
+  configured, or only the xray binary present) has nothing to adopt, so the
+  pipeline provisions fresh from the profile's own generated identity —
+  "create a new one" per the operator's ask. An already-synced profile
+  compares equal and this is a no-op on every routine repair click.
+  (2026-09-02: the older gate — only adopt when the profile's `public_key`
+  is empty — never fired through the UI, because `formPayload()` always
+  echoes the current, already-generated uuid/keys back on every submit; the
+  comparison is now against the VPS's actual live identity, not against
+  whether the local form field happens to be blank.) Deliberately replacing
+  a VPS's existing identity instead of adopting it is out of scope for this
+  path — that still requires the separate CLI-only `apply_profile`
+  action (`apply_everything_action`, `xray-vps-setup.sh`), which is not
+  wired to the UI and is a distinct, `disruptive`-adjacent code path (it
+  can also cut the router's live traffic — see Gap register note on its
+  synchronous `apply_profile_to_router_internal` call).
 - 8.2 **Profile authoritative, router stale**: rendering
   `/etc/xray/codex-xray.json` + runtime restart —
   `apply_profile_to_router_internal`. **`disruptive`** (hard cutover of the
@@ -550,3 +575,25 @@ field: implement, then move it up into the tree body.
   diverges the other (which is how G7 opened). `test_profile_parity.sh`
   now diffs the shared, profile-independent files; keep new such files in
   its list.
+- **G13**: `apply_everything_action`/`apply_profile_to_router_action`
+  (CGI actions `apply_profile` and `apply_router`, `xray-vps-setup.sh` /
+  `xray-vps-actions.sh`) call `apply_profile_to_router_internal` —
+  a hard cutover of the transparent path — **synchronously inside the
+  CGI request**, the exact anti-pattern meta-rule 2 forbids and that hung
+  the router on 2026-07-09 (node 8.2). Unlike node 8.2's own apply flow,
+  these two actions were never migrated to the deferred-job pattern: a
+  `schedule_router_apply_job`/`run_router_apply_job` pair already exists
+  in `xray-vps-setup.sh` (status file `ROUTER_APPLY_STATUS_FILE`, an
+  `XRAY_VPS_JOB=apply_router` re-exec mode already wired into
+  `xray-vps.cgi`) but is dead code — nothing calls
+  `schedule_router_apply_job`, and `status_json` never exposes
+  `ROUTER_APPLY_STATUS_FILE` for the UI to poll. Neither action is
+  currently reachable from the web UI (only the CLI tool
+  `bootstrap-router-vps.sh` calls `apply_profile`), which is why this has
+  not hung a router yet in practice — but wiring either into the UI
+  without fixing this first would reintroduce the 2026-07-09 class of bug.
+  Fix: make both actions call `schedule_router_apply_job` instead of
+  `apply_profile_to_router_internal` directly, move the
+  backup/apply/rollback sequence into `run_router_apply_job`, and expose
+  `ROUTER_APPLY_STATUS_FILE` in `status_json` before either action is
+  ever UI-wired.

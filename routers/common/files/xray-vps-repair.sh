@@ -345,6 +345,32 @@ diagnose_repair_action() {
 	cat "$creds_raw_log" > "$combined_raw_log" 2>/dev/null || : > "$combined_raw_log"
 	rm -f "$creds_raw_log"
 
+	# DIAGNOSTIC-TREE 8.1: before staging anything, check whether the VPS
+	# already carries its own working Xray identity that differs from the
+	# profile's — the form was pointed at a VPS this profile never
+	# provisioned (another profile's VPS being reused, or one set up
+	# outside this project entirely). Prefer what is already running on
+	# the VPS over silently overwriting it: adopt that identity into the
+	# profile so the repair pipeline below re-renders from (and
+	# round-trips) the VPS's own config instead of pushing a freshly
+	# generated one over a working server. A VPS with no real identity of
+	# its own (remote_uuid empty — the box has never been configured, or
+	# only has the xray binary present) has nothing to adopt, so the
+	# pipeline provisions fresh from the profile's own generated identity,
+	# same as before. An already-synced profile compares equal and this is
+	# a no-op every other click. Read-only cache refresh over the SSH
+	# session already confirmed above; a failure here just falls back to
+	# the profile's own identity rather than blocking repair.
+	if refresh_remote_cache "$profile_id" >/dev/null 2>&1; then
+		local remote_cache remote_uuid local_uuid
+		remote_cache="$(profile_cache_path "$profile_id")"
+		remote_uuid="$(cache_get "$remote_cache" REMOTE_uuid)"
+		local_uuid="$(profile_get "$profile_id" uuid)"
+		if [ -n "$remote_uuid" ] && [ "$remote_uuid" != "$local_uuid" ]; then
+			adopt_remote_into_profile "$profile_id"
+		fi
+	fi
+
 	local repair_rc=0
 	run_repair_pipeline "$profile_id"
 	repair_rc=$?
@@ -374,16 +400,9 @@ diagnose_repair_action() {
 
 	# Refresh our local cache view of the VPS so status polls after this
 	# call reflect what actually runs on the VPS. Read-only side effect
-	# only, does not touch the router runtime.
+	# only, does not touch the router runtime. (The adopt-vs-provision
+	# decision itself already happened above, before the pipeline ran.)
 	refresh_remote_cache "$profile_id" >/dev/null 2>&1 || true
-
-	# DIAGNOSTIC-TREE 8.1: profile empty, VPS authoritative — adopt the
-	# live VPS identity into the profile. UCI-only, risk class `safe`, so
-	# it may run synchronously. Only when the profile has no public_key of
-	# its own; an operator-authored profile is never overwritten (8.4).
-	if [ "$repair_rc" -eq 0 ] && [ -z "$(profile_get "$profile_id" public_key)" ]; then
-		adopt_remote_into_profile "$profile_id" >/dev/null 2>&1 || true
-	fi
 
 	# DIAGNOSTIC-TREE 8.2 / meta-rule 5: diagnose_repair repairs the VPS.
 	# It MUST NOT touch the router's live client config. An earlier build
