@@ -33,6 +33,8 @@ VPS_SSH_OPTS=(
   -o StrictHostKeyChecking=accept-new
   -o UserKnownHostsFile="$(installer_known_hosts_file "$ROOT_DIR")"
 )
+VPS_SSH_PORT="${VPS_SSH_PORT:-22}"
+VPS_SSH_OPTS+=( -p "$VPS_SSH_PORT" )
 # Share the multiplexed master connection so the meta probe reuses (or opens)
 # the same VPS ssh session as the rest of the install — avoids a rate-limit trip.
 VPS_SSH_OPTS+=( $(ssh_mux_opts) )

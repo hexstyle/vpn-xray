@@ -92,6 +92,8 @@ VPS_SSH_OPTS=(
   -o StrictHostKeyChecking=accept-new
   -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"
 )
+VPS_SSH_PORT="${VPS_SSH_PORT:-22}"
+VPS_SSH_OPTS+=( -p "$VPS_SSH_PORT" )
 # Reuse the shared master SSH connection to the VPS (managed-key push + meta
 # sync) so this stage does not add fresh connections that trip its rate limit.
 VPS_SSH_OPTS+=( $(ssh_mux_opts) )
@@ -367,3 +369,10 @@ fi
 export XRAY_USER_FLOW_BLOCK XRAY_CLIENT_FLOW_BLOCK
 
 install_router_main
+
+# install_router_main bootstraps the UI profile from the rendered Xray config,
+# whose legacy default SSH port is 22. Persist the operator's actual access
+# coordinate so a clean reinstall does not undo a stable alternate SSH port.
+if [[ -n "${VPS_SSH_PORT:-}" ]]; then
+  router_ssh "uci -q set xray_vps.default.ssh_port=$(shell_quote "$VPS_SSH_PORT") && uci commit xray_vps"
+fi

@@ -14,6 +14,8 @@ VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
 # moved content; the valid_port definition itself stays in the CGI.
 VPS_IMPL="$VPS_CGI $ROOT/routers/common/files/xray-vps-actions.sh $ROOT/routers/common/files/xray-vps-inspect.sh $ROOT/routers/common/files/xray-vps-render.sh"
 VPS_INSTALL="$ROOT/vps/debian-13/files/install-vps.remote.sh"
+ROUTER_INSTALLERS="$ROOT/routers/gl-mt3000-glinet/install-router.sh $ROOT/routers/asus-tuf-ax4200-openwrt/install-router.sh"
+ADOPT_VPS_META="$ROOT/common/adopt-vps-meta.sh"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2
@@ -24,11 +26,9 @@ grep -q '<input id="sshPort" type="number"' $XRAY_UI_IMPL \
 	|| fail "xray.html must expose SSH port as an editable numeric field"
 
 grep -q '<input id="serverPort" type="number"' $XRAY_UI_IMPL \
-	|| fail "xray.html must expose Xray server port as an editable numeric field"
-
-if grep -q '<input id="serverPort".*readonly' $XRAY_UI_IMPL; then
-	fail "xray.html must not keep the Xray server port field read-only"
-fi
+	|| fail "xray.html must expose the VPS-derived Xray server port"
+grep -q 'serverPortField.readOnly = true' $XRAY_UI_IMPL \
+	|| fail "the Xray server port must be read-only because the VPS is authoritative"
 
 grep -q '^valid_port() {$' "$VPS_CGI" \
 	|| fail "xray-vps.cgi must validate user-supplied port values"
@@ -36,14 +36,22 @@ grep -q '^valid_port() {$' "$VPS_CGI" \
 grep -q 'valid_port "\$ssh_port" || {' $VPS_IMPL \
 	|| fail "xray-vps.cgi must reject invalid SSH ports"
 
-grep -q 'valid_port "\$server_port" || {' $VPS_IMPL \
-	|| fail "xray-vps.cgi must reject invalid Xray server ports"
-
 grep -q "SSH port must be in the range 1-65535." $VPS_IMPL \
 	|| fail "xray-vps.cgi must report an explicit SSH port validation error"
 
-grep -q "Xray server port must be in the range 1-65535." $VPS_IMPL \
-	|| fail "xray-vps.cgi must report an explicit Xray server port validation error"
+for installer in $ROUTER_INSTALLERS; do
+	grep -q 'VPS_SSH_PORT="${VPS_SSH_PORT:-22}"' "$installer" \
+		|| fail "$installer must default the VPS SSH port explicitly"
+	grep -q 'VPS_SSH_OPTS+=( -p "$VPS_SSH_PORT" )' "$installer" \
+		|| fail "$installer must use VPS_SSH_PORT for every direct VPS SSH call"
+	grep -q 'xray_vps.default.ssh_port=.*VPS_SSH_PORT' "$installer" \
+		|| fail "$installer must persist VPS_SSH_PORT in the bootstrapped UI profile"
+done
+
+grep -q 'VPS_SSH_PORT="${VPS_SSH_PORT:-22}"' "$ADOPT_VPS_META" \
+	|| fail "adopt-vps-meta.sh must default the VPS SSH port explicitly"
+grep -q 'VPS_SSH_OPTS+=( -p "$VPS_SSH_PORT" )' "$ADOPT_VPS_META" \
+	|| fail "adopt-vps-meta.sh must read authoritative metadata through VPS_SSH_PORT"
 
 grep -q 'if ! save_profile_from_request >/dev/null; then' $VPS_IMPL \
 	|| fail "xray-vps.cgi callers must preserve save_profile validation errors without subshell command substitution"

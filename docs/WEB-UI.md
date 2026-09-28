@@ -31,18 +31,20 @@ It contains:
 - VPS OS profile selector
 - one combined `VPS Host / Address` field
 - SSH auth method and matching auth fields
-- `Read VPS And Update Profile`
-- `Sync Router + VPS`
+- `Save Changes`
+- `Diagnose & Repair`
 
 Behavior:
 
-- `Read VPS And Update Profile`
-  - reads the selected VPS over SSH
-  - refreshes saved values from the live VPS when possible
-- `Sync Router + VPS`
-  - is the authoritative write/apply action
-  - applies the selected VPS profile bundle on the remote host
-  - then syncs the router to the same settings
+- `Save Changes`
+  - persists only the label, VPS OS profile and SSH access coordinates
+  - never treats the displayed Xray port/SNI/UUID/key fields as local input
+  - immediately inspects the VPS; when SSH connects, the returned profile is
+    already refreshed from the VPS-authoritative metadata
+- every successful VPS inspection refreshes the read-only Xray values from the
+  live VPS; only an empty VPS receives newly generated material
+- `Diagnose & Repair` uses that VPS-authoritative identity for remote repair;
+  router runtime apply remains a separate disruptive operation
 
 ### `Live State`
 

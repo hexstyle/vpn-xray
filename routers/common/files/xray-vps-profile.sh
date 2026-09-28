@@ -8,7 +8,10 @@ sanitize_id() {
 	local raw="$1"
 	local out
 
-	out="$(printf '%s' "$raw" | tr '[:upper:] ' '[:lower:]_' | tr -cd 'a-z0-9_-')"
+	# BusyBox tr treats the combined POSIX-class + literal-space expression
+	# inconsistently ("default" became "defallt" on the target router).
+	# Keep the profile ID transform deliberately ASCII and staged.
+	out="$(printf '%s' "$raw" | tr 'A-Z' 'a-z' | tr ' ' '_' | tr -cd 'a-z0-9_-')"
 	[ -n "$out" ] || out='profile'
 	printf '%s' "$out"
 }

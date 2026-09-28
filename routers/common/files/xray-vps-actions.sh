@@ -5,7 +5,7 @@
 # constants, and helper functions). Defines functions only; runs no code.
 
 save_profile_from_request() {
-	local current requested_id profile_id label vps_profile auth_mode ssh_host ssh_port ssh_user server_address server_port server_name existing_server_name uuid public_key private_key short_id flow bootstrap_key
+	local current requested_id profile_id label vps_profile auth_mode ssh_host ssh_port ssh_user bootstrap_key managed_key_path
 
 	SAVE_PROFILE_ERROR=''
 	SAVE_PROFILE_ID=''
@@ -20,35 +20,21 @@ save_profile_from_request() {
 	ssh_host="$(request_value ssh_host)"
 	ssh_port="$(request_value ssh_port)"
 	ssh_user="$(request_value ssh_user)"
-	server_address="$(request_value server_address)"
-	server_port="$(request_value server_port)"
-	server_name="$(request_value server_name)"
-	uuid="$(request_value uuid)"
-	public_key="$(request_value public_key)"
-	private_key="$(request_value private_key)"
-	short_id="$(request_value short_id)"
-	flow="$(request_value flow)"
 	bootstrap_key="$(request_value bootstrap_private_key)"
 	[ -n "$label" ] || label='VPS Profile'
 	[ -n "$vps_profile" ] || vps_profile="$(normalize_vps_profile "$(profile_get "$profile_id" vps_profile)")"
 	[ -n "$auth_mode" ] || auth_mode="$(profile_get "$profile_id" auth_mode)"
 	[ -n "$auth_mode" ] || auth_mode='managed_key'
-	[ -n "$ssh_host" ] || ssh_host="$server_address"
-	[ -n "$server_address" ] || server_address="$ssh_host"
 	[ -n "$ssh_port" ] || ssh_port='22'
 	[ -n "$ssh_user" ] || ssh_user='root'
-	[ -n "$server_port" ] || server_port='24443'
+	[ -n "$ssh_host" ] || {
+		save_profile_fail 'VPS host / address is required.'
+		return 1
+	}
 	valid_port "$ssh_port" || {
 		save_profile_fail 'SSH port must be in the range 1-65535.'
 		return 1
 	}
-	valid_port "$server_port" || {
-		save_profile_fail 'Xray server port must be in the range 1-65535.'
-		return 1
-	}
-	existing_server_name="$(profile_get "$profile_id" server_name)"
-	[ -n "$server_name" ] || server_name="$existing_server_name"
-	[ -n "$server_name" ] || server_name="$(default_server_name_for_profile "$vps_profile")"
 
 	if ! profile_exists "$profile_id"; then
 		uci -q set "${PROFILE_PACKAGE}.${profile_id}=profile"
@@ -62,19 +48,16 @@ save_profile_from_request() {
 	profile_set "$profile_id" ssh_host "$ssh_host"
 	profile_set "$profile_id" ssh_port "$ssh_port"
 	profile_set "$profile_id" ssh_user "$ssh_user"
-	profile_set "$profile_id" server_address "$server_address"
-	profile_set "$profile_id" server_port "$server_port"
-	profile_set "$profile_id" server_name "$server_name"
-	[ -n "$uuid" ] && profile_set "$profile_id" uuid "$uuid" || profile_del "$profile_id" uuid
-	[ -n "$public_key" ] && profile_set "$profile_id" public_key "$public_key" || profile_del "$profile_id" public_key
-	[ -n "$private_key" ] && profile_set "$profile_id" private_key "$private_key" || true
-	[ -n "$short_id" ] && profile_set "$profile_id" short_id "$short_id" || profile_del "$profile_id" short_id
-	profile_set "$profile_id" flow "$flow"
-	profile_set "$profile_id" managed_key_path "${KEY_DIR}/${profile_id}_ed25519"
+	# The Xray identity is VPS-authoritative (DIAGNOSTIC-TREE 8.1). The
+	# Xray address is the SSH host; port/SNI/UUID/keys are never accepted
+	# from browser form state and are refreshed by remote inspection.
+	profile_set "$profile_id" server_address "$ssh_host"
+	managed_key_path="$(profile_get "$profile_id" managed_key_path)"
+	[ -n "$managed_key_path" ] || managed_key_path="${KEY_DIR}/${profile_id}_ed25519"
+	profile_set "$profile_id" managed_key_path "$managed_key_path"
 	profile_set "$profile_id" bootstrap_key_path "${KEY_DIR}/${profile_id}_bootstrap"
 	profile_del "$profile_id" ssh_password
 
-	ensure_profile_material "$profile_id"
 	if ! ensure_profile_keypair "$profile_id"; then
 		return 1
 	fi
@@ -86,8 +69,9 @@ save_profile_from_request() {
 }
 
 create_profile_action() {
-	local base profile_id suffix
+	local base profile_id suffix source_profile managed_key_path
 
+	source_profile="$(active_profile_id)"
 	base="vps_$(date +%Y%m%d_%H%M%S)"
 	profile_id="$base"
 	suffix=1
@@ -99,22 +83,23 @@ create_profile_action() {
 	uci -q set "${PROFILE_PACKAGE}.${profile_id}=profile"
 	profile_set "$profile_id" label 'New VPS'
 	profile_set "$profile_id" vps_profile "$(default_vps_profile)"
-	profile_set "$profile_id" auth_mode 'password'
 	profile_set "$profile_id" ssh_host ''
 	profile_set "$profile_id" ssh_port '22'
 	profile_set "$profile_id" ssh_user 'root'
 	profile_set "$profile_id" server_address ''
-	profile_set "$profile_id" server_port '24443'
-	profile_set "$profile_id" server_name "$(default_server_name_for_profile "$(default_vps_profile)")"
-	profile_set "$profile_id" flow ''
 	profile_del "$profile_id" ssh_password
-	profile_set "$profile_id" private_key ''
-	profile_set "$profile_id" managed_key_path "${KEY_DIR}/${profile_id}_ed25519"
+	managed_key_path="$(profile_get "$source_profile" managed_key_path)"
+	if [ -n "$managed_key_path" ] && [ -f "$managed_key_path" ] && [ -f "${managed_key_path}.pub" ]; then
+		profile_set "$profile_id" auth_mode 'managed_key'
+	else
+		profile_set "$profile_id" auth_mode 'password'
+		managed_key_path="${KEY_DIR}/${profile_id}_ed25519"
+	fi
+	profile_set "$profile_id" managed_key_path "$managed_key_path"
 	profile_set "$profile_id" bootstrap_key_path "${KEY_DIR}/${profile_id}_bootstrap"
 	profile_set "$profile_id" managed_pubkey ''
 	profile_set "$profile_id" last_inspect_status 'never'
 	profile_set "$profile_id" last_inspect_at ''
-	ensure_profile_material "$profile_id"
 	if ! ensure_profile_keypair "$profile_id"; then
 		emit_error create_profile 'Router could not generate profile key pair.'
 		return 0
@@ -133,11 +118,27 @@ create_profile_action() {
 }
 
 save_profile_action() {
+	local remote_refreshed=0
+
 	if ! save_profile_from_request >/dev/null; then
 		emit_error save_profile "${SAVE_PROFILE_ERROR:-Router could not initialize profile material.}"
 		return 0
 	fi
-	emit_status_response save_profile
+	if refresh_remote_cache "$SAVE_PROFILE_ID"; then
+		remote_refreshed=1
+	else
+		profile_set "$SAVE_PROFILE_ID" last_inspect_status 'error'
+		profile_set "$SAVE_PROFILE_ID" last_inspect_at "$(date +%s)"
+		uci commit "$PROFILE_PACKAGE"
+	fi
+	emit_header
+	printf '{'
+	printf '"ok":true,'
+	printf '"action":"save_profile",'
+	printf '"remote_refreshed":'; json_bool "$remote_refreshed"; printf ','
+	printf '"status":'
+	status_json
+	printf '}'
 }
 
 ensure_sshpass_available() {
@@ -290,6 +291,26 @@ adopt_remote_into_profile() {
 	[ -n "$remote_value" ] && profile_set "$profile_id" private_key "$remote_value"
 	profile_set "$profile_id" last_inspect_status 'ok'
 	uci commit "$PROFILE_PACKAGE"
+}
+
+prepare_profile_from_vps() {
+	local profile_id="$1" cache remote_uuid server_port
+
+	# Every render/write starts with an authoritative remote read. The cache
+	# refresh adopts a non-empty VPS identity. Generation is allowed only
+	# after that read proves the VPS has no UUID of its own.
+	refresh_remote_cache "$profile_id" >/dev/null 2>&1 || return 1
+	cache="$(profile_cache_path "$profile_id")"
+	remote_uuid="$(cache_get "$cache" REMOTE_uuid)"
+	if [ -z "$remote_uuid" ]; then
+		profile_set "$profile_id" server_address "$(profile_get "$profile_id" ssh_host)"
+		server_port="$(vps_profile_value "$(selected_vps_profile "$profile_id")" XRAY_PORT)"
+		profile_set "$profile_id" server_port "${server_port:-443}"
+		profile_set "$profile_id" server_name "$(default_server_name_for_profile "$(selected_vps_profile "$profile_id")")"
+		ensure_profile_material "$profile_id"
+		uci commit "$PROFILE_PACKAGE"
+	fi
+	return 0
 }
 
 adopt_vps_action() {

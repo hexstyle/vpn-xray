@@ -94,3 +94,35 @@
     }
     refreshInstallBanner();
     setInterval(refreshInstallBanner, 5000);
+
+    // Profiles persist SSH access only. Xray values shown in the advanced
+    // pane are read-only derivatives of the live VPS.
+    const serverPortField = document.getElementById("serverPort");
+    if (serverPortField) serverPortField.readOnly = true;
+
+    async function saveVpsAccess(button) {
+      beginForegroundTask("Saving VPS access and reading the VPS profile...", 30000);
+      setBusy(button, true);
+      try {
+        const data = await callApi(vpsApi, "save_profile", formPayload(), { timeoutMs: 30000 });
+        if (data.ok === false) throw new Error(data.error || "backend error");
+        if (data.status) state.vps = data.status;
+        clearDirty();
+        populateProfileSelect();
+        if (data.remote_refreshed) {
+          flash("VPS access saved. Xray settings refreshed from the VPS.", "good");
+        } else {
+          flash("VPS access saved, but the VPS inspection failed. Diagnose & Repair shows the SSH failure.", "warn");
+        }
+      } catch (err) {
+        flash(`Failed to save VPS access: ${err.message}`, "bad");
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+      }
+    }
+
+    const saveProfileButton = document.getElementById("saveProfileBtn");
+    if (saveProfileButton) {
+      saveProfileButton.addEventListener("click", () => saveVpsAccess(saveProfileButton));
+    }

@@ -5,7 +5,7 @@
 # constants, and helper functions). Defines functions only; runs no code.
 
 # effective_server_name <profile_id> — the SNI to actually use: the profile's
-# server_name, or the VPS-profile default (www.cloudflare.com) when the profile
+# server_name, or the VPS-profile default (www.wp.pl) when the profile
 # left it blank. Renders must never emit an empty serverName (empty SNI fails
 # cert validation — node 8.2), and an unset profile SNI must not read as drift
 # against a router already running the default.

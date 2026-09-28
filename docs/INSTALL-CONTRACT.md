@@ -60,6 +60,22 @@ preflight reports real SSH problems later. This prevents a re-run of the
 installer from rotating keys under a live endpoint and prevents
 router-vs-VPS key drift when `install.env` is stale.
 
+The router UI follows the same contract. A saved VPS profile owns only the
+operator-entered access coordinates (label, OS profile, SSH host/port/user and
+authentication bootstrap). Displayed Xray identity fields are read-only
+derivatives of a successful VPS inspection and must never be accepted back as
+authoritative form input. Saving access immediately attempts a read-only VPS
+inspection; when it connects, the response already contains the adopted VPS
+identity. Missing Xray material may be generated only after a
+successful inspection proves that the VPS has no managed/live identity; after
+provisioning, the VPS is inspected again and its metadata becomes the value
+used to render the router client.
+
+`VPS_SSH_PORT` is part of the access coordinate, not informational metadata.
+Every workstation-to-VPS SSH call made by either router installer — live-meta
+read, runtime probe, and managed-key registration — must dial that port, and
+the bootstrapped router UI profile must persist the same port.
+
 ## Step Plan and Live Progress
 
 The installer has a fixed plan. It must:

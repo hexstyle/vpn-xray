@@ -8,13 +8,11 @@ setup_vps_internal() {
 	local profile_id="$1"
 	local rendered meta rendered_install vps_profile install_script_rel install_script_path remote_meta_path
 
-	if [ -z "$(profile_get "$profile_id" private_key)" ]; then
-		return 1
-	fi
-
 	if ! ensure_ssh_ready "$profile_id"; then
 		return 1
 	fi
+	prepare_profile_from_vps "$profile_id" || return 1
+	[ -n "$(profile_get "$profile_id" private_key)" ] || return 1
 
 	vps_profile="$(selected_vps_profile "$profile_id")"
 	install_script_rel="$(vps_profile_value "$vps_profile" VPS_INSTALL_SCRIPT)"

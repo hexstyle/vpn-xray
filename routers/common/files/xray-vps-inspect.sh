@@ -298,6 +298,12 @@ EOF
 	profile_set "$profile_id" last_inspect_status 'ok'
 	profile_set "$profile_id" last_inspect_at "$(date +%s)"
 	uci commit "$PROFILE_PACKAGE"
+	# Every successful inspection adopts the VPS identity. The actions lib is
+	# sourced before request dispatch, so this function is available at run
+	# time even though its definition appears in the next sourced file.
+	if [ -n "$(cache_get "$cache" REMOTE_uuid)" ]; then
+		adopt_remote_into_profile "$profile_id"
+	fi
 	return 0
 }
 

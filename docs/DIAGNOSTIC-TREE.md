@@ -286,11 +286,33 @@ python3 socket connect <VPS>:443                                  # data
     profile change needed to fix. (Gap G6.)
 - 5.2 **SSH refused/timed out in burst context** → node 3.4 first; a single
   isolated probe after a pause decides. Do not read a burst-context
-  `Operation timed out` as auth failure.
+  `Operation timed out` as auth failure. Also inspect the VPS firewall before
+  declaring the listener dead: an `ufw limit 22/tcp` rule uses a shared
+  `xt_recent` bucket, so unrelated Internet scans plus the router's inspection
+  burst can return an immediate `Connection refused` even while `sshd` is
+  healthy and listening. If the VPS already exposes a separately allowed SSH
+  listener, save that port as the profile's local access coordinate and repeat
+  the real inspection; do not weaken the public port-22 firewall merely to make
+  the UI retry faster. The workstation installer must add that saved
+  `VPS_SSH_PORT` to **every** direct VPS SSH operation (metadata read, runtime
+  probe, and managed-key registration); reading the variable but silently
+  dialing port 22 reproduces stale-profile installs. `safe`
 - 5.3 **:443 closed but SSH works** → VPS xray down, node 6.
 - 5.4 **Both closed** → VPS is down/rebuilding or its provider firewall
   changed; nothing the router can repair. Surface reachability + last-known
   state to the operator. `safe`
+- 5.5 **TCP :443 opens but TLS stalls only for selected SNI values.** Tell:
+  plaintext sent to `:443` receives the server's HTTP-on-HTTPS rejection and
+  TLS without SNI (or with a neutral control SNI) completes, while the
+  configured camouflage SNI times out; the VPS journal records `TLS handshake
+  ... i/o timeout` from the router's public IP. This is SNI-aware filtering on
+  the network path, not a dead listener, certificate drift, or an Xray process
+  failure. Repair: explicitly rotate the SNI on the **VPS first**, regenerate
+  its certificate for the new name, verify a real TLS handshake from the
+  router, then let the router re-read the VPS metadata and render its client
+  config from that remote state. Never change only the router's SNI. The
+  rotation restarts the VPS daemon and the router apply cuts sessions, so both
+  phases are `disruptive` and require rollback backups.
 
 **Noise trap — repeated failed probes self-inflict a lockout.** Each failed
 key attempt counts against sshd `MaxAuthTries` (default 6), and a fail2ban
@@ -362,30 +384,49 @@ non-empty; or router dials wrong port/SNI (4.5).
   operator pointed the UI's IP/user/password form at a VPS this profile
   never provisioned — e.g. reusing another profile's already-managed VPS):
   copy the VPS's own identity into the profile — `adopt_remote_into_profile`.
-  UCI-only, `safe`, may run synchronously. This is now the **default,
-  UI-driven** entry point, not just a fresh-install/CLI path: `diagnose_repair_action`
-  (`xray-vps-repair.sh`, action `diagnose_repair` — the web UI's only VPS
-  write path) runs a read-only `refresh_remote_cache` right after SSH is
-  confirmed and, whenever the VPS's live `uuid` is non-empty and differs
-  from the profile's, adopts it *before* staging/pushing anything. The
-  repair pipeline that follows then re-renders from (and round-trips) the
-  now-adopted identity instead of overwriting a working server with a
-  freshly generated one. A genuinely empty VPS (`remote_uuid` empty — never
-  configured, or only the xray binary present) has nothing to adopt, so the
-  pipeline provisions fresh from the profile's own generated identity —
-  "create a new one" per the operator's ask. An already-synced profile
-  compares equal and this is a no-op on every routine repair click.
-  (2026-09-02: the older gate — only adopt when the profile's `public_key`
-  is empty — never fired through the UI, because `formPayload()` always
-  echoes the current, already-generated uuid/keys back on every submit; the
-  comparison is now against the VPS's actual live identity, not against
-  whether the local form field happens to be blank.) Deliberately replacing
+-  UCI-only, `safe`, may run synchronously. This is the default for **every
+  successful VPS inspection**, not only repair: saving SSH access immediately
+  attempts that read-only inspection, while Diagnose & Repair repeats it
+  before any write. The UI persists only SSH access fields, never submits the
+  displayed Xray identity as editable local state, and `refresh_remote_cache`
+  immediately adopts every non-empty remote identity field before any render
+  or write. A genuinely empty VPS
+  (`remote_uuid` empty — never configured, or only the xray binary present)
+  has nothing to adopt; only then may the provisioning path generate missing
+  material, write it to the VPS, re-inspect, and consume the resulting VPS
+  metadata. This prevents stale form values from becoming an accidental
+  second source of truth. An already-synced profile remains a no-op.
+  Deliberately replacing
   a VPS's existing identity instead of adopting it is out of scope for this
   path — that still requires the separate CLI-only `apply_profile`
   action (`apply_everything_action`, `xray-vps-setup.sh`), which is not
   wired to the UI and is a distinct, `disruptive`-adjacent code path (it
   can also cut the router's live traffic — see Gap register note on its
   synchronous `apply_profile_to_router_internal` call).
+- 8.1a **Saving an existing profile creates a near-duplicate ID** (for
+  example `default` becomes `defallt`) and leaves the selected profile
+  unchanged: BusyBox `tr` does not implement the combined
+  `tr '[:upper:] ' '[:lower:]_'` expression portably and treats characters
+  from the class name as input data. Repair: sanitize with explicit ASCII
+  ranges in separate translations (`A-Z` to `a-z`, then space to underscore),
+  reject everything outside the existing ID alphabet, and exercise the real
+  CGI save response against the requested ID. UCI-only, `safe`.
+- 8.1b **The new-profile form has no visible save control** even though the
+  backend supports `save_profile`: the button was created only by the final
+  JavaScript chunk, so a stale/missing chunk left static HTML with `New VPS`
+  alone. Repair: render `Save Changes` in the profile form HTML and let JS only
+  attach its click handler. Verify the rendered DOM in a real browser, create a
+  profile, save its SSH coordinates, and confirm the resulting UCI profile plus
+  VPS refresh. UI-only plus UCI writes, `safe`.
+- 8.1c **A newly created profile saves but its first VPS inspection always
+  fails**: `create_profile` generated a profile-specific key and selected
+  password authentication without collecting a password, so neither identity
+  could authenticate. Repair: when the active profile has a valid managed key,
+  let the new profile reuse that key path and start in `managed_key` mode;
+  retain the password/bootstrap fallback only when no managed identity exists.
+  Saving must preserve the inherited key path. Verify through the real browser
+  that New VPS -> Save Changes refreshes metadata from the VPS and records
+  `last_inspect_status=ok`. UCI/key-reference writes only, `safe`.
 - 8.2 **Profile authoritative, router stale**: rendering
   `/etc/xray/codex-xray.json` + runtime restart —
   `apply_profile_to_router_internal`. **`disruptive`** (hard cutover of the

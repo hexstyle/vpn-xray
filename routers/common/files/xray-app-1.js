@@ -108,6 +108,7 @@
         "profileSelect",
         "vpsProfile",
         "createProfileBtn",
+        "saveProfileBtn",
         "diagnoseRepairBtn",
         "smokeBtn",
         "logsBtn",
@@ -146,6 +147,7 @@
         "profileSelect",
         "vpsProfile",
         "createProfileBtn",
+        "saveProfileBtn",
         "diagnoseRepairBtn",
         "smokeBtn",
         "rulesModeToggle",
@@ -281,13 +283,6 @@
         ssh_port: document.getElementById("sshPort").value.trim(),
         ssh_user: document.getElementById("sshUser").value.trim(),
         ssh_password: document.getElementById("sshPassword").value,
-        server_address: host,
-        server_port: document.getElementById("serverPort").value.trim(),
-        server_name: document.getElementById("serverName").value.trim(),
-        uuid: document.getElementById("uuid").value.trim(),
-        public_key: document.getElementById("publicKey").value.trim(),
-        short_id: document.getElementById("shortId").value.trim(),
-        flow: document.getElementById("flow").value.trim(),
         bootstrap_private_key: document.getElementById("bootstrapKey").value.trim()
       };
     }
@@ -463,4 +458,3 @@
       const quickMode = state.rulesModeQuick?.xray_mode || "";
       return state.pendingRulesMode || backendPendingRulesMode(data) || fullMode || quickMode || "";
     }
-

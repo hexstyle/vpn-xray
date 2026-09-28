@@ -4,16 +4,15 @@
 # Sourced by /www/cgi-bin/xray-vps after lib-common.sh (shares its scope,
 # constants, and helper functions). Defines functions only; runs no code.
 
-# Return 0 when the current request carries any of the profile
-# identity/routing fields that save_profile_from_request expects. Used to
+# Return 0 when the current request carries any profile access field that
+# save_profile_from_request expects. Used to
 # decide whether an incoming diagnose_repair call is being made from the
 # UI (form-based, edit-then-submit) or from a headless caller that only
 # wants to trigger repair on the already-selected profile.
 request_has_profile_edit() {
 	local key
 	for key in profile_id label vps_profile ssh_host ssh_port ssh_user \
-		server_address server_port server_name uuid public_key \
-		private_key short_id flow auth_mode bootstrap_private_key; do
+		auth_mode bootstrap_private_key; do
 		if request_has_key "$key"; then
 			return 0
 		fi
@@ -345,30 +344,12 @@ diagnose_repair_action() {
 	cat "$creds_raw_log" > "$combined_raw_log" 2>/dev/null || : > "$combined_raw_log"
 	rm -f "$creds_raw_log"
 
-	# DIAGNOSTIC-TREE 8.1: before staging anything, check whether the VPS
-	# already carries its own working Xray identity that differs from the
-	# profile's — the form was pointed at a VPS this profile never
-	# provisioned (another profile's VPS being reused, or one set up
-	# outside this project entirely). Prefer what is already running on
-	# the VPS over silently overwriting it: adopt that identity into the
-	# profile so the repair pipeline below re-renders from (and
-	# round-trips) the VPS's own config instead of pushing a freshly
-	# generated one over a working server. A VPS with no real identity of
-	# its own (remote_uuid empty — the box has never been configured, or
-	# only has the xray binary present) has nothing to adopt, so the
-	# pipeline provisions fresh from the profile's own generated identity,
-	# same as before. An already-synced profile compares equal and this is
-	# a no-op every other click. Read-only cache refresh over the SSH
-	# session already confirmed above; a failure here just falls back to
-	# the profile's own identity rather than blocking repair.
-	if refresh_remote_cache "$profile_id" >/dev/null 2>&1; then
-		local remote_cache remote_uuid local_uuid
-		remote_cache="$(profile_cache_path "$profile_id")"
-		remote_uuid="$(cache_get "$remote_cache" REMOTE_uuid)"
-		local_uuid="$(profile_get "$profile_id" uuid)"
-		if [ -n "$remote_uuid" ] && [ "$remote_uuid" != "$local_uuid" ]; then
-			adopt_remote_into_profile "$profile_id"
-		fi
+	# DIAGNOSTIC-TREE 8.1: inspect and adopt before any render/write. Do not
+	# fall back to stale local Xray values when authoritative inspection fails.
+	if ! prepare_profile_from_vps "$profile_id"; then
+		emit_header
+		printf '{"ok":false,"action":"diagnose_repair","error":"inspection_failed","reason":"Could not read authoritative Xray settings from the VPS; refusing to render from stale local values.","steps":[]}'
+		return 0
 	fi
 
 	local repair_rc=0
