@@ -31,19 +31,24 @@ It contains:
 - VPS OS profile selector
 - one combined `VPS Host / Address` field
 - SSH auth method and matching auth fields
-- `Save Changes`
-- `Diagnose & Repair`
+- `Save VPS Access`
+- `Check & Configure VPS`
 
 Behavior:
 
-- `Save Changes`
+- both controls stay immediately below the SSH fields; neither is hidden in a
+  status panel or dependent on a path-tree action
+- `Save VPS Access`
   - persists only the label, VPS OS profile and SSH access coordinates
-  - never treats the displayed Xray port/SNI/UUID/key fields as local input
-  - immediately inspects the VPS; when SSH connects, the returned profile is
-    already refreshed from the VPS-authoritative metadata
+  - never stores the one-shot password or treats displayed Xray identity as
+    local input
+- `Check & Configure VPS`
+  - runs as a detached router job and exposes progress by polling
+  - verifies SSH, installs the router-managed key using the one-shot password,
+    inspects the live VPS, then installs or repairs Xray when required
 - every successful VPS inspection refreshes the read-only Xray values from the
   live VPS; only an empty VPS receives newly generated material
-- `Diagnose & Repair` uses that VPS-authoritative identity for remote repair;
+- `Check & Configure VPS` uses that VPS-authoritative identity for remote repair;
   router runtime apply remains a separate disruptive operation
 
 ### `Live State`

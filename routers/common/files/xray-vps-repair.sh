@@ -28,7 +28,7 @@ request_has_profile_edit() {
 run_repair_pipeline() {
 	local profile_id="$1"
 	local vps_profile install_script_rel install_script_path remote_meta_path
-	local rendered meta rendered_install
+	local rendered meta rendered_install cache vps_arch vps_pkg_dir bundled_xray
 	local report_local report_remote='/tmp/codex-router-vps-repair.jsonl'
 	local raw_log_file
 
@@ -85,6 +85,24 @@ run_repair_pipeline() {
 	cp "$meta" "$stage/codex-router-meta.env"
 	chmod 600 "$stage/codex-router-meta.env"
 	cp "$rendered_install" "$stage/install-vps.remote.sh"
+	# DIAGNOSTIC-TREE 6.1 / install air-gap contract: a clean VPS must not
+	# depend on GitHub or package mirrors for the Xray binary. The preceding
+	# inspection recorded the architecture, so add the matching repo-bundled
+	# archive to the same single-session tar used by the repair pipeline.
+	cache="$(profile_cache_path "$profile_id")"
+	vps_arch="$(cache_get "$cache" REMOTE_ARCH)"
+	vps_pkg_dir="/usr/share/vpn-xray/vps/${vps_profile}/packages"
+	bundled_xray=''
+	case "$vps_arch" in
+		x86_64|amd64) bundled_xray="${vps_pkg_dir}/$(vps_profile_value "$vps_profile" VPS_XRAY_ARCHIVE_X64)" ;;
+		aarch64|arm64) bundled_xray="${vps_pkg_dir}/$(vps_profile_value "$vps_profile" VPS_XRAY_ARCHIVE_ARM64)" ;;
+	esac
+	if [ -n "$bundled_xray" ] && [ -f "$bundled_xray" ]; then
+		cp "$bundled_xray" "$stage/xray-bundled.zip"
+		log_step "staged bundled Xray archive for ${vps_arch}"
+	else
+		log_step "WARNING no bundled Xray archive for remote architecture ${vps_arch:-unknown}"
+	fi
 	if ! tar -C "$stage" -cf "$bundle_tar" . 2>/dev/null; then
 		log_step "FAILED to build the upload bundle tar"
 		REPAIR_REPORT='[]'

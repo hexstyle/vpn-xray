@@ -162,6 +162,10 @@ if [ -n "${XRAY_VPS_JOB:-}" ]; then
 			run_router_apply_job "${XRAY_VPS_JOB_PROFILE:-$(active_profile_id)}"
 			exit $?
 			;;
+		diagnose_repair)
+			run_vps_repair_job "${XRAY_VPS_JOB_ID:-}"
+			exit $?
+			;;
 	esac
 	exit 1
 fi
@@ -220,7 +224,10 @@ case "$(request_value action)" in
 		;;
 	diagnose_repair)
 		ensure_profile_store
-		diagnose_repair_action
+		schedule_vps_repair_job_action
+		;;
+	diagnose_repair_status)
+		vps_repair_job_status_action
 		;;
 	*)
 		emit_error "$(request_value action)" 'Unknown action.'

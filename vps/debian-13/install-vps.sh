@@ -21,10 +21,16 @@ XRAY_FLOW="${XRAY_FLOW:-}"
 VPS_SSH="${VPS_SSH:-root@${VPS_HOST:-}}"
 VPS_HOST="${VPS_HOST:-$(host_from_ssh_target "$VPS_SSH")}"
 VPS_PASSWORD="${VPS_PASSWORD:-}"
+VPS_SSH_PORT="${VPS_SSH_PORT:-22}"
+case "$VPS_SSH_PORT" in
+  ''|*[!0-9]*|0) echo "VPS_SSH_PORT must be in the range 1-65535." >&2; exit 1 ;;
+esac
+(( VPS_SSH_PORT <= 65535 )) || { echo "VPS_SSH_PORT must be in the range 1-65535." >&2; exit 1; }
 SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
 ensure_installer_ssh_state "$ROOT_DIR"
 INSTALLER_KNOWN_HOSTS="$(installer_known_hosts_file "$ROOT_DIR")"
 VPS_SSH_OPTS=(
+  -p "$VPS_SSH_PORT"
   -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"
   -o StrictHostKeyChecking=accept-new
   -o UserKnownHostsFile="$INSTALLER_KNOWN_HOSTS"

@@ -94,7 +94,7 @@ for ob in cfg.get("outbounds", []):
         ],
     }
     ss["wsSettings"] = {"path": ws_path, "host": sni}
-    ob["mux"] = {"enabled": True, "concurrency": 8, "xudpConcurrency": 16}
+    ob["mux"] = {"enabled": False, "concurrency": 8, "xudpConcurrency": 16}
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
 print("rebuilt outbound as WS+TLS (serverName=%s)" % sni)

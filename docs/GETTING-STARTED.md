@@ -99,11 +99,13 @@ Then:
    - `SSH User`
    - `SSH Password`
    - or a bootstrap private key
-5. Click `Sync Router + VPS`.
+5. Click `Save VPS Access`.
+6. Click `Check & Configure VPS`.
 
 What happens next:
 
-- the router checks SSH access to the VPS
+- saving stores only the access coordinates on the router
+- the separate configure job checks SSH access to the VPS
 - the router reads the target system
 - the router installs Xray on the VPS if needed
 - the router generates or reuses client/server values
@@ -164,9 +166,9 @@ That is not an error.
 It means:
 
 - the router platform is installed
-- but you still need one successful `Sync Router + VPS`
+- but you still need one successful `Check & Configure VPS`
 
-### `Sync Router + VPS` Fails
+### `Check & Configure VPS` Fails
 
 Read the message literally:
 

@@ -59,7 +59,8 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/hexstyle/vpn-xray/main/boo
 https://192.168.8.1/xray.html
 ```
 
-5. In the web UI, create/select a VPS and click `Sync Router + VPS`.
+5. In the web UI, create/select a VPS, click `Save VPS Access`, then
+   `Check & Configure VPS`.
 
 ### What the Router Bootstrap Installs
 

@@ -107,7 +107,7 @@ render_router_config() {
         }
       },
       "mux": {
-        "enabled": true,
+        "enabled": false,
         "concurrency": 8,
         "xudpConcurrency": 16
       }

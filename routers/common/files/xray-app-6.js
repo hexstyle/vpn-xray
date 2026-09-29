@@ -40,9 +40,9 @@
       }
     }
 
-    // checkProfile/applyProfile were replaced by diagnose_repair — the
-    // read-only inspection is done by refresh_remote_cache inside the
-    // pipeline, and the full apply/sync is the pipeline itself.
+    // The old implicit check/apply flow is now an explicit VPS-only
+    // diagnose_repair pipeline. It adopts authoritative VPS metadata and
+    // configures the server, but never cuts over the working router runtime.
 
     // Render the JSON step report from the diagnose_repair backend action
     // into the #repairSteps list. Icons: ok=OK, fixed=FIX, failed=FAIL.
@@ -148,13 +148,19 @@
       document.getElementById("repairProgress").style.display = "none";
     }
 
-    // Called for each attempt at diagnose_repair. Handles the three
-    // response shapes: ok=true (report), ok=false + credentials_required
-    // (open the inline form), or ok=false + steps (report + flash).
-    // Guarded by state.repairRunning so a second click (or the Retry
-    // button firing while the first request is still in flight) cannot
-    // launch a concurrent pipeline — that used to spawn two backend runs,
-    // the second returning a confusing error.
+    async function waitForVpsRepairJob(jobId) {
+      const deadline = Date.now() + 180000;
+      while (Date.now() < deadline) {
+        await sleep(1000);
+        const data = await callApi(vpsApi, "diagnose_repair_status", { job_id: jobId }, { timeoutMs: 10000 });
+        if (data.job_state === "scheduled" || data.job_state === "running") continue;
+        return data;
+      }
+      throw new Error("VPS check/configure job did not finish within 180 seconds.");
+    }
+
+    // Schedule the disruptive VPS work outside the CGI request, then poll its
+    // result. The same function handles first-run password bootstrap and retry.
     async function runDiagnoseRepairOnce(button, extraPayload) {
       if (state.repairRunning) {
         flash("A repair run is already in progress — please wait for it to finish.", "warn");
@@ -172,11 +178,15 @@
       setBusy(repairBtn, true);
       setBusy(credsBtn, true);
       startRepairProgress();
-      beginForegroundTask("Running diagnose & repair pipeline on the VPS...", 60000);
+      document.getElementById("profileActionHint").textContent = "Checking SSH and configuring the VPS in a background job…";
+      beginForegroundTask("Checking and configuring the VPS...", 180000);
       try {
-        const data = await callApi(vpsApi, "diagnose_repair", payload, { timeoutMs: 90000 });
+        let data = await callApi(vpsApi, "diagnose_repair", payload, { timeoutMs: 10000 });
+        if (data.job_id && (data.job_state === "scheduled" || data.job_state === "running")) {
+          data = await waitForVpsRepairJob(data.job_id);
+        }
         if (data.error === "busy") {
-          flash("A repair run is already in progress on the router — please wait.", "warn");
+          flash("A VPS check/configure job is already in progress — please wait.", "warn");
           return;
         }
         if (data.error === "credentials_required") {
@@ -195,6 +205,7 @@
           } else {
             flash("Router's SSH key was rejected — enter the VPS root password once to re-establish access.", "warn");
           }
+          document.getElementById("profileActionHint").textContent = "SSH needs a one-time password. Enter it below and retry.";
           return;
         }
         if (data.status) state.vps = data.status;
@@ -206,8 +217,9 @@
           if (data.router_apply === "drift_detected") {
             flash("VPS repaired. The router client config differs from the profile — review it before applying; the repair does NOT change the router config automatically.", "warn");
           } else {
-            flash("Diagnose & repair completed successfully.", "good");
+            flash("VPS check and configuration completed successfully.", "good");
           }
+          document.getElementById("profileActionHint").textContent = "VPS verified and configured. The router-managed SSH key is active.";
         } else {
           // Show the step tree AND auto-expand the raw log so the operator
           // sees exactly which node failed and why, instead of a bare
@@ -229,7 +241,7 @@
           flash(`Repair finished with issues — ${reason}`, "bad");
         }
       } catch (err) {
-        flash(`Repair failed: ${err.message}`, "bad");
+        flash(`VPS check/configuration failed: ${err.message}`, "bad");
       } finally {
         state.repairRunning = false;
         stopRepairProgress();
@@ -240,10 +252,6 @@
     }
 
     async function diagnoseRepair(button) {
-      // First attempt: no extra credentials. If the backend needs SSH
-      // credentials it will surface credentials_required and open the
-      // inline password form. The user then clicks Retry, which calls
-      // runDiagnoseRepairOnce again with the entered password.
       document.getElementById("repairCredsForm").style.display = "none";
       await runDiagnoseRepairOnce(button, null);
     }
@@ -455,4 +463,3 @@
       refreshRules(false).catch(() => {});
       refreshRulesMode();
     }, 15000);
-

@@ -101,19 +101,16 @@
     if (serverPortField) serverPortField.readOnly = true;
 
     async function saveVpsAccess(button) {
-      beginForegroundTask("Saving VPS access and reading the VPS profile...", 30000);
+      beginForegroundTask("Saving VPS access on the router...", 10000);
       setBusy(button, true);
       try {
-        const data = await callApi(vpsApi, "save_profile", formPayload(), { timeoutMs: 30000 });
+        const data = await callApi(vpsApi, "save_profile", formPayload(), { timeoutMs: 10000 });
         if (data.ok === false) throw new Error(data.error || "backend error");
         if (data.status) state.vps = data.status;
         clearDirty();
         populateProfileSelect();
-        if (data.remote_refreshed) {
-          flash("VPS access saved. Xray settings refreshed from the VPS.", "good");
-        } else {
-          flash("VPS access saved, but the VPS inspection failed. Diagnose & Repair shows the SSH failure.", "warn");
-        }
+        document.getElementById("profileActionHint").textContent = "Access saved. Next: click Check & Configure VPS.";
+        flash("VPS access saved on the router. The VPS has not been changed yet.", "good");
       } catch (err) {
         flash(`Failed to save VPS access: ${err.message}`, "bad");
       } finally {

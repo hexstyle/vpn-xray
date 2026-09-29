@@ -112,13 +112,18 @@ default route/interface (VPN on the workstation often hijacks the route).
 
 **Symptom**: `/usr/bin/router-rules`, CGIs, or init scripts missing/stale.
 
-**Probes**: `ls /usr/bin/router-rules /www/cgi-bin/xray-vps /etc/init.d/codex-xray`;
-compare file dates to repo.
+**Probes**: `ls /usr/bin/router-rules /www/cgi-bin/xray-vps
+/etc/init.d/codex-xray /usr/share/vpn-xray/diag/nodes.manifest`;
+compare file dates to repo. The platform is incomplete if the CGI exists but
+its manifest or the self-hosted `/usr/share/vpn-xray/vps/` installer payload
+is missing.
 
 **Repair**: re-run `./install.sh` (full platform sync from local checkout;
 air-gapped, offline package bundle). `disruptive` (restarts services).
 
-**Verify**: install step plan completes; `verify-router.sh` passes.
+**Verify**: install step plan completes; `verify-router.sh` passes; the UI tree
+endpoint reads its manifest without stderr, and the router-side VPS repair can
+install Xray from the bundled archive without a public download.
 
 ---
 
@@ -232,13 +237,30 @@ curl -m 8 -x http://127.0.0.1:1083 https://api.ipify.org   # expect VPS IP
   `OPENAI_FAILURE_THRESHOLD`), which still requires 4 consecutive misses
   before restarting. `safe` (source-only; a genuine outage still restarts
   within 2 probes, ~90 s — only the false positives stop).
+- 4.8 **Some HTTPS destinations hang while other traffic through the same VPS
+  works** (2026-09-29). Symptom: the proxy reports the correct VPS egress IP,
+  direct HTTPS from the VPS succeeds, but repeated TLS handshakes to
+  `chatgpt.com` intermittently time out. A temporary client using the same
+  VPS profile reproduces the fault with outbound VLESS Mux enabled and
+  completes 5/5 probes with only Mux disabled. Cause: WebSocket transport's
+  shared Mux connection head-of-line-blocks otherwise independent browser
+  TLS streams. Probe: repeat both the hostname request and a forced-IP
+  request through a profile-specific temporary SOCKS listener; do not accept
+  a successful direct VPS curl as proof of the tunnel. Repair: render
+  `"mux":{"enabled":false}` in every router config path (install template,
+  VPS-profile renderer, admin probe and revive helper). Verify: repeated
+  `chatgpt.com` requests through the temporary profile and then the normal
+  router proxy complete, and the observed egress IP is the VPS. `disruptive`
+  when applied to the live router because Xray must restart; source/template
+  changes alone are `safe`.
 
 **Verify** (in order): local proxy probe returns VPS IP → LAN client probe
 returns VPS IP → all three switch states behave per AGENTS.md matrix.
 For 4.7 specifically: `tests/test_xray_runtime_contract.sh` asserts the
 renamed threshold; on hardware, watchdog restarts should drop to near zero
 under steady real LAN load while a real full outage (VPS stopped) still
-restarts within ~90 s.
+restarts within ~90 s. For 4.8, the same test asserts that every config
+generator explicitly disables Mux.
 
 ---
 
@@ -340,7 +362,7 @@ order; all steps always run (report completeness beats fail-fast).
 
 | # | Step id | Checks | Fixes | Notes |
 | --- | --- | --- | --- | --- |
-| 6.1 | `binary` | `$XRAY_BIN` runnable | install from bundled zip; network installer as last resort | air-gap first |
+| 6.1 | `binary` | `$XRAY_BIN` runnable | install from bundled zip; network installer as last resort | air-gap first; the UI repair tar must include the VPS-architecture archive from `/usr/share/vpn-xray/vps/<profile>/packages/` as `/tmp/xray-bundled.zip` — staging only config/meta/script makes a clean VPS depend on blocked public installers |
 | 6.2 | `service_unit` | unit file exists | write minimal unit; `daemon-reload` | drop-ins (User=xray) still apply |
 | 6.3 | `directories` | config+log dirs exist, owned by service user | `install -d` + `chown` | |
 | 6.4 | `permissions` | every log file owned by service user; user can actually append | `chown`/`chmod 640`; probe with `runuser` | uid-drift after reprovision (`nobody:nogroup` log files) makes xray exit status 23 under `RestartPreventExitStatus=23` so it stays down. **One** of two causes of the 2026-07-09 outage — the other, and the recurring one, was 6.5 below. |
@@ -385,9 +407,9 @@ non-empty; or router dials wrong port/SNI (4.5).
   never provisioned — e.g. reusing another profile's already-managed VPS):
   copy the VPS's own identity into the profile — `adopt_remote_into_profile`.
 -  UCI-only, `safe`, may run synchronously. This is the default for **every
-  successful VPS inspection**, not only repair: saving SSH access immediately
-  attempts that read-only inspection, while Diagnose & Repair repeats it
-  before any write. The UI persists only SSH access fields, never submits the
+  successful VPS inspection** in the detached `Check & Configure VPS` job.
+  `Save VPS Access` performs no network operation. The UI persists only SSH
+  access fields, never submits the
   displayed Xray identity as editable local state, and `refresh_remote_cache`
   immediately adopts every non-empty remote identity field before any render
   or write. A genuinely empty VPS
@@ -414,19 +436,33 @@ non-empty; or router dials wrong port/SNI (4.5).
 - 8.1b **The new-profile form has no visible save control** even though the
   backend supports `save_profile`: the button was created only by the final
   JavaScript chunk, so a stale/missing chunk left static HTML with `New VPS`
-  alone. Repair: render `Save Changes` in the profile form HTML and let JS only
-  attach its click handler. Verify the rendered DOM in a real browser, create a
-  profile, save its SSH coordinates, and confirm the resulting UCI profile plus
-  VPS refresh. UI-only plus UCI writes, `safe`.
+  alone. Repair: render `Save VPS Access` in the profile form HTML and let JS
+  only attach its click handler. Verify the rendered DOM in a real browser,
+  create a profile, save its SSH coordinates, and confirm the resulting UCI
+  profile without contacting the VPS. UI-only plus UCI writes, `safe`.
 - 8.1c **A newly created profile saves but its first VPS inspection always
-  fails**: `create_profile` generated a profile-specific key and selected
-  password authentication without collecting a password, so neither identity
-  could authenticate. Repair: when the active profile has a valid managed key,
-  let the new profile reuse that key path and start in `managed_key` mode;
-  retain the password/bootstrap fallback only when no managed identity exists.
-  Saving must preserve the inherited key path. Verify through the real browser
-  that New VPS -> Save Changes refreshes metadata from the VPS and records
-  `last_inspect_status=ok`. UCI/key-reference writes only, `safe`.
+  fails**: the old combined save+inspect action selected password auth without
+  a usable password for that inspection. Reusing the active profile's key was
+  a temporary workaround but coupled otherwise independent VPS profiles. The
+  final repair is 8.1d's explicit two-step workflow: a new profile gets its own
+  managed keypair and starts in password-bootstrap mode; saving is local-only,
+  and the separate configure job uses the one-shot password to authorize that
+  profile's public key. Verify `last_inspect_status=ok` after configuration and
+  confirm the password is absent from UCI. Key generation/UCI writes are `safe`.
+- 8.1d **The profile form does not expose a usable two-step workflow**: the
+  save control is below the entire repair panel, while the VPS repair control
+  is hidden and reachable only indirectly from the global path tree. Saving
+  also starts an SSH inspection, so the operator cannot distinguish “stored
+  access coordinates” from “server verified/configured”. Repair: keep two
+  permanently visible controls immediately after the SSH fields: `Save VPS
+  Access` performs UCI-only persistence (`safe`), then `Check & Configure VPS`
+  starts the existing inspect/provision/repair pipeline as a detached job and
+  polls its result (`disruptive`; never run synchronously in the CGI request).
+  The password remains one-shot browser input and is removed from the job
+  payload as soon as the detached process starts. Verify both buttons in a real
+  browser against a new VPS: save must return without SSH, then configure must
+  install the router-managed key, adopt or create VPS-owned Xray metadata, and
+  render the per-step report.
 - 8.2 **Profile authoritative, router stale**: rendering
   `/etc/xray/codex-xray.json` + runtime restart —
   `apply_profile_to_router_internal`. **`disruptive`** (hard cutover of the

@@ -12,6 +12,7 @@ GL_HTML="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
 PROFILE_LIB="$ROOT/routers/common/files/xray-vps-profile.sh"
 PROFILE="$ROOT/vps/debian-13/profile.env"
 ROTATE="$ROOT/vps/debian-13/files/rotate-sni.remote.sh"
+VPS_X64_BUNDLE="$ROOT/vps/debian-13/packages/Xray-linux-64.zip"
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 
@@ -29,16 +30,16 @@ done
 printf '%s' "$save_fn" | grep -q 'profile_set "$profile_id" server_address "$ssh_host"' \
 	|| fail "the Xray address must derive from the saved SSH host"
 save_action="$(sed -n '/^save_profile_action()/,/^}/p' "$ACTIONS")"
-printf '%s' "$save_action" | grep -q 'refresh_remote_cache "$SAVE_PROFILE_ID"' \
-	|| fail "saving reachable VPS access must immediately refresh the authoritative identity"
-printf '%s' "$save_action" | grep -q '"remote_refreshed"' \
-	|| fail "the save response must report whether the VPS identity was refreshed"
+printf '%s' "$save_action" | grep -q 'refresh_remote_cache' \
+	&& fail "saving access must not inspect or modify the VPS"
 
 create_fn="$(sed -n '/^create_profile_action()/,/^}/p' "$ACTIONS")"
 printf '%s' "$create_fn" | grep -q 'ensure_profile_material' \
 	&& fail "creating a profile must not generate Xray material before VPS inspection"
-printf '%s' "$create_fn" | grep -q 'profile_get "$source_profile" managed_key_path' \
-	|| fail "a new profile must reuse the active router-managed SSH identity when available"
+printf '%s' "$create_fn" | grep -q 'profile_set "$profile_id" auth_mode '\''password'\''' \
+	|| fail "a new VPS must start in one-shot password bootstrap mode"
+printf '%s' "$create_fn" | grep -q 'managed_key_path "${KEY_DIR}/${profile_id}_ed25519"' \
+	|| fail "each new VPS profile must receive its own router-managed SSH key"
 printf '%s' "$save_fn" | grep -q 'managed_key_path="$(profile_get "$profile_id" managed_key_path)"' \
 	|| fail "saving a profile must preserve an inherited managed key path"
 
@@ -60,11 +61,31 @@ if grep -q "tr '\[:upper:\] ' '\[:lower:\]_'" "$PROFILE_LIB"; then
 fi
 
 for html in "$ASUS_HTML" "$GL_HTML"; do
-	grep -q '<button id="saveProfileBtn" type="button" class="primary">Save Changes</button>' "$html" \
-		|| fail "the New VPS form must statically expose a Save Changes button"
+	grep -q '<button id="saveProfileBtn" type="button" class="primary">Save VPS Access</button>' "$html" \
+		|| fail "the SSH form must statically expose Save VPS Access"
+	grep -q '<button class="warn-btn" id="diagnoseRepairBtn" type="button">Check &amp; Configure VPS</button>' "$html" \
+		|| fail "the SSH form must statically expose Check & Configure VPS"
 done
 grep -q 'callApi(vpsApi, "save_profile", formPayload()' "$APP7" \
-	|| fail "Save Changes must call the save_profile backend"
+	|| fail "Save VPS Access must call the save_profile backend"
+grep -q 'diagnose_repair_status' "$ROOT/routers/common/files/xray-app-6.js" \
+	|| fail "Check & Configure VPS must poll the detached repair job"
+grep -q "XRAY_VPS_JOB='diagnose_repair'" "$ROOT/routers/common/files/xray-vps-setup.sh" \
+	|| fail "VPS repair must be scheduled outside the CGI request"
+grep -q 'stage/xray-bundled.zip' "$REPAIR" \
+	|| fail "the detached repair bundle must carry the repository-bundled VPS Xray archive"
+for platform in \
+	"$ROOT/routers/asus-tuf-ax4200-openwrt/install-platform.sh" \
+	"$ROOT/routers/gl-mt3000-glinet/install-platform.sh"; do
+	grep -q 'cp -R "$VPS_DIR" /usr/share/vpn-xray/vps' "$platform" \
+		|| fail "$(basename "$(dirname "$platform")"): base install must deploy the full VPS installer payload to OpenWrt"
+	grep -q 'files/diag/nodes.manifest.*share/vpn-xray/diag/nodes.manifest' "$platform" \
+		|| fail "$(basename "$(dirname "$platform")"): base install must deploy the diagnostic tree manifest"
+done
+[ -s "$VPS_X64_BUNDLE" ] \
+	|| fail "the VPS installer payload must contain the offline amd64 Xray archive"
+grep -q 'VPS_XRAY_ARCHIVE_X64_SHA256:=' "$PROFILE" \
+	|| fail "the offline amd64 VPS archive must have a pinned checksum"
 
 grep -q 'VPS_DEFAULT_SERVER_NAME:=www.wp.pl' "$PROFILE" \
 	|| fail "fresh VPS provisioning must default to the verified Polish SNI"

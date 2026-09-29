@@ -195,3 +195,110 @@ run_router_apply_job() {
 	} > "$ROUTER_APPLY_STATUS_FILE"
 	return 1
 }
+
+# --- Detached VPS check/configure job (DIAGNOSTIC-TREE 8.1d) ---
+# The repair pipeline can restart the VPS daemon and must not occupy a CGI
+# worker. The request payload is mode 0600 and removed as soon as the detached
+# process reads it; this is especially important for the one-shot password.
+VPS_REPAIR_JOB_DIR='/tmp/xray-vps-repair-jobs'
+
+repair_job_valid_id() {
+	case "$1" in ''|*[!0-9-]*) return 1 ;; esac
+}
+
+repair_job_running() {
+	local job_id state pid
+	job_id="$(cat "$VPS_REPAIR_JOB_DIR/active" 2>/dev/null || true)"
+	repair_job_valid_id "$job_id" || return 1
+	state="$(sed -n 's/^state=//p' "$VPS_REPAIR_JOB_DIR/$job_id/status" 2>/dev/null | sed -n '1p')"
+	[ "$state" = 'scheduled' ] && return 0
+	[ "$state" = 'running' ] || return 1
+	pid="$(sed -n 's/^pid=//p' "$VPS_REPAIR_JOB_DIR/$job_id/status" 2>/dev/null | sed -n '1p')"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+schedule_vps_repair_job_action() {
+	mkdir -p "$VPS_REPAIR_JOB_DIR"
+	with_lock_dir "$VPS_REPAIR_JOB_DIR/schedule.lock.d" schedule_vps_repair_job_locked
+}
+
+schedule_vps_repair_job_locked() {
+	local job_id job_dir
+	chmod 700 "$VPS_REPAIR_JOB_DIR"
+	if repair_job_running; then
+		emit_error diagnose_repair 'A VPS check/configure job is already running.'
+		return 0
+	fi
+	job_id="$(date +%s)-$$"
+	job_dir="$VPS_REPAIR_JOB_DIR/$job_id"
+	mkdir -p "$job_dir"
+	chmod 700 "$job_dir"
+	(umask 077; printf '%s' "$REQUEST_DATA" > "$job_dir/request")
+	{
+		printf 'state=scheduled\n'
+		printf 'scheduled_at=%s\n' "$(date +%s)"
+	} > "$job_dir/status"
+	printf '%s\n' "$job_id" > "$VPS_REPAIR_JOB_DIR/active"
+	if ! XRAY_VPS_JOB='diagnose_repair' XRAY_VPS_JOB_ID="$job_id" \
+		start-stop-daemon -S -b -x /www/cgi-bin/xray-vps 2>/dev/null; then
+		rm -rf "$job_dir"
+		emit_error diagnose_repair 'Router could not start the detached VPS job.'
+		return 0
+	fi
+	emit_header
+	printf '{"ok":true,"action":"diagnose_repair","job_state":"scheduled","job_id":"%s"}' "$(json_escape "$job_id")"
+}
+
+run_vps_repair_job() {
+	local job_id="$1" job_dir raw body rc=0
+	repair_job_valid_id "$job_id" || return 2
+	job_dir="$VPS_REPAIR_JOB_DIR/$job_id"
+	raw="$job_dir/response.raw"
+	body="$job_dir/result.tmp"
+	[ -f "$job_dir/request" ] || return 2
+	REQUEST_DATA="$(cat "$job_dir/request")"
+	rm -f "$job_dir/request"
+	{
+		printf 'state=running\n'
+		printf 'pid=%s\n' "$$"
+		printf 'started_at=%s\n' "$(date +%s)"
+	} > "$job_dir/status"
+	set +e
+	diagnose_repair_action > "$raw" 2>&1 || rc=$?
+	tr -d '\r' < "$raw" | sed '1,/^$/d' > "$body"
+	if ! grep -q '^{' "$body"; then
+		printf '{"ok":false,"action":"diagnose_repair","error":"job_failed","reason":"Detached VPS job returned no valid response.","steps":[]}' > "$body"
+	fi
+	chmod 600 "$body"
+	mv "$body" "$job_dir/result"
+	rm -f "$raw"
+	{
+		printf 'state=done\n'
+		printf 'finished_at=%s\n' "$(date +%s)"
+		printf 'exit_code=%s\n' "$rc"
+	} > "$job_dir/status"
+	return "$rc"
+}
+
+vps_repair_job_status_action() {
+	local job_id job_dir state pid
+	job_id="$(request_value job_id)"
+	repair_job_valid_id "$job_id" || {
+		emit_error diagnose_repair_status 'Invalid or missing VPS job ID.'
+		return 0
+	}
+	job_dir="$VPS_REPAIR_JOB_DIR/$job_id"
+	if [ -s "$job_dir/result" ]; then
+		emit_header
+		cat "$job_dir/result"
+		return 0
+	fi
+	state="$(sed -n 's/^state=//p' "$job_dir/status" 2>/dev/null | sed -n '1p')"
+	pid="$(sed -n 's/^pid=//p' "$job_dir/status" 2>/dev/null | sed -n '1p')"
+	if [ "$state" = 'scheduled' ] || { [ "$state" = 'running' ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }; then
+		emit_header
+		printf '{"ok":true,"action":"diagnose_repair_status","job_state":"%s","job_id":"%s"}' "$(json_escape "$state")" "$(json_escape "$job_id")"
+		return 0
+	fi
+	emit_error diagnose_repair_status 'The detached VPS job ended without a result.'
+}

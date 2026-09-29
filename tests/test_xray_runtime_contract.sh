@@ -84,6 +84,7 @@ grep -q '"destOverride": \[' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.js
 # ws+tls, not the legacy reality fingerprint.
 for gen in \
 	"$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
+	"$ROOT/routers/asus-tuf-ax4200-openwrt/files/codex-xray.json.template" \
 	"$ADMIN_PROBE_LIB" \
 	"$VPS_RENDER_LIB"; do
 	name="$(basename "$gen")"
@@ -94,8 +95,13 @@ for gen in \
 	grep -q '"security": "reality"' "$gen" \
 		&& fail "$name still renders reality — transport mismatch with the WS+TLS VPS (node 8.5)"
 	grep -q '"mux": {' "$gen" \
-		|| fail "$name must enable outbound mux to avoid connection storms under browser load"
+		|| fail "$name must declare outbound mux explicitly"
+	grep -A2 '"mux": {' "$gen" | grep -q '"enabled": false' \
+		|| fail "$name must disable outbound mux to prevent WS head-of-line TLS hangs (node 4.8)"
 done
+
+grep -q 'ob\["mux"\] = {"enabled": False' "$ROOT/scripts/revive-router.sh" \
+	|| fail "revive-router.sh must keep outbound mux disabled (node 4.8)"
 
 grep -q 'path_requested' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must gate boot startup behind switch/config readiness"

@@ -1,13 +1,10 @@
 #!/bin/sh
-
 set -eu
-
 SELF_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(CDPATH= cd -- "$SELF_DIR/../.." && pwd)"
 SOURCE_DIR="$ROOT_DIR"
 PREFLIGHT_ONLY='0'
 RESUME_MODE='0'
-
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--source-dir)
@@ -32,7 +29,6 @@ while [ "$#" -gt 0 ]; do
 			;;
 	esac
 done
-
 PROFILE_DIR="$SOURCE_DIR/routers/asus-tuf-ax4200-openwrt"
 COMMON_DIR="$SOURCE_DIR/routers/common"
 VPS_DIR="$SOURCE_DIR/vps"
@@ -47,36 +43,26 @@ EXTRACT_DIR="${WORK_DIR}/extract"
 OPKG_UPDATE_OK='0'
 BUNDLED_PAYLOAD_DIR="${PROFILE_DIR}/packages"
 OPENWRT_FALLBACK_RELEASE='23.05.5'
-
 [ -f "$PROFILE_DIR/profile.env" ] || {
 	echo "Missing router profile defaults: $PROFILE_DIR/profile.env" >&2
 	exit 1
 }
-
 # shellcheck disable=SC1090
 . "$PROFILE_DIR/profile.env"
-
 : "${IPKG_INSTROOT:=}"
 export IPKG_INSTROOT
-
 mkdir -p "$DOWNLOAD_DIR" "$EXTRACT_DIR"
-
 cleanup() {
 	rm -rf "$WORK_DIR"
 }
-
 trap cleanup EXIT INT TERM
-
 INSTALL_PROGRESS_FILE="/tmp/vpn-xray-install-progress"
 # Records every file copy_if_changed actually writes this run, for the
 # post-deploy integrity check (verify_deployed_files).
 COPY_MANIFEST="/tmp/vpn-xray-copy-manifest"
 FILES_CHANGED=0
-
 mark_done() { printf '%s\n' "$1" >> "$INSTALL_PROGRESS_FILE"; }
 is_done() { [ -f "$INSTALL_PROGRESS_FILE" ] && grep -Fxq "$1" "$INSTALL_PROGRESS_FILE" 2>/dev/null; }
-
-
 # Function groups extracted to sibling libs (AGENTS.md 500-line rule).
 # They define functions only and share this scope; sourced here after the
 # constants/env above and before install_platform runs below.
@@ -84,21 +70,17 @@ is_done() { [ -f "$INSTALL_PROGRESS_FILE" ] && grep -Fxq "$1" "$INSTALL_PROGRESS
 . "$SELF_DIR/install-platform-lib-b.sh"
 install_platform() {
 	local archive binary libevent_pkg redsocks_pkg redsocks_rendered router_rules_rendered existing_ready switch_state
-
 	if [ "$RESUME_MODE" != '1' ]; then
 		rm -f "$INSTALL_PROGRESS_FILE"
 	fi
 	# Fresh manifest every run (copies are re-verified each install, even resume).
 	: > "$COPY_MANIFEST"
-
 	info "Running router platform preflight..."
 	preflight
-
 	if [ "$PREFLIGHT_ONLY" = '1' ]; then
 		info "Router platform preflight passed."
 		return 0
 	fi
-
 	if ! is_done packages; then
 		info "Preparing router package manager..."
 		install_bundled_opkg_packages || true
@@ -140,19 +122,16 @@ install_platform() {
 		ensure_python3_runtime || true
 		mark_done packages
 	fi
-
 	archive="$DOWNLOAD_DIR/$XRAY_CORE_ARCHIVE"
 	stage_bundled_or_download "$XRAY_CORE_ARCHIVE" "$archive" "$XRAY_CORE_URL" "$XRAY_CORE_ARCHIVE_SHA256"
 	unzip -oq "$archive" -d "$EXTRACT_DIR"
 	binary="$EXTRACT_DIR/xray"
 	[ -f "$binary" ] || fail "Xray archive unpacked, but the xray binary was not found."
 	[ "$(sha256_file "$binary")" = "$XRAY_CORE_BINARY_SHA256" ] || fail "Xray binary sha256 mismatch after unpack."
-
 	libevent_pkg="$DOWNLOAD_DIR/$LIBEVENT_PACKAGE"
 	redsocks_pkg="$DOWNLOAD_DIR/$REDSOCKS_PACKAGE"
 	stage_bundled_or_download "$LIBEVENT_PACKAGE" "$libevent_pkg" "$LIBEVENT_URL" "$LIBEVENT_SHA256"
 	stage_bundled_or_download "$REDSOCKS_PACKAGE" "$redsocks_pkg" "$REDSOCKS_URL" "$REDSOCKS_SHA256"
-
 	# Stop the running runtime before touching files — on EVERY install, not
 	# gated by is_done. On a --resume run a stale, pre-fix xray left running
 	# keeps logging (a legacy build wrote to /var/log/xray on tmpfs) and can
@@ -170,14 +149,12 @@ install_platform() {
 	# /etc/xray/logs on flash); a pre-fix runtime could leave hundreds of MB
 	# here on tmpfs and starve the deploy.
 	rm -rf /var/log/xray 2>/dev/null || true
-
 	if ! is_done deps; then
 		info "Installing router-side dependencies..."
 		opkg install "$libevent_pkg" "$redsocks_pkg" >/dev/null 2>&1 || fail "Could not install the router-side redsocks dependencies."
 		command -v redsocks >/dev/null 2>&1 || fail "redsocks is still unavailable after package install."
 		mark_done deps
 	fi
-
 	mkdir -p /usr/local/bin /etc/xray/logs /etc/router-rules/generated /etc/router-rules/ssh /usr/share/vpn-xray /www/cgi-bin /etc/gl-switch.d "$PLATFORM_DIR"
 	if [ -f "$ROUTER_BIN" ]; then
 		local old_h new_h
@@ -191,7 +168,6 @@ install_platform() {
 	fi
 	copy_if_changed "$binary" "$ROUTER_BIN"
 	chmod 755 "$ROUTER_BIN"
-
 	redsocks_rendered="$WORK_DIR/redsocks.conf"
 	router_rules_rendered="$WORK_DIR/router-rules.config"
 	render_redsocks_conf "$redsocks_rendered"
@@ -242,7 +218,6 @@ EOF
 		fi
 		chmod 644 /etc/router-rules/ssh/routerRules_ed25519.pub
 	fi
-
 	mkdir -p /etc/hotplug.d/iface
 	# Pinned VPS cert used by VLESS+WS+TLS outbound (self-signed). Lives
 	# next to codex-xray.json so the runtime can verify the upstream pin.
@@ -301,11 +276,9 @@ EOF
 	copy_if_changed "$PROFILE_DIR/files/xray-admin.cgi" /www/cgi-bin/xray-admin
 	copy_if_changed "$PROFILE_DIR/files/xray-vps.cgi" /www/cgi-bin/xray-vps
 	copy_if_changed "$PROFILE_DIR/files/xray-rules.cgi" /www/cgi-bin/xray-rules
-
 	# Fail loudly if any copy this run did not actually land (silent cp failure,
 	# exhausted tmpfs) — before we normalize/chmod/restart onto a stale platform.
 	verify_deployed_files
-
 	normalize_installed_text_files \
 		/etc/init.d/codex-xray \
 		/etc/init.d/codex-transproxy \
@@ -357,13 +330,11 @@ EOF
 		/www/xray.html
 	chmod 755 /etc/init.d/codex-xray /etc/init.d/codex-transproxy /etc/hotplug.d/iface/95-codex-xray-uplink /etc/init.d/xray-switch-watchdog /etc/init.d/xray-health-monitor /etc/init.d/xray-uplink-guard /usr/bin/vpn-xray-uplink-guard /etc/init.d/router-rules-sync /etc/gl-switch.d/xray.sh /usr/bin/router-rules /usr/bin/vpn-xray-repin-cert /usr/share/vpn-xray/lib-common.sh /usr/share/vpn-xray/xray-admin-probe.sh /usr/share/vpn-xray/xray-admin-status.sh /usr/share/vpn-xray/xray-admin-tree.sh /usr/share/vpn-xray/xray-diag-capture.sh /usr/share/vpn-xray/xray-rules-jobs.sh /usr/share/vpn-xray/xray-rules-actions.sh /usr/share/vpn-xray/xray-rules-scripts.sh /usr/share/vpn-xray/xray-vps-profile.sh /usr/share/vpn-xray/xray-vps-ssh.sh /usr/share/vpn-xray/xray-vps-render.sh /usr/share/vpn-xray/xray-vps-inspect.sh /usr/share/vpn-xray/xray-vps-actions.sh /usr/share/vpn-xray/xray-vps-setup.sh /usr/share/vpn-xray/xray-vps-repair.sh /usr/share/vpn-xray/router-rules-external.py /usr/share/vpn-xray/router-rules-config.sh /usr/share/vpn-xray/router-rules-git.sh /usr/share/vpn-xray/router-rules-repo.sh /usr/share/vpn-xray/router-rules-remote.sh /usr/share/vpn-xray/router-rules-rulestree.sh /usr/share/vpn-xray/router-rules-external-a.sh /usr/share/vpn-xray/router-rules-external-b.sh /usr/share/vpn-xray/router-rules-ipset.sh /usr/share/vpn-xray/router-rules-apply.sh /usr/share/vpn-xray/router-rules-status.sh /www/cgi-bin/xray-admin /www/cgi-bin/xray-vps /www/cgi-bin/xray-rules
 	chmod 644 /www/xray.html /www/xray-base.css /www/xray-components.css /www/xray-app-1.js /www/xray-app-2.js /www/xray-app-3.js /www/xray-app-4.js /www/xray-app-5.js /www/xray-app-6.js /www/xray-app-7.js /www/xray-tree.js
-
-	rm -rf /usr/share/vpn-xray/vps
-	mkdir -p /usr/share/vpn-xray
+	rm -rf /usr/share/vpn-xray/vps /usr/share/vpn-xray/diag
+	mkdir -p /usr/share/vpn-xray /usr/share/vpn-xray/diag
 	cp -R "$VPS_DIR" /usr/share/vpn-xray/vps
-
+	cp "$COMMON_DIR/files/diag/nodes.manifest" /usr/share/vpn-xray/diag/nodes.manifest
 	rm -rf /tmp/router-rules.lock.d /tmp/xray-vps-locks
-
 	info "Applying router integration settings..."
 	uci -q delete firewall.codex_wan_http_proxy_prod >/dev/null 2>&1 || true
 	uci -q delete firewall.codex_wan_redsocks_drop >/dev/null 2>&1 || true
@@ -383,7 +354,6 @@ EOF
 	uci set firewall.codex_wan_redsocks_drop.dest_port="$REDSOCKS_PORT"
 	uci set firewall.codex_wan_redsocks_drop.target='DROP'
 	uci commit firewall
-
 	uci -q delete dhcp.lan.dhcp_option >/dev/null 2>&1 || true
 	uci set dhcp.lan.ra='disabled'
 	uci set dhcp.lan.dhcpv6='disabled'
@@ -411,14 +381,11 @@ EOF
 		uci -q delete switch-button.@main[0].sub_func >/dev/null 2>&1 || true
 		uci commit switch-button
 	fi
-
 	configure_lan_bridge_ports
 	stabilize_wireless_bssid
 	uci commit network
 	uci commit wireless
-
 	write_platform_metadata
-
 	# Kernel tuning for stability on a no-swap 512 MB system:
 	#  - min_free_kbytes: reserve pages for interrupt handlers and OOM-killer
 	#  - softlockup_panic: dump stack to ramoops on soft lockup
@@ -438,7 +405,6 @@ EOF
 	sysctl -w kernel.panic=10 >/dev/null 2>&1 || true
 	sysctl -w net.netfilter.nf_conntrack_max=16384 >/dev/null 2>&1 || true
 	sysctl -w net.core.netdev_budget=600 >/dev/null 2>&1 || true
-
 	# Balance NET_RX softirqs across both CPUs.  By default CPU0 handles
 	# ~87 % of all RX interrupts, which concentrates spinlock contention
 	# in the packet-processing path on a single core.
@@ -452,7 +418,6 @@ EOF
 			esac
 		done
 	fi
-
 	if valid_router_config_present; then
 		touch "$CONFIG_READY_FILE"
 		chmod 600 "$CONFIG_READY_FILE"
@@ -461,7 +426,6 @@ EOF
 		rm -f "$CONFIG_READY_FILE"
 		existing_ready='0'
 	fi
-
 	exec </dev/null
 	if [ "$FILES_CHANGED" = '1' ] || ! is_done services; then
 		info "Restarting router services..."
@@ -496,7 +460,6 @@ EOF
 	else
 		info "No file changes detected; skipping service restart."
 	fi
-
 	switch_state="$(current_switch_state)"
 	info "Router platform is installed."
 	if [ "$existing_ready" = '1' ]; then
@@ -504,8 +467,7 @@ EOF
 		info "Hardware switch state: $switch_state"
 	else
 		info "No active VPS profile is configured on this router yet."
-		info "Open https://192.168.2.1/xray.html, enter VPS SSH details, and click 'Sync Router + VPS'."
+		info "Open https://192.168.2.1/xray.html, enter VPS SSH details, click 'Save VPS Access', then 'Check & Configure VPS'."
 	fi
 }
-
 install_platform

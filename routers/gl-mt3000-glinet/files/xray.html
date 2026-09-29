@@ -34,9 +34,7 @@
         <div class="pill">Target: <span id="heroTarget" class="mono">...</span></div>
       </div>
     </section>
-
     <div id="flash" class="flash"></div>
-
     <section class="card" id="pathHealthCard">
       <div class="path-health-head">
         <h2>Path Health</h2>
@@ -45,7 +43,6 @@
       <p class="subcopy">Live decision tree — each layer checked top to bottom; the deepest broken layer is fixed first. <strong>Diagnose &amp; Repair</strong> walks the whole tree bottom-up: it restarts the broken router-side layers (runtime / redsocks / transport) and, if the path is still down because of the VPS server or config, it runs the VPS repair too (progress and results appear in the Selected VPS card below). One button for the whole path.</p>
       <div id="pathHealthTree" class="tree">Loading path health…</div>
     </section>
-
     <section class="grid">
       <div class="card">
         <h2>Selected VPS</h2>
@@ -99,16 +96,13 @@
             <input id="sshPort" type="number" min="1" max="65535" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="22">
           </div>
         </div>
+        <div class="form-actions" style="margin-top:12px;">
+          <button id="createProfileBtn" type="button">New VPS</button><button id="saveProfileBtn" type="button" class="primary">Save VPS Access</button><button class="warn-btn" id="diagnoseRepairBtn" type="button">Check &amp; Configure VPS</button>
+        </div>
+        <div id="profileActionHint" class="hint" style="margin-top:8px;">Step 1: save the access fields. Step 2: check and configure the VPS.</div>
         <div class="readonly-pane" style="margin-top:12px;background:#1a2733;border:1px solid #2c3f52;">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-            <div>
-              <div class="label" style="color:#e6d34a;">VPS Server Repair</div>
-              <div class="hint" style="margin-top:4px;">
-                The VPS-side half of <strong>Diagnose &amp; Repair</strong> (run it from Path Health above): SSH check → binary → systemd unit → dirs → permissions → TLS cert → config → firewall → runtime. Each step self-heals when it can. Progress, any password prompt, and the per-step result appear here.
-              </div>
-            </div>
-            <button class="warn-btn" id="diagnoseRepairBtn" style="min-width:180px;" hidden>Diagnose &amp; Repair</button>
-          </div>
+          <div class="label" style="color:#e6d34a;">VPS Check &amp; Configuration</div>
+          <div class="hint" style="margin-top:4px;">SSH → managed key → VPS inspection → Xray install/repair → TLS/config/firewall/runtime. Progress and the per-step result appear here.</div>
           <div id="repairProgress" style="margin-top:12px;display:none;padding:10px 12px;background:#141d26;border-radius:4px;border-left:3px solid #e6d34a;">
             <div style="display:flex;align-items:center;gap:10px;">
               <span class="repair-spinner" style="display:inline-block;width:14px;height:14px;border:2px solid #2c3f52;border-top-color:#e6d34a;border-radius:50%;animation:repairspin 0.8s linear infinite;"></span>
@@ -140,14 +134,11 @@
             </details>
           </div>
         </div>
-        <div class="form-actions" style="margin-top:12px;">
-          <button id="createProfileBtn" type="button">New VPS</button><button id="saveProfileBtn" type="button" class="primary">Save Changes</button>
-        </div>
         <div id="setupNotice" class="readonly-pane" style="margin-top:12px;display:none;">
           <div class="label">First-Time Setup</div>
           <div class="hint">
             The router platform is installed, but there is no active VPS path yet. Fill the VPS SSH details above and click
-            <strong>Diagnose &amp; Repair</strong>. The router will configure the selected server and then apply the client profile locally.
+            <strong>Check &amp; Configure VPS</strong>. The router will inspect and configure the selected server without changing the active client path.
           </div>
         </div>
         <details class="readonly-pane" style="margin-top:12px;">
@@ -187,7 +178,6 @@
           </div>
         </details>
       </div>
-
       <div class="card">
         <h2>Live State</h2>
         <p class="subcopy">
@@ -229,7 +219,6 @@
         </details>
       </div>
     </section>
-
     <section class="card" id="rulesCard" style="margin-top:18px;position:relative;">
       <div id="rulesBusyOverlay" class="busy-overlay" hidden>
         <span class="busy-spinner"></span>
@@ -246,7 +235,6 @@
         <button type="button" class="rules-tab-btn" data-tab="external" style="background:none;color:#8b98a5;border:none;border-bottom:2px solid transparent;padding:8px 14px;cursor:pointer;font-size:14px;font-weight:600;">External sources</button>
         <button type="button" class="rules-tab-btn" data-tab="status" style="background:none;color:#8b98a5;border:none;border-bottom:2px solid transparent;padding:8px 14px;cursor:pointer;font-size:14px;font-weight:600;">Status &amp; diagnostics</button>
       </div>
-
       <div id="rulesTabLocal" class="rules-tab-panel" style="margin-top:16px;">
         <div class="subhead" style="align-items:flex-start;">
           <div style="flex:1 1 auto;">
@@ -281,7 +269,6 @@
           <textarea id="rulesText" class="mono" spellcheck="false" style="min-height:240px;"></textarea>
         </div>
       </div>
-
       <div id="rulesTabGit" class="rules-tab-panel" style="margin-top:16px;display:none;">
         <div class="field field-full">
           <label for="rulesGitSyncEnabled">Shared Rules Git Sync</label>
@@ -371,7 +358,6 @@
           </div>
         </div>
       </div>
-
       <div id="rulesTabExternal" class="rules-tab-panel" style="margin-top:16px;display:none;">
         <div class="hint" id="rulesExternalHint">
           External feeds are stored in separate managed files next to the editable shared list. The router applies a merged ruleset, while each managed source file can be enabled or disabled independently and viewed in a popup.

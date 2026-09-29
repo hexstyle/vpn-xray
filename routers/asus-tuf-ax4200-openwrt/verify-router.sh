@@ -63,7 +63,7 @@ warn_verify() {
 config_ready="$(router_ssh '[ -f /etc/xray/codex-xray.ready ] && [ -s /etc/xray/codex-xray.json ] && echo 1 || echo 0' | sed -n '1p')"
 if [[ "$config_ready" != "1" ]]; then
   echo "The vpn-xray platform is installed, but this router does not have an active VPS client profile yet." >&2
-  echo "Open https://$ROUTER_HOST/xray.html, add VPS SSH details, click 'Sync Router + VPS', and then rerun verify." >&2
+  echo "Open https://$ROUTER_HOST/xray.html, add VPS SSH details, click 'Save VPS Access', then 'Check & Configure VPS', and rerun verify." >&2
   exit 21
 fi
 

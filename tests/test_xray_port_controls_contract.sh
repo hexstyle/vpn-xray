@@ -15,6 +15,7 @@ VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
 VPS_IMPL="$VPS_CGI $ROOT/routers/common/files/xray-vps-actions.sh $ROOT/routers/common/files/xray-vps-inspect.sh $ROOT/routers/common/files/xray-vps-render.sh"
 VPS_INSTALL="$ROOT/vps/debian-13/files/install-vps.remote.sh"
 ROUTER_INSTALLERS="$ROOT/routers/gl-mt3000-glinet/install-router.sh $ROOT/routers/asus-tuf-ax4200-openwrt/install-router.sh"
+VPS_WORKSTATION_INSTALLER="$ROOT/vps/debian-13/install-vps.sh"
 ADOPT_VPS_META="$ROOT/common/adopt-vps-meta.sh"
 
 fail() {
@@ -47,6 +48,11 @@ for installer in $ROUTER_INSTALLERS; do
 	grep -q 'xray_vps.default.ssh_port=.*VPS_SSH_PORT' "$installer" \
 		|| fail "$installer must persist VPS_SSH_PORT in the bootstrapped UI profile"
 done
+
+grep -q 'VPS_SSH_PORT="${VPS_SSH_PORT:-22}"' "$VPS_WORKSTATION_INSTALLER" \
+	|| fail "the workstation VPS installer must default VPS_SSH_PORT explicitly"
+grep -q -- '-p "$VPS_SSH_PORT"' "$VPS_WORKSTATION_INSTALLER" \
+	|| fail "the workstation VPS installer must dial VPS_SSH_PORT for every SSH call"
 
 grep -q 'VPS_SSH_PORT="${VPS_SSH_PORT:-22}"' "$ADOPT_VPS_META" \
 	|| fail "adopt-vps-meta.sh must default the VPS SSH port explicitly"

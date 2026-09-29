@@ -156,7 +156,7 @@ build_config_file() {
         }
       },
       "mux": {
-        "enabled": true,
+        "enabled": false,
         "concurrency": 8,
         "xudpConcurrency": 16
       }

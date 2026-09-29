@@ -69,9 +69,8 @@ save_profile_from_request() {
 }
 
 create_profile_action() {
-	local base profile_id suffix source_profile managed_key_path
+	local base profile_id suffix
 
-	source_profile="$(active_profile_id)"
 	base="vps_$(date +%Y%m%d_%H%M%S)"
 	profile_id="$base"
 	suffix=1
@@ -83,19 +82,13 @@ create_profile_action() {
 	uci -q set "${PROFILE_PACKAGE}.${profile_id}=profile"
 	profile_set "$profile_id" label 'New VPS'
 	profile_set "$profile_id" vps_profile "$(default_vps_profile)"
+	profile_set "$profile_id" auth_mode 'password'
 	profile_set "$profile_id" ssh_host ''
 	profile_set "$profile_id" ssh_port '22'
 	profile_set "$profile_id" ssh_user 'root'
 	profile_set "$profile_id" server_address ''
 	profile_del "$profile_id" ssh_password
-	managed_key_path="$(profile_get "$source_profile" managed_key_path)"
-	if [ -n "$managed_key_path" ] && [ -f "$managed_key_path" ] && [ -f "${managed_key_path}.pub" ]; then
-		profile_set "$profile_id" auth_mode 'managed_key'
-	else
-		profile_set "$profile_id" auth_mode 'password'
-		managed_key_path="${KEY_DIR}/${profile_id}_ed25519"
-	fi
-	profile_set "$profile_id" managed_key_path "$managed_key_path"
+	profile_set "$profile_id" managed_key_path "${KEY_DIR}/${profile_id}_ed25519"
 	profile_set "$profile_id" bootstrap_key_path "${KEY_DIR}/${profile_id}_bootstrap"
 	profile_set "$profile_id" managed_pubkey ''
 	profile_set "$profile_id" last_inspect_status 'never'
@@ -118,24 +111,14 @@ create_profile_action() {
 }
 
 save_profile_action() {
-	local remote_refreshed=0
-
 	if ! save_profile_from_request >/dev/null; then
 		emit_error save_profile "${SAVE_PROFILE_ERROR:-Router could not initialize profile material.}"
 		return 0
-	fi
-	if refresh_remote_cache "$SAVE_PROFILE_ID"; then
-		remote_refreshed=1
-	else
-		profile_set "$SAVE_PROFILE_ID" last_inspect_status 'error'
-		profile_set "$SAVE_PROFILE_ID" last_inspect_at "$(date +%s)"
-		uci commit "$PROFILE_PACKAGE"
 	fi
 	emit_header
 	printf '{'
 	printf '"ok":true,'
 	printf '"action":"save_profile",'
-	printf '"remote_refreshed":'; json_bool "$remote_refreshed"; printf ','
 	printf '"status":'
 	status_json
 	printf '}'
