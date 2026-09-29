@@ -212,7 +212,10 @@ case "$(request_value action)" in
 		;;
 	apply_router)
 		ensure_profile_store
-		apply_profile_to_router_action
+		schedule_router_apply_action
+		;;
+	apply_router_status)
+		router_apply_status_action
 		;;
 	setup_vps)
 		ensure_profile_store

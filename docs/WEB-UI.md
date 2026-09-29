@@ -33,10 +33,11 @@ It contains:
 - SSH auth method and matching auth fields
 - `Save VPS Access`
 - `Check & Configure VPS`
+- `Apply Profile to Router`
 
 Behavior:
 
-- both controls stay immediately below the SSH fields; neither is hidden in a
+- all three controls stay immediately below the SSH fields; none is hidden in a
   status panel or dependent on a path-tree action
 - `Save VPS Access`
   - persists only the label, VPS OS profile and SSH access coordinates
@@ -46,10 +47,15 @@ Behavior:
   - runs as a detached router job and exposes progress by polling
   - verifies SSH, installs the router-managed key using the one-shot password,
     inspects the live VPS, then installs or repairs Xray when required
+- `Apply Profile to Router`
+  - becomes available only after the selected profile matches a successfully
+    inspected VPS and differs from the live router target
+  - runs a detached cutover, validates the VPS certificate, egress IP and
+    ChatGPT, and restores the previous config and certificate on failure
 - every successful VPS inspection refreshes the read-only Xray values from the
   live VPS; only an empty VPS receives newly generated material
 - `Check & Configure VPS` uses that VPS-authoritative identity for remote repair;
-  router runtime apply remains a separate disruptive operation
+  `Apply Profile to Router` is the separate explicit disruptive operation
 
 ### `Live State`
 
@@ -62,6 +68,10 @@ It shows:
 - last VPS check time
 - remote public IP
 - sync state
+
+`Profile` is the selected saved profile. `Target` is read from the router's
+currently loaded Xray config, so they intentionally differ until the profile
+has been explicitly applied and verified.
 
 Technical details stay secondary and collapsible.
 

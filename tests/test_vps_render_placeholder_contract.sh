@@ -18,7 +18,7 @@ CGI="$PROFILE/files/xray-vps.cgi"
 # (AGENTS.md 500-line split). Extract the relevant function from the lib that
 # now owns it; router_current_json stays in the CGI itself.
 RENDER_LIB="$ROOT/routers/common/files/xray-vps-render.sh"
-ACTIONS_LIB="$ROOT/routers/common/files/xray-vps-actions.sh"
+SETUP_LIB="$ROOT/routers/common/files/xray-vps-setup.sh"
 INSPECT_LIB="$ROOT/routers/common/files/xray-vps-inspect.sh"
 UI="$PROFILE/files/xray.html"
 # xray.html inline CSS/JS extracted to sibling assets (AGENTS.md 500-line
@@ -71,6 +71,18 @@ grep -q 'case "$TLS_CERT_PATH" in' "$REMOTE_INSTALL" \
 grep -q "grep -q '\[\$\]\[{\]\[A-Z_\]\[A-Z0-9_\]\*\[}\]' \"\$staged\"" "$REMOTE_INSTALL" \
 	|| fail "step_config must reject a staged config containing an unsubstituted placeholder (node 6.6)"
 
+# Node 6.9: short-lived client sessions must not leave destination sockets
+# around indefinitely, and the repair pipeline must persist a RAM-bounded
+# TCP budget instead of relying on the undersized kernel default.
+grep -q '"connIdle": 120' "$CONFIG_TEMPLATE" \
+	|| fail "VPS config must bound idle proxied connections (node 6.9)"
+grep -q '^step_tcp_capacity()' "$REMOTE_INSTALL" \
+	|| fail "VPS repair must diagnose and repair TCP memory capacity (node 6.9)"
+grep -q "file='/etc/sysctl.d/99-vpn-xray-tcp.conf'" "$REMOTE_INSTALL" \
+	|| fail "VPS TCP capacity repair must persist its bounded sysctl (node 6.9)"
+grep -q '^step_tcp_capacity || true' "$REMOTE_INSTALL" \
+	|| fail "VPS repair main sequence must run tcp_capacity (node 6.9)"
+
 # Node R.4 / 8.5: the CGI router-config generator must emit the same
 # transport the VPS serves (WS+TLS), not the legacy raw/reality — else an
 # apply produces a config that cannot talk to the VPS.
@@ -84,8 +96,8 @@ printf '%s' "$router_cfg" | grep -q '"security": "reality"' \
 
 # Node 8.2 guard: applying a router config must refuse when TLS-critical
 # profile fields are empty (empty serverName → cert validated against the IP).
-apply_fn="$(sed -n '/^apply_profile_to_router_internal()/,/^}/p' "$ACTIONS_LIB")"
-printf '%s' "$apply_fn" | grep -q 'refusing to overwrite the working router config' \
+apply_fn="$(sed -n '/^apply_profile_to_router_internal()/,/^}/p' "$SETUP_LIB")"
+printf '%s' "$apply_fn" | grep -q 'profile is missing required endpoint, SNI, UUID, or port' \
 	|| fail "apply_profile_to_router_internal must refuse an incomplete profile (empty server_name/address/uuid/port) before overwriting the router config (node 8.2)"
 
 # G8 transport-mismatch detector: xray-vps.cgi must expose the transport

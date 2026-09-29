@@ -65,13 +65,29 @@ for html in "$ASUS_HTML" "$GL_HTML"; do
 		|| fail "the SSH form must statically expose Save VPS Access"
 	grep -q '<button class="warn-btn" id="diagnoseRepairBtn" type="button">Check &amp; Configure VPS</button>' "$html" \
 		|| fail "the SSH form must statically expose Check & Configure VPS"
+	grep -q 'id="applyRouterProfileBtn" type="button">Apply Profile to Router</button>' "$html" \
+		|| fail "the verified profile workflow must expose an explicit router apply button"
 done
 grep -q 'callApi(vpsApi, "save_profile", formPayload()' "$APP7" \
 	|| fail "Save VPS Access must call the save_profile backend"
 grep -q 'diagnose_repair_status' "$ROOT/routers/common/files/xray-app-6.js" \
 	|| fail "Check & Configure VPS must poll the detached repair job"
+grep -q 'callApi(vpsApi, "apply_router"' "$APP7" \
+	|| fail "Apply Profile to Router must call the detached apply backend"
+grep -q 'apply_router_status' "$APP7" \
+	|| fail "Apply Profile to Router must poll its detached job"
 grep -q "XRAY_VPS_JOB='diagnose_repair'" "$ROOT/routers/common/files/xray-vps-setup.sh" \
 	|| fail "VPS repair must be scheduled outside the CGI request"
+grep -q 'start-stop-daemon.*</dev/null >/dev/null 2>&1 9>&-' "$ROOT/routers/common/files/xray-vps-setup.sh" \
+	|| fail "detached VPS/apply jobs must not inherit CGI stdio or the scheduler flock"
+grep -q 'schedule_router_apply_action' "$ROOT/routers/asus-tuf-ax4200-openwrt/files/xray-vps.cgi" \
+	|| fail "the apply_router CGI action must only schedule the cutover"
+grep -q '"router_apply_job":' "$ROOT/routers/common/files/xray-vps-render.sh" \
+	|| fail "VPS status must expose the detached router apply state"
+grep -q 'verify_applied_profile_path' "$ROOT/routers/common/files/xray-vps-setup.sh" \
+	|| fail "router apply must verify real proxy egress after cutover"
+grep -q 'rollback_router_profile' "$ROOT/routers/common/files/xray-vps-setup.sh" \
+	|| fail "router apply must roll config and certificate back on failure"
 grep -q 'stage/xray-bundled.zip' "$REPAIR" \
 	|| fail "the detached repair bundle must carry the repository-bundled VPS Xray archive"
 for platform in \

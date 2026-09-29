@@ -52,8 +52,10 @@ grep -q '"path_effective":' $ADMIN_IMPL \
 grep -q 'router_path_active()' "$VPS_CGI" \
 	|| fail "xray-vps.cgi must expose an explicit router path health check"
 
-grep -q 'resync_runtime_to_switch || return 1' $VPS_IMPL \
-	|| fail "xray-vps.cgi must fail apply_profile when runtime does not come back"
+grep -q 'if ! resync_runtime_to_switch || ! verify_applied_profile_path' $VPS_IMPL \
+	|| fail "xray-vps.cgi must reject and verify apply_profile when the new runtime does not come back"
+grep -q 'rollback_router_profile' $VPS_IMPL \
+	|| fail "xray-vps.cgi must restore the previous runtime after a failed apply"
 
 grep -q '"sniffing": {' $VPS_IMPL \
 	|| fail "xray-vps.cgi must preserve inbound sniffing when it renders router configs from saved VPS profiles"

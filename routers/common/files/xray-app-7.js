@@ -116,10 +116,64 @@
       } finally {
         setBusy(button, false);
         endForegroundTask();
+        renderAll(false);
+      }
+    }
+
+    async function waitForRouterApply() {
+      const deadline = Date.now() + 120000;
+      while (Date.now() < deadline) {
+        await sleep(1000);
+        const data = await callApi(vpsApi, "apply_router_status", null, { timeoutMs: 10000 });
+        const job = data.job || {};
+        if (job.state === "scheduled" || job.state === "running") continue;
+        return job;
+      }
+      throw new Error("Router profile apply did not finish within 120 seconds.");
+    }
+
+    function renderApplyProfileButton(inspectStatus, remoteDiff, routerDiff) {
+      const button = document.getElementById("applyRouterProfileBtn");
+      if (!button) return;
+      const canApply = inspectStatus === "ok" && remoteDiff.length === 0 && routerDiff.length > 0;
+      button.disabled = state.foregroundBusy || !canApply;
+      button.title = canApply
+        ? "Apply this VPS-derived profile to the live router path. The router rolls back automatically if verification fails."
+        : (routerDiff.length === 0 ? "This profile is already active on the router." : "Run Check & Configure VPS successfully before applying.");
+    }
+
+    async function applyRouterProfile(button) {
+      const profile = activeProfile();
+      if (!profile) return flash("No VPS profile is selected.", "bad");
+      if (state.formDirty) return flash("Save VPS Access before applying the profile.", "warn");
+      if (!window.confirm(`Apply profile "${profile.label || profile.id}" to the live router path? Existing traffic will reconnect.`)) return;
+      beginForegroundTask("Applying the verified VPS profile to the router...", 120000);
+      setBusy(button, true);
+      document.getElementById("profileActionHint").textContent = "Applying profile and verifying egress through the new VPS…";
+      try {
+        const start = await callApi(vpsApi, "apply_router", null, { timeoutMs: 10000 });
+        if (start.ok === false) throw new Error(start.error || "backend error");
+        const job = await waitForRouterApply();
+        if (job.state !== "done") throw new Error(job.message || "router apply failed");
+        await refreshAll(false, true, true);
+        document.getElementById("profileActionHint").textContent = "Profile applied. Target now matches the selected VPS.";
+        flash(job.message || "Profile applied and verified through the new VPS.", "good");
+      } catch (err) {
+        await refreshAll(false, true, true).catch(() => {});
+        document.getElementById("profileActionHint").textContent = "Apply failed; the previous working router path was restored.";
+        flash(`Failed to apply profile: ${err.message}`, "bad");
+      } finally {
+        setBusy(button, false);
+        endForegroundTask();
+        renderAll(false);
       }
     }
 
     const saveProfileButton = document.getElementById("saveProfileBtn");
     if (saveProfileButton) {
       saveProfileButton.addEventListener("click", () => saveVpsAccess(saveProfileButton));
+    }
+    const applyRouterProfileButton = document.getElementById("applyRouterProfileBtn");
+    if (applyRouterProfileButton) {
+      applyRouterProfileButton.addEventListener("click", () => applyRouterProfile(applyRouterProfileButton));
     }

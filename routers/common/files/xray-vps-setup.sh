@@ -101,38 +101,16 @@ apply_everything_action() {
 			adopt_remote_into_profile "$profile_id"
 		elif [ "$remote_xray_present" = '1' ] && [ "$remote_managed_meta" != '1' ]; then
 			adopt_remote_into_profile "$profile_id"
-			apply_profile_to_router_internal "$profile_id" >/dev/null || {
-				emit_error apply_profile 'VPS was detected and adopted, but applying the router profile failed.'
-				return 0
-			}
-			emit_status_response apply_profile
+			schedule_router_apply_action_for apply_profile "$profile_id"
 			return 0
 		fi
 	fi
 
-	local router_backup=''
-	if [ -f "$ROUTER_CONFIG" ]; then
-		router_backup="${ROUTER_CONFIG}.rollback.$$"
-		cp "$ROUTER_CONFIG" "$router_backup"
-	fi
-
 	setup_vps_internal "$profile_id" || {
-		rm -f "$router_backup"
 		emit_error apply_profile 'Failed to sync the selected VPS.'
 		return 0
 	}
-	if ! apply_profile_to_router_internal "$profile_id" >/dev/null; then
-		if [ -n "$router_backup" ] && [ -f "$router_backup" ]; then
-			cp "$router_backup" "$ROUTER_CONFIG"
-			resync_runtime_to_switch || true
-		fi
-		rm -f "$router_backup"
-		emit_error apply_profile 'VPS was synced, but applying the profile to the router failed. Router config rolled back.'
-		return 0
-	fi
-	rm -f "$router_backup"
-
-	emit_status_response apply_profile
+	schedule_router_apply_action_for apply_profile "$profile_id"
 }
 
 # --- Deferred router-apply job (DIAGNOSTIC-TREE 8.2) ---
@@ -143,9 +121,113 @@ apply_everything_action() {
 
 ROUTER_APPLY_STATUS_FILE='/tmp/xray-vps-repair-apply.status'
 
+fetch_profile_tls_cert() {
+	local profile_id="$1" destination="$2" vps_profile cert_path server_name
+	vps_profile="$(selected_vps_profile "$profile_id")"
+	cert_path="$(vps_profile_value "$vps_profile" VPS_TLS_CERT_PATH)"
+	server_name="$(profile_get "$profile_id" server_name)"
+	case "$cert_path" in
+		/*) ;;
+		*) return 1 ;;
+	esac
+	case "$cert_path" in *[!A-Za-z0-9_./-]*) return 1 ;; esac
+	ssh_cmd "$profile_id" "cat '$cert_path'" > "$destination" 2>/dev/null || return 1
+	[ -s "$destination" ] || return 1
+	openssl x509 -in "$destination" -noout -checkhost "$server_name" >/dev/null 2>&1
+}
+
+verify_applied_profile_path() {
+	local profile_id="$1" expected egress code
+	expected="$(cache_get "$(profile_cache_path "$profile_id")" REMOTE_PUBLIC_IP)"
+	[ -n "$expected" ] || expected="$(profile_get "$profile_id" server_address)"
+	egress="$(curl -4fsS -m 12 --socks5-hostname "127.0.0.1:${ROUTER_SOCKS_PORT}" https://ident.me 2>/dev/null || true)"
+	[ -n "$egress" ] || egress="$(curl -4fsS -m 12 --socks5-hostname "127.0.0.1:${ROUTER_SOCKS_PORT}" https://api.ipify.org 2>/dev/null || true)"
+	[ -n "$egress" ] && [ "$egress" = "$expected" ] || {
+		APPLY_ROUTER_ERROR="new router path egress '${egress:-unavailable}' does not match VPS '$expected'"
+		return 1
+	}
+	code="$(curl -4sS -o /dev/null -w '%{http_code}' -m 15 --socks5-hostname "127.0.0.1:${ROUTER_SOCKS_PORT}" https://chatgpt.com 2>/dev/null || true)"
+	[ -n "$code" ] && [ "$code" != '000' ] || {
+		APPLY_ROUTER_ERROR='ChatGPT did not respond through the newly applied router path'
+		return 1
+	}
+	APPLY_ROUTER_EGRESS="$egress"
+}
+
+rollback_router_profile() {
+	local config_backup="$1" cert_backup="$2"
+	if [ -n "$config_backup" ] && [ -f "$config_backup" ]; then
+		cp "$config_backup" "$ROUTER_CONFIG"
+	else
+		rm -f "$ROUTER_CONFIG" "$ROUTER_READY_FILE"
+	fi
+	if [ -n "$cert_backup" ] && [ -f "$cert_backup" ]; then
+		cp "$cert_backup" /etc/xray/server.crt
+	else
+		rm -f /etc/xray/server.crt
+	fi
+	/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
+	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+	resync_runtime_to_switch >/dev/null 2>&1 || true
+}
+
+apply_profile_to_router_internal() {
+	local profile_id="$1" rendered fetched test_output stamp backup cert_backup
+	local sa sn su sp
+	APPLY_ROUTER_ERROR=''
+	APPLY_ROUTER_EGRESS=''
+	ensure_profile_material "$profile_id"
+	uci commit "$PROFILE_PACKAGE"
+	sa="$(profile_get "$profile_id" server_address)"
+	sn="$(profile_get "$profile_id" server_name)"
+	su="$(profile_get "$profile_id" uuid)"
+	sp="$(profile_get "$profile_id" server_port)"
+	if [ -z "$sa" ] || [ -z "$sn" ] || [ -z "$su" ] || [ -z "$sp" ]; then
+		APPLY_ROUTER_ERROR="profile is missing required endpoint, SNI, UUID, or port"
+		return 2
+	fi
+	rendered="/tmp/codex-xray.profile.$$.json"
+	fetched="/tmp/codex-xray.profile.$$.crt"
+	render_router_config "$rendered" "$profile_id"
+	test_output="$("$ROUTER_XRAY_BIN" run -test -config "$rendered" 2>&1 || true)"
+	printf '%s' "$test_output" | grep -q 'Configuration OK.' || {
+		APPLY_ROUTER_ERROR='rendered router config failed xray validation'
+		rm -f "$rendered" "$fetched"
+		return 1
+	}
+	if ! fetch_profile_tls_cert "$profile_id" "$fetched"; then
+		APPLY_ROUTER_ERROR="could not fetch a TLS certificate for $sn from the selected VPS"
+		rm -f "$rendered" "$fetched"
+		return 1
+	fi
+	stamp="$(date +%Y%m%d%H%M%S).$$"
+	backup="${ROUTER_CONFIG}.bak.${stamp}"
+	cert_backup="/etc/xray/server.crt.bak.${stamp}"
+	[ -f "$ROUTER_CONFIG" ] && cp "$ROUTER_CONFIG" "$backup" || backup=''
+	[ -f /etc/xray/server.crt ] && cp /etc/xray/server.crt "$cert_backup" || cert_backup=''
+	mv "$rendered" "$ROUTER_CONFIG"
+	mv "$fetched" /etc/xray/server.crt
+	chmod 600 "$ROUTER_CONFIG" /etc/xray/server.crt
+	touch "$ROUTER_READY_FILE"
+	chmod 600 "$ROUTER_READY_FILE"
+	/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
+	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+	sleep 1
+	if ! resync_runtime_to_switch || ! verify_applied_profile_path "$profile_id"; then
+		[ -n "$APPLY_ROUTER_ERROR" ] || APPLY_ROUTER_ERROR='new router runtime did not become healthy'
+		rollback_router_profile "$backup" "$cert_backup"
+		return 1
+	fi
+	APPLY_ROUTER_BACKUP="$backup"
+	return 0
+}
+
 router_apply_job_running() {
-	local pid
+	local state pid
 	[ -f "$ROUTER_APPLY_STATUS_FILE" ] || return 1
+	state="$(sed -n 's/^state=//p' "$ROUTER_APPLY_STATUS_FILE" | sed -n '1p')"
+	[ "$state" = 'scheduled' ] && return 0
+	[ "$state" = 'running' ] || return 1
 	pid="$(sed -n 's/^pid=//p' "$ROUTER_APPLY_STATUS_FILE" | sed -n '1p')"
 	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
@@ -154,10 +236,15 @@ router_apply_job_running() {
 # double-forks and detaches from the fcgiwrap process group, so the job
 # survives the end of the HTTP request that scheduled it.
 schedule_router_apply_job() {
+	mkdir -p "$LOCK_ROOT"
+	with_lock_dir "$LOCK_ROOT/router-apply.lock.d" schedule_router_apply_job_locked "$1"
+}
+
+schedule_router_apply_job_locked() {
 	local profile_id="$1"
 
 	if router_apply_job_running; then
-		return 0
+		return 2
 	fi
 	{
 		printf 'state=scheduled\n'
@@ -165,12 +252,57 @@ schedule_router_apply_job() {
 		printf 'scheduled_at=%s\n' "$(date +%s)"
 	} > "$ROUTER_APPLY_STATUS_FILE"
 	XRAY_VPS_JOB='apply_router' XRAY_VPS_JOB_PROFILE="$profile_id" \
-		start-stop-daemon -S -b -x /www/cgi-bin/xray-vps 2>/dev/null
+		start-stop-daemon -S -b -x /www/cgi-bin/xray-vps </dev/null >/dev/null 2>&1 9>&- || {
+			printf 'state=failed\nprofile=%s\nmessage=Router could not start the detached apply process.\n' "$profile_id" > "$ROUTER_APPLY_STATUS_FILE"
+			return 1
+		}
+}
+
+schedule_router_apply_action_for() {
+	local action="$1" profile_id="$2" rc=0
+	schedule_router_apply_job "$profile_id" || rc=$?
+	case "$rc" in
+		2) emit_error "$action" 'A router profile apply job is already running.'; return 0 ;;
+		1) emit_error "$action" 'Router could not start the detached profile apply job.'; return 0 ;;
+	esac
+	emit_header
+	printf '{"ok":true,"action":"%s","job_state":"scheduled","profile_id":"%s"}' \
+		"$(json_escape "$action")" "$(json_escape "$profile_id")"
+}
+
+schedule_router_apply_action() {
+	local profile_id
+	profile_id="$(active_profile_id)"
+	[ -n "$profile_id" ] || { emit_error apply_router 'No active VPS profile is selected.'; return 0; }
+	schedule_router_apply_action_for apply_router "$profile_id"
+}
+
+router_apply_status_json() {
+	local state profile message pid
+	state="$(sed -n 's/^state=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null | sed -n '1p')"
+	profile="$(sed -n 's/^profile=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null | sed -n '1p')"
+	message="$(sed -n 's/^message=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null | sed -n '1p')"
+	pid="$(sed -n 's/^pid=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null | sed -n '1p')"
+	if [ "$state" = 'running' ] && { [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; }; then
+		state='failed'
+		message='Router apply job ended without a final result.'
+	fi
+	[ -n "$state" ] || state='idle'
+	printf '{"state":"%s","profile_id":"%s","message":"%s"}' \
+		"$(json_escape "$state")" "$(json_escape "$profile")" "$(json_escape "$message")"
+}
+
+router_apply_status_action() {
+	emit_header
+	printf '{"ok":true,"action":"apply_router_status","job":'
+	router_apply_status_json
+	printf '}'
 }
 
 run_router_apply_job() {
-	local profile_id="$1"
+	local profile_id="$1" message
 	set +e
+	APPLY_ROUTER_ERROR=''
 	{
 		printf 'state=running\n'
 		printf 'profile=%s\n' "$profile_id"
@@ -178,20 +310,26 @@ run_router_apply_job() {
 		printf 'started_at=%s\n' "$(date +%s)"
 	} > "$ROUTER_APPLY_STATUS_FILE"
 
-	if apply_profile_to_router_internal "$profile_id" >/dev/null 2>&1; then
+	if refresh_remote_cache "$profile_id" >/dev/null 2>&1; then
+		adopt_remote_into_profile "$profile_id"
+	else
+		APPLY_ROUTER_ERROR='could not re-inspect the selected VPS before cutover'
+	fi
+	if [ -z "${APPLY_ROUTER_ERROR:-}" ] && apply_profile_to_router_internal "$profile_id"; then
 		{
 			printf 'state=done\n'
 			printf 'profile=%s\n' "$profile_id"
 			printf 'finished_at=%s\n' "$(date +%s)"
-			printf 'message=Router config applied and runtime resynced.\n'
+			printf 'message=Router config applied; egress=%s; ChatGPT reachable.\n' "$APPLY_ROUTER_EGRESS"
 		} > "$ROUTER_APPLY_STATUS_FILE"
 		return 0
 	fi
+	message="$(printf '%s' "${APPLY_ROUTER_ERROR:-profile apply failed}" | tr '\n=' '  ')"
 	{
 		printf 'state=failed\n'
 		printf 'profile=%s\n' "$profile_id"
 		printf 'finished_at=%s\n' "$(date +%s)"
-		printf 'message=Router apply failed; previous config was restored by the apply guard.\n'
+		printf 'message=Router apply failed and previous config was restored: %s\n' "$message"
 	} > "$ROUTER_APPLY_STATUS_FILE"
 	return 1
 }
@@ -240,7 +378,7 @@ schedule_vps_repair_job_locked() {
 	} > "$job_dir/status"
 	printf '%s\n' "$job_id" > "$VPS_REPAIR_JOB_DIR/active"
 	if ! XRAY_VPS_JOB='diagnose_repair' XRAY_VPS_JOB_ID="$job_id" \
-		start-stop-daemon -S -b -x /www/cgi-bin/xray-vps 2>/dev/null; then
+		start-stop-daemon -S -b -x /www/cgi-bin/xray-vps </dev/null >/dev/null 2>&1 9>&-; then
 		rm -rf "$job_dir"
 		emit_error diagnose_repair 'Router could not start the detached VPS job.'
 		return 0

@@ -101,6 +101,7 @@ Then:
    - or a bootstrap private key
 5. Click `Save VPS Access`.
 6. Click `Check & Configure VPS`.
+7. When the check succeeds, click `Apply Profile to Router`.
 
 What happens next:
 
@@ -110,6 +111,8 @@ What happens next:
 - the router installs Xray on the VPS if needed
 - the router generates or reuses client/server values
 - the router syncs the VPS and the local router profile
+- the explicit apply job switches the live router target and rolls back if the
+  new tunnel fails its egress or ChatGPT verification
 
 ## Start Using It
 
@@ -166,7 +169,8 @@ That is not an error.
 It means:
 
 - the router platform is installed
-- but you still need one successful `Check & Configure VPS`
+- but you still need one successful `Check & Configure VPS`, followed by
+  `Apply Profile to Router`
 
 ### `Check & Configure VPS` Fails
 

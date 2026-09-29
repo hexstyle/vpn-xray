@@ -60,7 +60,7 @@ https://192.168.8.1/xray.html
 ```
 
 5. In the web UI, create/select a VPS, click `Save VPS Access`, then
-   `Check & Configure VPS`.
+   `Check & Configure VPS`, then `Apply Profile to Router` after verification.
 
 ### What the Router Bootstrap Installs
 

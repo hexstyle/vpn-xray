@@ -451,6 +451,9 @@ status_json() {
 	printf '"router_current":'
 	router_current_json
 	printf ','
+	printf '"router_apply_job":'
+	router_apply_status_json
+	printf ','
 	printf '"profiles":'
 	profiles_json
 	printf '}'

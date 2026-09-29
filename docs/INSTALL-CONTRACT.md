@@ -70,6 +70,10 @@ managed-key bootstrap and provisioning. Missing Xray material may be generated
 only after a successful inspection proves that the VPS has no managed/live
 identity; after provisioning, the VPS is inspected again and its metadata
 becomes the value used to render the router client.
+The live router target changes only through the explicit detached `Apply
+Profile to Router` action. That action must validate the selected VPS
+certificate before cutover, verify real proxy egress afterward, and restore
+the previous router config and certificate if verification fails.
 
 `VPS_SSH_PORT` is part of the access coordinate, not informational metadata.
 Every workstation-to-VPS SSH call made by the top-level, VPS, or router

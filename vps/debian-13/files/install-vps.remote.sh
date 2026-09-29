@@ -405,6 +405,37 @@ step_config() {
 	return 0
 }
 
+# Keep a busy small VPS from rejecting healthy WebSocket/TLS sessions when
+# its automatically-sized TCP budget is too small (DIAGNOSTIC-TREE 6.9).
+# Values are page counts: 1/16, 1/8 and 1/4 of RAM, with the ceiling bounded
+# at 128-512 MiB. Existing larger watermarks are never reduced.
+step_tcp_capacity() {
+	local pages page_kb high pressure low current cur_low cur_pressure cur_high file wanted
+	page_kb="$(($(getconf PAGESIZE 2>/dev/null || echo 4096) / 1024))"
+	pages="$(awk -v page_kb="$page_kb" '/MemTotal:/{print int($2/page_kb)}' /proc/meminfo 2>/dev/null)"
+	case "$pages" in ''|*[!0-9]*) report tcp_capacity failed "cannot determine host memory size"; return 1 ;; esac
+	high=$((pages / 4)); [ "$((high * page_kb))" -lt 131072 ] && high=$((131072 / page_kb)); [ "$((high * page_kb))" -gt 524288 ] && high=$((524288 / page_kb))
+	current="$(sysctl -n net.ipv4.tcp_mem 2>/dev/null | awk '{print $1" "$2" "$3}')"; set -- $current
+	cur_low="${1:-0}"; cur_pressure="${2:-0}"; cur_high="${3:-0}"
+	case "$cur_low:$cur_pressure:$cur_high" in *[!0-9:]*) cur_low=0; cur_pressure=0; cur_high=0 ;; esac
+	[ "$cur_high" -gt "$high" ] && high="$cur_high"
+	pressure=$((high / 2)); low=$((high / 4))
+	[ "$cur_pressure" -gt "$pressure" ] && pressure="$cur_pressure"
+	[ "$cur_low" -gt "$low" ] && low="$cur_low"
+	file='/etc/sysctl.d/99-vpn-xray-tcp.conf'; wanted="net.ipv4.tcp_mem = $low $pressure $high"
+	if [ "$current" = "$low $pressure $high" ] && grep -qxF "$wanted" "$file" 2>/dev/null; then
+		report tcp_capacity ok "TCP memory ceiling is ${cur_high} pages"
+		return 0
+	fi
+	printf '%s\n' "$wanted" > "$file" \
+		&& sysctl -q -p "$file" >/dev/null 2>&1 || {
+		report tcp_capacity failed "could not install TCP memory budget in $file"
+		return 1
+	}
+	report tcp_capacity fixed "TCP memory watermarks set to ${low}/${pressure}/${high} pages"
+	return 0
+}
+
 # Is the port already reachable from off-host? We can't easily test from
 # outside within the VPS, but we can at least confirm nothing on-host is
 # actively blocking a local connect to the listener. Returns 0 when a
@@ -610,6 +641,7 @@ step_directories  || true
 step_permissions  || true
 step_certs        || true
 step_config       || true
+step_tcp_capacity || true
 step_firewall     || true
 step_runtime      || true
 
@@ -619,4 +651,3 @@ if [ "$FAILED" -eq 0 ]; then
 fi
 report overall failed "one or more repair steps failed; see prior status entries"
 exit 1
-

@@ -19,7 +19,6 @@
       const cutoverRequired = !!data?.cutover_required;
       const selectiveFallback = !!data?.selective_fallback_active;
       const selectiveFallbackReason = data?.selective_fallback_reason || "";
-
       // Selective→FULL fallback takes precedence: the user asked for
       // selective routing, the install activated FULL temporarily because
       // the rules repo was unreachable, and the background loop is now
@@ -31,7 +30,6 @@
           detail: `Selective routing requested but the rules repository is unreachable. Currently routing in FULL mode. Cause: ${selectiveFallbackReason || "rules sync failed"}. The router retries every sync interval and switches back automatically when the repository is reachable.`
         };
       }
-
       if (!gitSyncEnabled) {
         return { chipClass: "", label: "local-only", detail: "Git sync is disabled. The router is using only the local rules list." };
       }
@@ -115,15 +113,12 @@
         detail: probeMessage || lastSyncMessage || "Git sync state is not fully known yet."
       };
     }
-
     function rulesGitReadonlyLive() {
       return !!state.rules?.git_readonly;
     }
-
     function rulesGitPushBlockedLive() {
       return !!state.rules?.git_sync_enabled && !state.rules?.git_push_ready;
     }
-
     function rulesGitPushActionText(data = state.rules) {
       if (!data?.git_sync_enabled) {
         return "Git sync is disabled. Push is not used in local-only mode.";
@@ -145,7 +140,6 @@
       }
       return lines.join("\n");
     }
-
     function rulesGitReadonlyProjected() {
       const syncEnabled = !!document.getElementById("rulesGitSyncEnabled")?.checked;
       const authMode = document.getElementById("rulesGitAuthMode")?.value || "none";
@@ -153,14 +147,12 @@
       const pushEnabled = !!document.getElementById("rulesEnablePush")?.checked;
       const httpUsername = document.getElementById("rulesGitHttpUsername")?.value.trim() || "";
       const httpPassword = document.getElementById("rulesGitHttpPassword")?.value || "";
-
       if (!syncEnabled) {
         return false;
       }
       if (!pushEnabled) {
         return true;
       }
-
       switch (authMode) {
         case "none":
         case "readonly":
@@ -171,7 +163,6 @@
         default:
           break;
       }
-
       if (repoUrl.startsWith("git@") || repoUrl.startsWith("ssh://")) {
         return false;
       }
@@ -180,7 +171,6 @@
       }
       return rulesGitReadonlyLive();
     }
-
     function rulesSyncStrategyLabel(strategy) {
       switch (strategy || "") {
         case "remote":
@@ -199,7 +189,6 @@
           return strategy || "(unknown)";
       }
     }
-
     function rulesWorkingCopyDetail(data = state.rules) {
       switch (data?.last_sync_strategy || "") {
         case "remote":
@@ -212,7 +201,6 @@
           return "This editor shows the router working copy of the shared list.";
       }
     }
-
     function renderRulesModeUi(data = state.rules) {
       const mode = effectiveRulesMode(data);
       const applying = !!state.pendingRulesMode
@@ -220,7 +208,6 @@
       const modeToggle = document.getElementById("rulesModeToggle");
       const modeStateText = document.getElementById("rulesModeStateText");
       const row = modeToggle ? modeToggle.closest(".toggle-row") : null;
-
       // Unknown/loading: the router's real mode is not known yet (nothing
       // loaded, or only a busy/error response arrived). Show a loader and an
       // indeterminate switch instead of a misleading Full/Selective.
@@ -236,7 +223,6 @@
         }
         return;
       }
-
       if (row) row.classList.remove("toggle-loading");
       if (modeToggle) {
         modeToggle.indeterminate = false;
@@ -259,7 +245,6 @@
         }
       }
     }
-
     function rulesConfigPayload() {
       const payload = {
         git_sync_enabled: document.getElementById("rulesGitSyncEnabled").checked ? "1" : "0",
@@ -283,18 +268,15 @@
       }
       return payload;
     }
-
     function maybeField(id) {
       return document.getElementById(id);
     }
-
     function setFieldVisible(wrapperId, visible) {
       const wrap = maybeField(wrapperId);
       if (wrap) {
         wrap.style.display = visible ? "" : "none";
       }
     }
-
     function updateAuthUi() {
       const mode = document.getElementById("authMode").value;
       setFieldVisible("authUserField", mode === "password" || mode === "private_key");
@@ -307,7 +289,6 @@
         document.getElementById("bootstrapKey").value = "";
       }
     }
-
     function populateProfileSelect() {
       const select = document.getElementById("profileSelect");
       const current = state.vps?.active_profile_id || "";
@@ -322,7 +303,6 @@
       )).join("");
       select.value = profiles.some((profile) => profile.id === current) ? current : profiles[0].id;
     }
-
     function populateVpsProfileSelect(currentValue) {
       const select = document.getElementById("vpsProfile");
       const profiles = Array.isArray(state.vps?.vps_profiles) ? state.vps.vps_profiles : [];
@@ -337,7 +317,6 @@
       const nextValue = profiles.some((profile) => profile.id === currentValue) ? currentValue : profiles[0].id;
       select.value = nextValue;
     }
-
     function populateProfileForm(profile, force = false) {
       if (!profile) return;
       if (!force && state.formDirty && formProfileId() === (profile.id || "")) {
@@ -362,7 +341,6 @@
       clearDirty();
       updateAuthUi();
     }
-
     function formatUnixTime(ts) {
       if (!ts) return "never";
       const value = Number(ts);
@@ -373,27 +351,23 @@
         return String(ts);
       }
     }
-
     function shortSig(value) {
       if (!value) return "(none)";
       const text = String(value);
       if (text.length <= 24) return text;
       return `${text.slice(0, 24)}...`;
     }
-
     function renderRuntime(data) {
       document.getElementById("switchState").textContent = data.switch_state || "unknown";
       document.getElementById("switchState").className = `value ${data.switch_state === "on" ? "ok" : data.switch_state === "off" ? "warn" : "bad"}`;
       document.getElementById("switchRequest").textContent = data.switch_state === "on" ? "path should be on" : data.switch_state === "off" ? "path should be off" : "unknown";
       document.getElementById("switchRequest").className = `value ${data.switch_state === "on" ? "ok" : data.switch_state === "off" ? "warn" : "bad"}`;
-
       const ready = !!data.config_ready;
       document.getElementById("configReady").textContent = ready ? "ready" : "waiting for VPS";
       document.getElementById("configReady").className = `value ${ready ? "ok" : "warn"}`;
       document.getElementById("configReadyHint").textContent = ready
         ? "This router already has an active client profile and can bring the path up when the switch is ON."
         : "The router platform is installed, but no client profile has been applied yet.";
-
       const pathEl = document.getElementById("pathActive");
       const pathHint = document.getElementById("pathActiveHint");
       if (!ready) {
@@ -418,7 +392,6 @@
           ? "The live transparent path is active right now."
           : "The router has a client profile, but the path is not active yet. Check the switch position, runtime state and VPS health.";
       }
-
       const smokeOutput = document.getElementById("smokeOutput");
       if (smokeOutput && data.last_smoke_status) {
         smokeOutput.textContent = [
@@ -432,10 +405,8 @@
           data.last_smoke_message || "(no summary saved yet)"
         ].join("\n");
       }
-
       document.getElementById("setupNotice").style.display = ready ? "none" : "block";
     }
-
     function renderHeroAndSummary(profile) {
       const runtime = state.runtime || {};
       const remote = profile?.remote_cache || {};
@@ -446,9 +417,9 @@
       document.getElementById("heroTarget").textContent = runtime.config_ready
         ? (runtime.server_address || profile?.endpoint_host || "...")
         : (profile?.endpoint_host || "No active VPS yet");
-
       document.getElementById("summaryRemoteIp").textContent = remote.public_ip || "(unknown)";
       const inspectStatus = remote.status || profile?.last_inspect_status || "never";
+      renderApplyProfileButton(inspectStatus, remoteDiff, routerDiff);
       const inspectText = inspectStatus === "ok"
         ? `ok · ${formatUnixTime(profile?.last_inspect_at)}`
         : inspectStatus;
@@ -467,7 +438,6 @@
       const vSec = (remote.transport_sec || "").toLowerCase();
       const transportKnown = rNet && rSec && vNet && vSec;
       const transportMismatch = transportKnown && (rNet !== vNet || rSec !== vSec);
-
       const driftEl = document.getElementById("summaryDrift");
       if (transportMismatch) {
         driftEl.textContent = `transport mismatch: router ${rNet}/${rSec} vs VPS ${vNet}/${vSec}`;
@@ -482,7 +452,6 @@
         driftEl.className = `value ${drift ? "warn" : "ok"}`;
         driftEl.title = "";
       }
-
       // Publish the config-coherence signals (nodes 8 / 8.5) for the Path
       // Health tree to overlay. Derived here, once, where the VPS data lives;
       // xray-tree.js only reads this — no duplicated logic.
@@ -504,4 +473,3 @@
           : (transportMismatch ? `router ${rNet}/${rSec} vs VPS ${vNet}/${vSec}` : `router and VPS both ${rNet}/${rSec}`),
       };
     }
-

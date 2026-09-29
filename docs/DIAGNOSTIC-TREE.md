@@ -370,6 +370,7 @@ order; all steps always run (report completeness beats fail-fast).
 | 6.6 | `config` | staged config has **no unsubstituted `${…}`** AND passes `xray -test`; else existing config passes | install staged (backup old) | Two guards: (a) reject a staged render still holding a `${PLACEHOLDER}` — it passes `xray -test` (a placeholder is a valid string) but silently breaks the tunnel, e.g. WS path = literal `${XRAY_WS_PATH}` (node R); (b) `skipped` when staged invalid but live config valid — never overwrite a working config with a broken render. |
 | 6.7 | `firewall` | ufw allows `$XRAY_PORT` | `ufw allow` | inactive ufw = `ok`; **no-ufw host = `ok` unconditionally, which is a blind spot** (Gap G5) — an nftables-only host with 443 closed is reported healthy |
 | 6.8 | `runtime` | unit active AND port bound ≤15s | `reset-failed` + `enable` + `restart` | `reset-failed` is mandatory: a unit failed with `RestartPreventExitStatus` silently ignores plain restart |
+| 6.9 | `tcp_capacity` | kernel log has no recent `TCP: out of memory`; TCP memory watermarks are sane for the host | install bounded TCP memory sysctls derived from RAM and reload them | A live listener and successful one-shot probe can hide intermittent WebSocket/TLS failures when the kernel refuses new TCP allocations. Tell: repeated real proxy requests lose individual connections while `journalctl -k` records `TCP: out of memory` and ordinary userspace RAM is still available. Diagnose socket/slab counts and `net.ipv4.tcp_mem`; do not treat this as Xray config drift. The rendered VPS config also sets an explicit level-0 `connIdle` timeout so abandoned destination sockets cannot accumulate indefinitely. Repair is `safe` when only raising an abnormally low TCP budget within a RAM-bounded ceiling; applying the config remains `disruptive` under 6.8 because it restarts Xray. Verify with a repeated router-proxy request set, bounded socket count, and a clean post-repair kernel log. |
 
 Whole pipeline runs under `timeout 90` from the caller (meta-rule 1).
 
@@ -418,13 +419,11 @@ non-empty; or router dials wrong port/SNI (4.5).
   material, write it to the VPS, re-inspect, and consume the resulting VPS
   metadata. This prevents stale form values from becoming an accidental
   second source of truth. An already-synced profile remains a no-op.
-  Deliberately replacing
-  a VPS's existing identity instead of adopting it is out of scope for this
-  path — that still requires the separate CLI-only `apply_profile`
-  action (`apply_everything_action`, `xray-vps-setup.sh`), which is not
-  wired to the UI and is a distinct, `disruptive`-adjacent code path (it
-  can also cut the router's live traffic — see Gap register note on its
-  synchronous `apply_profile_to_router_internal` call).
+  Deliberately replacing a VPS's existing identity instead of adopting it is
+  out of scope for this path. The legacy `apply_profile` action may provision
+  missing VPS material, but its router cutover is now scheduled through the
+  same detached, verified job as the UI's explicit `Apply Profile to Router`
+  action (8.2); neither path may cut traffic synchronously in a CGI request.
 - 8.1a **Saving an existing profile creates a near-duplicate ID** (for
   example `default` becomes `defallt`) and leaves the selected profile
   unchanged: BusyBox `tr` does not implement the combined
@@ -475,12 +474,22 @@ non-empty; or router dials wrong port/SNI (4.5).
   <IP> because it doesn't contain any IP SANs`, 2026-07-10) and clients lost
   internet; reboot did not help because the broken config persisted.
   `diagnose_repair` now only *reports* drift (`router_apply=drift_detected`);
-  the apply is a separate, explicit operator action. Two hard guards were
+  the apply is a separate, explicit `Apply Profile to Router` operator action.
+  The control is enabled only after a successful VPS inspection/configuration
+  left no profile↔VPS drift, and it polls the detached router-apply job. Three
+  hard guards were
   added: (a) `apply_profile_to_router_internal` refuses when
   `server_name`/`server_address`/`uuid`/`server_port` are empty — `xray
   -test` does not catch an empty serverName (it is valid syntax); (b) when
   the apply *is* run explicitly, it stays a deferred background job (never
-  synchronous in a CGI request — that hung the router on 2026-07-09).
+  synchronous in a CGI request — that hung the router on 2026-07-09); (c) the
+  job fetches and validates the selected VPS TLS certificate before cutover,
+  then checks proxy egress and ChatGPT through the new runtime. Any failure
+  restores both the previous router config and certificate before resync.
+  Detached launches must close stdin/stdout/stderr and the scheduler's flock
+  descriptor before `start-stop-daemon` forks. Otherwise the HTTP response
+  remains open and the new long-lived Xray process can inherit the flock,
+  making every later Apply request wait 60 seconds without ever scheduling.
   Recovery when already broken: `scripts/revive-router.sh` (restores the
   newest good backup or patches `serverName`/`host` to the cert CN, then
   restarts). See also node R.4.
@@ -652,25 +661,25 @@ field: implement, then move it up into the tree body.
   diverges the other (which is how G7 opened). `test_profile_parity.sh`
   now diffs the shared, profile-independent files; keep new such files in
   its list.
-- **G13**: `apply_everything_action`/`apply_profile_to_router_action`
+- **G13 — CLOSED**: `apply_everything_action`/`apply_profile_to_router_action`
   (CGI actions `apply_profile` and `apply_router`, `xray-vps-setup.sh` /
-  `xray-vps-actions.sh`) call `apply_profile_to_router_internal` —
-  a hard cutover of the transparent path — **synchronously inside the
-  CGI request**, the exact anti-pattern meta-rule 2 forbids and that hung
-  the router on 2026-07-09 (node 8.2). Unlike node 8.2's own apply flow,
-  these two actions were never migrated to the deferred-job pattern: a
-  `schedule_router_apply_job`/`run_router_apply_job` pair already exists
+  `xray-vps-actions.sh`) previously called
+  `apply_profile_to_router_internal` — a hard cutover of the transparent
+  path — **synchronously inside the CGI request**, the exact anti-pattern
+  meta-rule 2 forbids and that hung the router on 2026-07-09 (node 8.2).
+  Before the repair, a
+  `schedule_router_apply_job`/`run_router_apply_job` pair already existed
   in `xray-vps-setup.sh` (status file `ROUTER_APPLY_STATUS_FILE`, an
   `XRAY_VPS_JOB=apply_router` re-exec mode already wired into
   `xray-vps.cgi`) but is dead code — nothing calls
   `schedule_router_apply_job`, and `status_json` never exposes
-  `ROUTER_APPLY_STATUS_FILE` for the UI to poll. Neither action is
-  currently reachable from the web UI (only the CLI tool
-  `bootstrap-router-vps.sh` calls `apply_profile`), which is why this has
-  not hung a router yet in practice — but wiring either into the UI
-  without fixing this first would reintroduce the 2026-07-09 class of bug.
-  Fix: make both actions call `schedule_router_apply_job` instead of
-  `apply_profile_to_router_internal` directly, move the
-  backup/apply/rollback sequence into `run_router_apply_job`, and expose
-  `ROUTER_APPLY_STATUS_FILE` in `status_json` before either action is
-  ever UI-wired.
+  `ROUTER_APPLY_STATUS_FILE` for the UI to poll. Both actions were migrated
+  before UI wiring: they schedule
+  `schedule_router_apply_job`, `run_router_apply_job` owns the guarded
+  backup/apply/verify/rollback sequence, and `status_json` exposes
+  `ROUTER_APPLY_STATUS_FILE`. The detached launcher closes CGI stdio and the
+  scheduler flock descriptor, so neither the HTTP response nor single-flight
+  lock leaks into the job/runtime. The UI now polls that state from the explicit
+  `Apply Profile to Router` button. Verified on real hardware by cutting to a
+  separately configured VPS and checking its egress IP plus ChatGPT from the
+  LAN-client path. `disruptive`.

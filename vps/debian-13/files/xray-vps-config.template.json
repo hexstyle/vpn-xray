@@ -3,6 +3,16 @@
     "error": "/var/log/xray/error.log",
     "loglevel": "warning"
   },
+  "policy": {
+    "levels": {
+      "0": {
+        "handshake": 4,
+        "connIdle": 120,
+        "uplinkOnly": 2,
+        "downlinkOnly": 5
+      }
+    }
+  },
   "inbounds": [
     {
       "port": ${XRAY_PORT},
