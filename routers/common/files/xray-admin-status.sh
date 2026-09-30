@@ -42,6 +42,10 @@ status_json() {
 
 	server_address="$(config_value '@.outbounds[0].settings.vnext[0].address')"
 	server_port="$(config_value '@.outbounds[0].settings.vnext[0].port')"
+	if grep -q '^DIAL_MODE=ssh_tunnel$' /etc/xray/codex-xray-tunnel.env 2>/dev/null; then
+		server_address="$(sed -n 's/^SERVER_ADDRESS=//p' /etc/xray/codex-xray-tunnel.env | sed -n '1p')"
+		server_port="$(sed -n 's/^REMOTE_PORT=//p' /etc/xray/codex-xray-tunnel.env | sed -n '1p')"
+	fi
 	# WS+TLS transport: serverName lives in tlsSettings. Fall back to
 	# realitySettings for a config still on the legacy transport so an
 	# in-place upgrade reads the old value before re-rendering as WS+TLS.

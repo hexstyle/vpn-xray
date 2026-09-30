@@ -41,6 +41,7 @@ resolve_server_ipv4s() {
 
 	addr="$(server_address)"
 	[ -n "$addr" ] || return 0
+	case "$addr" in 127.*) return 0;; esac
 
 	case "$addr" in
 		*[!0-9.]*)
@@ -366,8 +367,18 @@ start() {
 	}
 
 	mkdir -p "$LOG_DIR" /etc/xray /var/run
+	/etc/init.d/codex-xray-tunnel start >/dev/null 2>&1 || true
+	if [ "$(server_address)" = '127.0.0.1' ]; then
+		i=0
+		while [ "$i" -lt 12 ]; do
+			netstat -lnt 2>/dev/null | grep -q ':18443 ' && break
+			i=$((i + 1)); sleep 1
+		done
+		netstat -lnt 2>/dev/null | grep -q ':18443 ' || { /etc/init.d/codex-xray-tunnel stop >/dev/null 2>&1 || true; echo 'SSH transport unavailable'; return 1; }
+	fi
 
 	"$BIN" run -test -config "$CONFIG" >/dev/null 2>&1 || {
+		/etc/init.d/codex-xray-tunnel stop >/dev/null 2>&1 || true
 		echo "config check failed"
 		return 1
 	}
@@ -401,6 +412,7 @@ stop() {
 	record_uplink_signature ''
 	restore_mptcp_state
 	restore_offload_state
+	/etc/init.d/codex-xray-tunnel stop >/dev/null 2>&1 || true
 }
 
 restart() {

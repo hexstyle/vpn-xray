@@ -10,11 +10,13 @@
         }
         clearDirty();
         renderAll(true);
-        flash(`Active profile switched to "${profileId}".`, "good");
+        document.getElementById("profileActionHint").textContent = "Profile selected. Live Target is unchanged until Apply Profile to Router succeeds.";
+        flash(`Selected profile changed to "${profileId}". Click Apply Profile to Router to change the live Target.`, "good");
       } catch (err) {
         flash(`Failed to switch profile: ${err.message}`, "bad");
       } finally {
         endForegroundTask();
+        renderAll(false);
       }
     }
 

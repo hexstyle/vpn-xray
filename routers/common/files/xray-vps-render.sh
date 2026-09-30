@@ -19,10 +19,15 @@ effective_server_name() {
 render_router_config() {
 	local path="$1"
 	local profile_id="$2"
-	local server_address server_port server_name uuid public_key short_id flow user_flow_line ws_path
+	local server_address server_port server_name uuid public_key short_id flow user_flow_line ws_path dial_mode
 
 	server_address="$(profile_get "$profile_id" server_address)"
 	server_port="$(profile_get "$profile_id" server_port)"
+	dial_mode="$(profile_get "$profile_id" dial_mode)"
+	if [ "$dial_mode" = 'ssh_tunnel' ]; then
+		server_address='127.0.0.1'
+		server_port="${ROUTER_TUNNEL_PORT_OVERRIDE:-18443}"
+	fi
 	server_name="$(effective_server_name "$profile_id")"
 	uuid="$(profile_get "$profile_id" uuid)"
 	public_key="$(profile_get "$profile_id" public_key)"
@@ -212,6 +217,10 @@ render_server_config() {
 render_remote_meta() {
 	local path="$1"
 	local profile_id="$2"
+	local dial_mode
+
+	dial_mode="$(profile_get "$profile_id" dial_mode)"
+	[ -n "$dial_mode" ] || dial_mode='direct'
 
 	cat > "$path" <<EOF
 PROFILE_ID=${profile_id}
@@ -223,6 +232,7 @@ XRAY_SHORT_ID=$(profile_get "$profile_id" short_id)
 XRAY_PRIVATE_KEY=$(profile_get "$profile_id" private_key)
 XRAY_PUBLIC_KEY=$(profile_get "$profile_id" public_key)
 XRAY_FLOW=$(profile_get "$profile_id" flow)
+XRAY_DIAL_MODE=$dial_mode
 EOF
 	chmod 600 "$path"
 }
@@ -319,18 +329,18 @@ install_command_for_profile() {
 remote_cache_json() {
 	local cache_path="$1"
 	if [ ! -f "$cache_path" ]; then
-		printf '{"status":"","ssh_ok":"","hostname":"","fqdn":"","kernel":"","arch":"","pretty_name":"","os_id":"","os_version":"","virt":"","systemd":"","pkg_mgr":"","install_profile":"","install_label":"","install_supported":"","install_notes":"","memory":"","disk_root":"","uptime":"","public_ip":"","ipinfo_json":"","xray_present":"","xray_version":"","xray_service":"","listener_port":"","listener_443":"","managed_meta":"","server_port":"","server_name":"","uuid":"","public_key":"","short_id":"","flow":"","transport_net":"","transport_sec":""}'
+		printf '{"status":"","ssh_ok":"","hostname":"","fqdn":"","kernel":"","arch":"","pretty_name":"","os_id":"","os_version":"","virt":"","systemd":"","pkg_mgr":"","install_profile":"","install_label":"","install_supported":"","install_notes":"","memory":"","disk_root":"","uptime":"","public_ip":"","ipinfo_json":"","xray_present":"","xray_version":"","xray_service":"","listener_port":"","listener_443":"","managed_meta":"","server_port":"","server_name":"","uuid":"","public_key":"","short_id":"","flow":"","dial_mode":"","transport_net":"","transport_sec":""}'
 		return 0
 	fi
 	awk '
 	BEGIN {
 		FS="="
 		ORS=""
-		split("REMOTE_STATUS status REMOTE_SSH_OK ssh_ok REMOTE_HOSTNAME hostname REMOTE_FQDN fqdn REMOTE_KERNEL kernel REMOTE_ARCH arch REMOTE_PRETTY_NAME pretty_name REMOTE_OS_ID os_id REMOTE_OS_VERSION os_version REMOTE_VIRT virt REMOTE_SYSTEMD systemd REMOTE_PKG_MGR pkg_mgr REMOTE_INSTALL_PROFILE install_profile REMOTE_INSTALL_LABEL install_label REMOTE_INSTALL_SUPPORTED install_supported REMOTE_INSTALL_NOTES install_notes REMOTE_MEMORY memory REMOTE_DISK_ROOT disk_root REMOTE_UPTIME uptime REMOTE_PUBLIC_IP public_ip REMOTE_IPINFO_JSON ipinfo_json REMOTE_XRAY_PRESENT xray_present REMOTE_XRAY_VERSION xray_version REMOTE_XRAY_SERVICE xray_service REMOTE_LISTENER_PORT listener_port REMOTE_LISTENER_443 listener_443 REMOTE_MANAGED_META managed_meta REMOTE_server_port server_port REMOTE_server_name server_name REMOTE_uuid uuid REMOTE_public_key public_key REMOTE_short_id short_id REMOTE_flow flow REMOTE_TRANSPORT_NET transport_net REMOTE_TRANSPORT_SEC transport_sec", pairs, " ")
+		split("REMOTE_STATUS status REMOTE_SSH_OK ssh_ok REMOTE_HOSTNAME hostname REMOTE_FQDN fqdn REMOTE_KERNEL kernel REMOTE_ARCH arch REMOTE_PRETTY_NAME pretty_name REMOTE_OS_ID os_id REMOTE_OS_VERSION os_version REMOTE_VIRT virt REMOTE_SYSTEMD systemd REMOTE_PKG_MGR pkg_mgr REMOTE_INSTALL_PROFILE install_profile REMOTE_INSTALL_LABEL install_label REMOTE_INSTALL_SUPPORTED install_supported REMOTE_INSTALL_NOTES install_notes REMOTE_MEMORY memory REMOTE_DISK_ROOT disk_root REMOTE_UPTIME uptime REMOTE_PUBLIC_IP public_ip REMOTE_IPINFO_JSON ipinfo_json REMOTE_XRAY_PRESENT xray_present REMOTE_XRAY_VERSION xray_version REMOTE_XRAY_SERVICE xray_service REMOTE_LISTENER_PORT listener_port REMOTE_LISTENER_443 listener_443 REMOTE_MANAGED_META managed_meta REMOTE_server_port server_port REMOTE_server_name server_name REMOTE_uuid uuid REMOTE_public_key public_key REMOTE_short_id short_id REMOTE_flow flow REMOTE_dial_mode dial_mode REMOTE_TRANSPORT_NET transport_net REMOTE_TRANSPORT_SEC transport_sec", pairs, " ")
 		for (i = 1; i in pairs; i += 2) {
 			key_map[pairs[i]] = pairs[i+1]
 		}
-		order_str = "status ssh_ok hostname fqdn kernel arch pretty_name os_id os_version virt systemd pkg_mgr install_profile install_label install_supported install_notes memory disk_root uptime public_ip ipinfo_json xray_present xray_version xray_service listener_port listener_443 managed_meta server_port server_name uuid public_key short_id flow transport_net transport_sec"
+		order_str = "status ssh_ok hostname fqdn kernel arch pretty_name os_id os_version virt systemd pkg_mgr install_profile install_label install_supported install_notes memory disk_root uptime public_ip ipinfo_json xray_present xray_version xray_service listener_port listener_443 managed_meta server_port server_name uuid public_key short_id flow dial_mode transport_net transport_sec"
 		n = split(order_str, order, " ")
 		for (i = 1; i <= n; i++) vals[order[i]] = ""
 	}
@@ -415,6 +425,7 @@ profile_json() {
 	printf '"public_key":"%s",' "$(json_escape "${_pj_public_key:-}")"
 	printf '"short_id":"%s",' "$(json_escape "${_pj_short_id:-}")"
 	printf '"flow":"%s",' "$(json_escape "${_pj_flow:-}")"
+	printf '"dial_mode":"%s",' "$(json_escape "${_pj_dial_mode:-}")"
 	printf '"managed_key_path":"%s",' "$(json_escape "$_pj_managed_key_path")"
 	printf '"managed_pubkey":"%s",' "$(json_escape "${_pj_managed_pubkey:-}")"
 	printf '"managed_key_present":'; json_bool "$_pj_managed_present"; printf ','

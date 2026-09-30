@@ -16,6 +16,7 @@ ROUTER_HTTP_PORT='1083'
 ROUTER_SOCKS_PORT='1084'
 ROUTER_ACCESS_LOG='/etc/xray/logs/codex-xray-access.log'
 ROUTER_ERROR_LOG='/etc/xray/logs/codex-xray-error.log'
+ROUTER_TUNNEL_CONFIG='/etc/xray/codex-xray-tunnel.env'
 VPS_PROFILE_ROOT='/usr/share/vpn-xray/vps'
 LOCK_ROOT='/tmp/xray-vps-locks'
 SWITCH_SYNC_WAIT_SECONDS='25'
@@ -54,9 +55,15 @@ router_live_value() {
 	local key="$1" _sn
 	case "$key" in
 		server_address)
+			if grep -q '^DIAL_MODE=ssh_tunnel$' "$ROUTER_TUNNEL_CONFIG" 2>/dev/null; then
+				sed -n 's/^SERVER_ADDRESS=//p' "$ROUTER_TUNNEL_CONFIG" | sed -n '1p'; return
+			fi
 			config_value '@.outbounds[0].settings.vnext[0].address'
 			;;
 		server_port)
+			if grep -q '^DIAL_MODE=ssh_tunnel$' "$ROUTER_TUNNEL_CONFIG" 2>/dev/null; then
+				sed -n 's/^REMOTE_PORT=//p' "$ROUTER_TUNNEL_CONFIG" | sed -n '1p'; return
+			fi
 			config_value '@.outbounds[0].settings.vnext[0].port'
 			;;
 		server_name)
@@ -96,6 +103,10 @@ router_current_json() {
 		-e '_rc_net=@.outbounds[0].streamSettings.network' \
 		-e '_rc_sec=@.outbounds[0].streamSettings.security' \
 		2>/dev/null)" 2>/dev/null || true
+	if grep -q '^DIAL_MODE=ssh_tunnel$' "$ROUTER_TUNNEL_CONFIG" 2>/dev/null; then
+		_rc_sa="$(sed -n 's/^SERVER_ADDRESS=//p' "$ROUTER_TUNNEL_CONFIG" | sed -n '1p')"
+		_rc_sp="$(sed -n 's/^REMOTE_PORT=//p' "$ROUTER_TUNNEL_CONFIG" | sed -n '1p')"
+	fi
 	# serverName lives in tlsSettings for WS+TLS; fall back to the legacy
 	# reality field so an unconverted config still reports something.
 	[ -n "${_rc_sn:-}" ] || _rc_sn="${_rc_snr:-}"
@@ -151,6 +162,7 @@ with_lock_dir() {
 . "${VX_VPS_RENDER_LIB:-/usr/share/vpn-xray/xray-vps-render.sh}"
 . "${VX_VPS_INSPECT_LIB:-/usr/share/vpn-xray/xray-vps-inspect.sh}"
 . "${VX_VPS_ACTIONS_LIB:-/usr/share/vpn-xray/xray-vps-actions.sh}"
+. "${VX_VPS_VERIFY_LIB:-/usr/share/vpn-xray/xray-vps-verify.sh}"
 . "${VX_VPS_SETUP_LIB:-/usr/share/vpn-xray/xray-vps-setup.sh}"
 . "${VX_VPS_REPAIR_LIB:-/usr/share/vpn-xray/xray-vps-repair.sh}"
 

@@ -155,7 +155,7 @@ verify_applied_profile_path() {
 }
 
 rollback_router_profile() {
-	local config_backup="$1" cert_backup="$2"
+	local config_backup="$1" cert_backup="$2" tunnel_backup="$3"
 	if [ -n "$config_backup" ] && [ -f "$config_backup" ]; then
 		cp "$config_backup" "$ROUTER_CONFIG"
 	else
@@ -166,13 +166,14 @@ rollback_router_profile() {
 	else
 		rm -f /etc/xray/server.crt
 	fi
+	restore_profile_tunnel "$tunnel_backup"
 	/etc/init.d/codex-transproxy stop >/dev/null 2>&1 || true
 	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
 	resync_runtime_to_switch >/dev/null 2>&1 || true
 }
 
 apply_profile_to_router_internal() {
-	local profile_id="$1" rendered fetched test_output stamp backup cert_backup
+	local profile_id="$1" rendered fetched test_output stamp backup cert_backup tunnel_backup
 	local sa sn su sp
 	APPLY_ROUTER_ERROR=''
 	APPLY_ROUTER_EGRESS=''
@@ -200,11 +201,22 @@ apply_profile_to_router_internal() {
 		rm -f "$rendered" "$fetched"
 		return 1
 	fi
+	if ! verify_profile_candidate "$profile_id" "$fetched"; then
+		rm -f "$rendered" "$fetched"
+		return 1
+	fi
 	stamp="$(date +%Y%m%d%H%M%S).$$"
 	backup="${ROUTER_CONFIG}.bak.${stamp}"
 	cert_backup="/etc/xray/server.crt.bak.${stamp}"
+	tunnel_backup="${ROUTER_TUNNEL_CONFIG}.bak.${stamp}"
 	[ -f "$ROUTER_CONFIG" ] && cp "$ROUTER_CONFIG" "$backup" || backup=''
 	[ -f /etc/xray/server.crt ] && cp /etc/xray/server.crt "$cert_backup" || cert_backup=''
+	[ -f "$ROUTER_TUNNEL_CONFIG" ] && cp "$ROUTER_TUNNEL_CONFIG" "$tunnel_backup" || tunnel_backup=''
+	if ! activate_profile_tunnel "$profile_id"; then
+		restore_profile_tunnel "$tunnel_backup"
+		rm -f "$rendered" "$fetched"
+		return 1
+	fi
 	mv "$rendered" "$ROUTER_CONFIG"
 	mv "$fetched" /etc/xray/server.crt
 	chmod 600 "$ROUTER_CONFIG" /etc/xray/server.crt
@@ -215,7 +227,7 @@ apply_profile_to_router_internal() {
 	sleep 1
 	if ! resync_runtime_to_switch || ! verify_applied_profile_path "$profile_id"; then
 		[ -n "$APPLY_ROUTER_ERROR" ] || APPLY_ROUTER_ERROR='new router runtime did not become healthy'
-		rollback_router_profile "$backup" "$cert_backup"
+		rollback_router_profile "$backup" "$cert_backup" "$tunnel_backup"
 		return 1
 	fi
 	APPLY_ROUTER_BACKUP="$backup"

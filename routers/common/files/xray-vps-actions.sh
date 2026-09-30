@@ -266,7 +266,7 @@ adopt_remote_into_profile() {
 	local cache value remote_value
 
 	cache="$(profile_cache_path "$profile_id")"
-	for value in server_port server_name uuid public_key short_id flow; do
+	for value in server_port server_name uuid public_key short_id flow dial_mode; do
 		remote_value="$(cache_get "$cache" "REMOTE_${value}")"
 		[ -n "$remote_value" ] && profile_set "$profile_id" "$value" "$remote_value"
 	done

@@ -12,6 +12,8 @@ GL_HTML="$ROOT/routers/gl-mt3000-glinet/files/xray.html"
 PROFILE_LIB="$ROOT/routers/common/files/xray-vps-profile.sh"
 PROFILE="$ROOT/vps/debian-13/profile.env"
 ROTATE="$ROOT/vps/debian-13/files/rotate-sni.remote.sh"
+ROTATE_PORT="$ROOT/vps/debian-13/files/rotate-port.remote.sh"
+SET_DIAL_MODE="$ROOT/vps/debian-13/files/set-dial-mode.remote.sh"
 VPS_X64_BUNDLE="$ROOT/vps/debian-13/packages/Xray-linux-64.zip"
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
@@ -76,6 +78,15 @@ grep -q 'callApi(vpsApi, "apply_router"' "$APP7" \
 	|| fail "Apply Profile to Router must call the detached apply backend"
 grep -q 'apply_router_status' "$APP7" \
 	|| fail "Apply Profile to Router must poll its detached job"
+grep -A20 '^    async function selectProfile' "$ROOT/routers/common/files/xray-app-6.js" \
+	| grep -A2 'endForegroundTask();' | grep -q 'renderAll(false);' \
+	|| fail "profile selection must re-render Apply after clearing foregroundBusy"
+grep -q 'Live Target is unchanged until Apply Profile to Router succeeds' "$ROOT/routers/common/files/xray-app-6.js" \
+	|| fail "profile selection must explain that Target changes only after Apply"
+for html in "$ASUS_HTML" "$GL_HTML"; do
+	grep -q 'xray-app-6.js?v=' "$html" \
+		|| fail "split UI assets must be versioned so browsers cannot retain the broken Apply handler"
+done
 grep -q "XRAY_VPS_JOB='diagnose_repair'" "$ROOT/routers/common/files/xray-vps-setup.sh" \
 	|| fail "VPS repair must be scheduled outside the CGI request"
 grep -q 'start-stop-daemon.*</dev/null >/dev/null 2>&1 9>&-' "$ROOT/routers/common/files/xray-vps-setup.sh" \
@@ -121,5 +132,38 @@ grep -q 'XRAY_SERVER_NAME=' "$ROTATE" \
 	|| fail "SNI rotation must update authoritative VPS metadata"
 grep -q 'openssl x509 -noout -checkhost' "$ROTATE" \
 	|| fail "SNI rotation must verify the live certificate hostname"
+[ -f "$ROTATE_PORT" ] || fail "the VPS-authoritative listener-port rotation script is missing"
+grep -q '^rollback() {' "$ROTATE_PORT" \
+	|| fail "listener-port rotation must provide rollback"
+grep -q 'XRAY_PORT=' "$ROTATE_PORT" \
+	|| fail "listener-port rotation must update authoritative VPS metadata"
+grep -q 'ufw allow' "$ROTATE_PORT" \
+	|| fail "listener-port rotation must permit the new port in an active host firewall"
+grep -q 'openssl x509 -noout -checkhost' "$ROTATE_PORT" \
+	|| fail "listener-port rotation must verify local TLS after restart"
+[ -f "$SET_DIAL_MODE" ] || fail "the VPS-authoritative dial-mode script is missing"
+grep -q 'XRAY_DIAL_MODE=' "$SET_DIAL_MODE" \
+	|| fail "dial mode must be written to authoritative VPS metadata"
+grep -q 'direct|ssh_tunnel' "$SET_DIAL_MODE" \
+	|| fail "dial mode must reject unsupported values"
+for platform in asus-tuf-ax4200-openwrt gl-mt3000-glinet; do
+	INSTALL="$ROOT/routers/$platform/install-platform.sh"
+	grep -q 'codex-xray-tunnel.init' "$INSTALL" \
+		|| fail "$platform install must deploy the supervised SSH tunnel"
+	grep -q '/etc/init.d/codex-xray-tunnel enable' "$INSTALL" \
+		|| fail "$platform install must enable the supervised SSH tunnel"
+done
+grep -q 'REMOTE_dial_mode' "$ROOT/routers/common/files/xray-vps-inspect.sh" \
+	|| fail "router inspection must read dial mode from VPS metadata"
+grep -q 'XRAY_DIAL_MODE:-direct' "$ROOT/routers/common/files/xray-vps-inspect.sh" \
+	|| fail "legacy VPS metadata must normalize an absent dial mode to direct"
+grep -q 'for value in server_port server_name uuid public_key short_id flow dial_mode' "$ROOT/routers/common/files/xray-vps-actions.sh" \
+	|| fail "router profile must adopt VPS-authoritative dial mode"
+grep -q 'verify_profile_candidate' "$ROOT/routers/common/files/xray-vps-setup.sh" \
+	|| fail "router apply must verify an isolated candidate before cutover"
+! grep -q '^[[:space:]]*\. "\$CONFIG"' "$ROOT/routers/common/files/codex-xray-tunnel.init" \
+	|| fail "the supervised tunnel must parse, not source, profile-derived config"
+grep -q 'start-stop-daemon -K -p "\$pidfile"' "$ROOT/routers/common/files/xray-vps-verify.sh" \
+	|| fail "failed isolated candidates must be terminated"
 
 printf 'ok\n'

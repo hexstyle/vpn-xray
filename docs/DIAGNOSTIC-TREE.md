@@ -42,6 +42,13 @@ Meta-rules (enforced by review):
 7. A rendered artifact that still contains a `${PLACEHOLDER}` is a defect,
    not input to act on. Every renderer substitutes every placeholder; every
    consumer of a render rejects a leftover placeholder (node R).
+8. Never simulate `VPN off` on a live vanilla-OpenWrt router by stopping its
+   dataplane. On platforms such as ASUS without a hardware switch,
+   `current_switch_state()` intentionally always returns `on`; watchdogs then
+   classify the stop as a real outage, enable fail-safe and restart the path.
+   Mark the hardware-off matrix row **not applicable / not tested** there.
+   Exercise it only on hardware that exposes a real off state, while still
+   verifying direct internet and management reachability from a LAN client.
 
 ---
 
@@ -335,6 +342,29 @@ python3 socket connect <VPS>:443                                  # data
   config from that remote state. Never change only the router's SNI. The
   rotation restarts the VPS daemon and the router apply cuts sessions, so both
   phases are `disruptive` and require rollback backups.
+- 5.6 **The listener and small/spaced probes are healthy, but response bodies
+  stall through Xray.** Tell: VPS destination sockets accumulate `Recv-Q`, the
+  corresponding outer VPS→router socket accumulates `Send-Q`, and `ss -tin`
+  reports repeated retransmits, `cwnd:1` and exponential RTO backoff while
+  direct requests from the VPS stay fast. A port change can appear healthy in
+  one short run and fail in the next, so it does not by itself prove port
+  filtering. Confirm protocol-specific path interference by transferring a
+  response body over the profile's managed SSH connection: if SSH carries it
+  while direct WS+TLS and raw/REALITY both stall, VPS capacity, destination
+  blocking, Xray transport choice, Mux and profile drift are excluded. Also
+  test a smaller `tcpMaxSeg`; do not keep it when loss is unchanged.
+  Repair for this confirmed case: set `XRAY_DIAL_MODE=ssh_tunnel` in the
+  authoritative VPS metadata, re-inspect/adopt it, and have a supervised
+  router SSH local-forward carry only the Xray server hop. The rendered Xray
+  client dials loopback while status/coherence continue to report the VPS
+  endpoint. The tunnel uses the profile's managed key, starts before Xray,
+  respawns, and is removed automatically for direct profiles. Verify the
+  isolated candidate through that same hop before cutover. A client config
+  cutover remains `disruptive`; never change the uplink MTU or LAN bridge as a
+  shortcut.
+  If a listener-port move is still required, change it on the **VPS first**,
+  update managed metadata and host firewall in the same transaction, verify
+  local TLS, then re-inspect/adopt it on the router with a rollback backup.
 
 **Noise trap — repeated failed probes self-inflict a lockout.** Each failed
 key attempt counts against sshd `MaxAuthTries` (default 6), and a fail2ban
@@ -484,12 +514,27 @@ non-empty; or router dials wrong port/SNI (4.5).
   the apply *is* run explicitly, it stays a deferred background job (never
   synchronous in a CGI request — that hung the router on 2026-07-09); (c) the
   job fetches and validates the selected VPS TLS certificate before cutover,
-  then checks proxy egress and ChatGPT through the new runtime. Any failure
+  then checks proxy egress and ChatGPT through the new runtime. A one-shot
+  success is insufficient: the candidate must first survive a bounded set of
+  real sequential and concurrent proxy requests without replacing the active
+  router config; otherwise an intermittently filtered endpoint can pass the
+  apply check and strand LAN clients seconds later. Any failure
   restores both the previous router config and certificate before resync.
   Detached launches must close stdin/stdout/stderr and the scheduler's flock
   descriptor before `start-stop-daemon` forks. Otherwise the HTTP response
   remains open and the new long-lived Xray process can inherit the flock,
   making every later Apply request wait 60 seconds without ever scheduling.
+  UI tell: selecting a different verified profile changes `Profile`, but
+  clicking Apply creates no job and `Target` never changes. The profile-change
+  handler rendered while `foregroundBusy=true`, which disabled Apply, then
+  cleared busy without rendering again. Repair: after `endForegroundTask()`,
+  render once more so eligibility is recalculated from the newly selected
+  profile. Also version the split UI assets in `xray.html`: an already-open or
+  browser-cached old chunk can otherwise keep the broken handler after the
+  router has been updated, making an enabled-looking click create no backend
+  job. The selection confirmation must say explicitly that `Target` remains
+  unchanged until Apply succeeds. These are `safe` UI-state fixes; the
+  eventual apply remains the detached `disruptive` action described above.
   Recovery when already broken: `scripts/revive-router.sh` (restores the
   newest good backup or patches `serverName`/`host` to the cert CN, then
   restarts). See also node R.4.

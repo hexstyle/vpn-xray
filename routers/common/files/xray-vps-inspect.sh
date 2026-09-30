@@ -121,6 +121,7 @@ remote_public_key=''
 remote_private_key=''
 remote_short_id=''
 remote_flow=''
+remote_dial_mode=''
 remote_transport_net=''
 remote_transport_sec=''
 
@@ -155,6 +156,7 @@ if [ -f "$REMOTE_META_PATH" ]; then
 	remote_private_key="${XRAY_PRIVATE_KEY:-}"
 	remote_short_id="${XRAY_SHORT_ID:-}"
 	remote_flow="${XRAY_FLOW:-}"
+	remote_dial_mode="${XRAY_DIAL_MODE:-direct}"
 elif [ -f "$REMOTE_CONFIG_PATH" ]; then
 	if command -v python3 >/dev/null 2>&1; then
 		eval "$(python3 - <<'PY'
@@ -266,6 +268,7 @@ line REMOTE_public_key "$remote_public_key"
 line REMOTE_private_key "$remote_private_key"
 line REMOTE_short_id "$remote_short_id"
 line REMOTE_flow "$remote_flow"
+line REMOTE_dial_mode "$remote_dial_mode"
 line REMOTE_TRANSPORT_NET "$remote_transport_net"
 line REMOTE_TRANSPORT_SEC "$remote_transport_sec"
 EOF
