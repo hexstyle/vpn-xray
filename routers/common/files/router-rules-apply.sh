@@ -39,6 +39,7 @@ apply_xray_internal() {
 	final_rule="$(iptables -t nat -S CODEX_TRANSPROXY 2>/dev/null | tail -n 1)"
 	if [ "$mode" = 'selective' ]; then
 		xray_dnsmasq_ready_internal || need_restart=1
+		xray_nft_runtime_ready_internal || need_restart=1
 		ipset list "$setname" >/dev/null 2>&1 || need_restart=1
 		printf '%s\n' "$final_rule" | grep -q -- "-m set --match-set ${setname} dst -j REDIRECT" || need_restart=1
 		iptables -t nat -C PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || need_restart=1
@@ -468,4 +469,3 @@ set_mode_cutover_internal() {
 	# selective routing. Correctness over speed here.
 	hard_cutover_xray_internal
 }
-

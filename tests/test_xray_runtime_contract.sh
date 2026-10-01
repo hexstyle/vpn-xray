@@ -120,6 +120,18 @@ grep -q '/etc/init.d/codex-xray stop >/dev/null 2>&1 || true' "$TRANSPROXY_INIT"
 grep -q 'ROUTER_RULES_USE_CACHED_RESOLVED=1 /usr/bin/router-rules build-xray-ipset' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must restore selective ipset from cached resolutions before full refresh completes"
 
+grep -q 'nftset=/%s/4#inet#%s#%s' $ROUTER_RULES_IMPL \
+	|| fail "router-rules must feed real dnsmasq answers into a native nftables set when ipset hooks are unavailable"
+
+grep -q 'add_dynamic_nft_rules' "$TRANSPROXY_INIT" \
+	|| fail "codex-transproxy.init must attach dynamic DNS destinations to the selective dataplane"
+
+grep -q 'ip daddr "@\$NFT_SET" counter redirect' "$TRANSPROXY_INIT" \
+	|| fail "codex-transproxy.init must redirect dynamically learned TCP destinations"
+
+grep -q 'tproxy ip to "127.0.0.1:\$tproxy_port"' "$TRANSPROXY_INIT" \
+	|| fail "codex-transproxy.init must TPROXY dynamically learned UDP destinations"
+
 grep -q 'ROUTER_RULES_SYNC_ACTOR=boot' "$ROOT/routers/common/files/router-rules-sync.init" \
 	|| fail "router-rules-sync init must run an immediate boot-time apply-xray refresh"
 

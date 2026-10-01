@@ -10,6 +10,10 @@ TCP_CHAIN="CODEX_TRANSPROXY"
 TCP_PORT="12345"
 LEGACY_DNS_CHAIN="CODEX_DNS_LOCAL"
 LEGACY_DOT_CHAIN="CODEX_DOT_PROXY"
+NFT_TABLE="vpn_xray_dynamic"
+NFT_SET="destinations"
+NFT_TCP_CHAIN="tcp_prerouting"
+NFT_UDP_CHAIN="udp_prerouting"
 
 VX_CONFIG="$XRAY_CONFIG"
 . "${VX_LIB_COMMON:-/usr/share/vpn-xray/lib-common.sh}"
@@ -82,6 +86,51 @@ xray_tproxy_fwmark() {
 
 xray_tproxy_routing_table() {
 	uci -q get router_rules.global.xray_tproxy_table 2>/dev/null || echo 100
+}
+
+dynamic_nft_supported() {
+	command -v nft >/dev/null 2>&1 || return 1
+	dnsmasq -v 2>&1 | grep -qw 'nftset'
+}
+
+del_dynamic_nft_rules() {
+	command -v nft >/dev/null 2>&1 || return 0
+	nft flush chain inet "$NFT_TABLE" "$NFT_TCP_CHAIN" >/dev/null 2>&1 || true
+	nft delete chain inet "$NFT_TABLE" "$NFT_TCP_CHAIN" >/dev/null 2>&1 || true
+	nft flush chain inet "$NFT_TABLE" "$NFT_UDP_CHAIN" >/dev/null 2>&1 || true
+	nft delete chain inet "$NFT_TABLE" "$NFT_UDP_CHAIN" >/dev/null 2>&1 || true
+}
+
+add_dynamic_nft_rules() {
+	local mode bypass_target tproxy_port fwmark net
+
+	del_dynamic_nft_rules
+	mode="$(xray_rule_mode)"
+	[ "$mode" = 'selective' ] || return 0
+	dynamic_nft_supported || return 0
+	nft list table inet "$NFT_TABLE" >/dev/null 2>&1 || nft add table inet "$NFT_TABLE" || return 1
+	nft list set inet "$NFT_TABLE" "$NFT_SET" >/dev/null 2>&1 \
+		|| nft add set inet "$NFT_TABLE" "$NFT_SET" '{ type ipv4_addr; flags interval; }' || return 1
+	nft add chain inet "$NFT_TABLE" "$NFT_TCP_CHAIN" \
+		'{ type nat hook prerouting priority -101; policy accept; }' || return 1
+	nft add chain inet "$NFT_TABLE" "$NFT_UDP_CHAIN" \
+		'{ type filter hook prerouting priority -151; policy accept; }' || return 1
+	for net in 0.0.0.0/8 10.0.0.0/8 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+		nft add rule inet "$NFT_TABLE" "$NFT_TCP_CHAIN" ip daddr "$net" return
+		nft add rule inet "$NFT_TABLE" "$NFT_UDP_CHAIN" ip daddr "$net" return
+	done
+	bypass_target="$(resolve_vps_bypass)"
+	if [ -n "$bypass_target" ]; then
+		nft add rule inet "$NFT_TABLE" "$NFT_TCP_CHAIN" ip daddr "$bypass_target" return
+		nft add rule inet "$NFT_TABLE" "$NFT_UDP_CHAIN" ip daddr "$bypass_target" return
+	fi
+	tproxy_port="$(xray_tproxy_udp_port)"
+	fwmark="$(xray_tproxy_fwmark)"
+	nft add rule inet "$NFT_TABLE" "$NFT_TCP_CHAIN" tcp dport 53 return
+	nft add rule inet "$NFT_TABLE" "$NFT_TCP_CHAIN" meta l4proto tcp ip daddr "@$NFT_SET" counter redirect to ":$TCP_PORT"
+	nft add rule inet "$NFT_TABLE" "$NFT_UDP_CHAIN" udp dport 53 return
+	nft add rule inet "$NFT_TABLE" "$NFT_UDP_CHAIN" meta l4proto udp ip daddr "@$NFT_SET" \
+		counter meta mark set "$fwmark" tproxy ip to "127.0.0.1:$tproxy_port"
 }
 
 sanitize_source_bypass_entry() {
@@ -362,6 +411,7 @@ start() {
 	add_nat_rules
 	add_filter_rules
 	add_tproxy_rules
+	add_dynamic_nft_rules || return 1
 	if xray_runtime_ready && transproxy_runtime_ready; then
 		xray_failsafe_disable
 	fi
@@ -377,6 +427,7 @@ stop() {
 	del_nat_rules
 	del_filter_rules
 	del_tproxy_rules
+	del_dynamic_nft_rules
 	/etc/init.d/redsocks stop >/dev/null 2>&1 || true
 }
 

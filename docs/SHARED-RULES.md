@@ -17,8 +17,11 @@ The operator edits one human-facing list. The router then turns that list into r
 On the GL router:
 
 - literal IPv4 / CIDR entries go straight into the live `ipset`
-- domain entries are tracked through `dnsmasq -> ipset`
-- a resolved IPv4 snapshot is kept for diagnostics only
+- domain entries are tracked through `dnsmasq -> ipset` where supported
+- on `no-ipset` firmware, `dnsmasq -> nftset` feeds supplemental TCP REDIRECT
+  and UDP TPROXY hooks from the DNS answers actually returned to LAN clients
+- a resolved IPv4 snapshot preloads the legacy ipset as a cold-boot fallback
+  and remains available for diagnostics
 
 This means domain-based selective routing follows later DNS changes without requiring a full manual rebuild every time an address changes.
 

@@ -209,6 +209,32 @@ curl -m 8 -x http://127.0.0.1:1083 https://api.ipify.org   # expect VPS IP
   `disruptive`
 - 4.5 **Wrong upstream identity** (router dials old VPS port/SNI, log shows
   `connection refused` to a port the VPS no longer listens on) → node 8.
+- 4.5a **A domain is present in selective rules but its current traffic
+  bypasses Xray.** Compare the client's/router-dnsmasq A records with
+  `resolution_map.tsv` and `ipset test xray_selective_dst <current-ip>`.
+  Geo-distributed CDNs can return different edges from Google DoH versus the
+  resolvers configured for dnsmasq. The old resolver stopped after the first
+  successful DoH answer, so the periodic refresh remained internally fresh
+  but never contained the addresses actually handed to LAN clients. This is
+  especially visible with `chatgpt.com`: the snapshot can contain Lumen
+  `8.6.112.6`/`8.47.69.6` while dnsmasq returns Cloudflare
+  `104.18.32.47`/`172.64.155.209`. On firmware whose dnsmasq reports
+  `no-ipset`, a static snapshot alone cannot close the mismatch: the same
+  resolver can rotate between both pools on consecutive requests, and exact
+  base-domain pre-resolution cannot learn a newly requested subdomain.
+  Repair: when dnsmasq has `nftset`, populate a dedicated native nftables set
+  from every real LAN DNS answer and route that set through supplemental TCP
+  REDIRECT and UDP TPROXY hooks. Keep the pre-resolved legacy ipset as the
+  cold-boot fallback; build it by unioning answers from **all configured
+  dnsmasq resolvers**. Query DoH and other fallback resolvers only when every
+  configured resolver returns nothing; a slow or geo-different fallback must
+  not delay or override the DNS view actually used by LAN clients. Resolver
+  probes must explicitly request only A records: waiting for AAAA answers is
+  both unnecessary and contrary to this stack's IPv4-only invariant. Verify
+  the current A records in either the legacy or dynamic set, then make a real
+  LAN request and confirm the selective REDIRECT/TPROXY counters and Xray
+  access log advance. Rebuilding the hooks is `disruptive`; schedule it
+  outside CGI request handling.
 - 4.6 **error.log shows `use of closed network connection` in bulk +
   websocket dial refused** → VPS side down, go to node 6; do not restart the
   router runtime for a VPS-side failure (meta-rule 5).

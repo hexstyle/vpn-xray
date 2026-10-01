@@ -174,7 +174,7 @@ resolve_via_nslookup() {
 	local resolver="$2"
 
 	command -v nslookup >/dev/null 2>&1 || return 1
-	run_with_timeout 6 nslookup "$host" "$resolver" 2>/dev/null \
+	run_with_timeout 6 nslookup -type=A "$host" "$resolver" 2>/dev/null \
 		| sed -n 's/^Address [0-9]*: //p; s/^Address: //p' \
 		| grep -E '^[0-9]+(\.[0-9]+){3}$' \
 		| grep -v "^${resolver}$" \
@@ -402,4 +402,3 @@ restore_missing_rules_tree_from_snapshot_internal() {
 $(tracked_rules_relpaths)
 EOF
 }
-

@@ -57,23 +57,40 @@ selective_fallback_retry_internal() {
 resolve_domain_ipv4() {
 	local host="$1"
 	local dns="$2"
-	local resolver result
+	local resolver result tmp idx pids pid
+
+	# CDN answers are resolver- and location-dependent. dnsmasq sends LAN
+	# queries to every resolver in $dns, so the snapshot must contain the union
+	# of those answers (DIAGNOSTIC-TREE 4.5a). DoH is only a fallback: besides
+	# returning a different CDN edge, an unreachable DoH endpoint would add its
+	# full timeout to every domain refresh.
+	tmp="$(rr_mktemp)"
+	rm -f "$tmp"
+	pids=''
+	idx=0
+	for resolver in $dns; do
+		idx=$((idx + 1))
+		(
+			result="$(resolve_via_dig "$host" "$resolver" || true)"
+			[ -n "$result" ] || result="$(resolve_via_nslookup "$host" "$resolver" || true)"
+			printf '%s\n' "$result"
+		) > "${tmp}.resolver.${idx}" 2>/dev/null &
+		pids="$pids $!"
+	done
+	for pid in $pids; do wait "$pid" 2>/dev/null || true; done
+	cat "${tmp}.resolver."* 2>/dev/null | sed '/^$/d' | sort -u > "$tmp"
+	rm -f "${tmp}.resolver."*
+	if [ -s "$tmp" ]; then
+		cat "$tmp"
+		rm -f "$tmp"
+		return 0
+	fi
+	rm -f "$tmp"
 
 	result="$(resolve_via_doh "$host" || true)"
 	if [ -n "$result" ]; then
 		printf '%s\n' "$result"
 		return 0
-	fi
-
-	if [ -n "$dns" ]; then
-		for resolver in $dns; do
-			result="$(resolve_via_dig "$host" "$resolver" || true)"
-			[ -n "$result" ] || result="$(resolve_via_nslookup "$host" "$resolver" || true)"
-			if [ -n "$result" ]; then
-				printf '%s\n' "$result"
-				return 0
-			fi
-		done
 	fi
 
 	while IFS= read -r resolver || [ -n "$resolver" ]; do
@@ -94,7 +111,40 @@ EOF
 		return 0
 	fi
 
-	resolve_via_doh "$host" || true
+	return 1
+}
+
+xray_nft_table() { printf '%s\n' 'vpn_xray_dynamic'; }
+xray_nft_set() { printf '%s\n' 'destinations'; }
+xray_nft_tcp_chain() { printf '%s\n' 'tcp_prerouting'; }
+xray_nft_udp_chain() { printf '%s\n' 'udp_prerouting'; }
+
+xray_nft_dns_supported() {
+	command -v nft >/dev/null 2>&1 || return 1
+	dnsmasq -v 2>&1 | grep -qw 'nftset'
+}
+
+ensure_xray_nft_set_internal() {
+	local table setname
+
+	xray_nft_dns_supported || return 1
+	table="$(xray_nft_table)"
+	setname="$(xray_nft_set)"
+	nft list table inet "$table" >/dev/null 2>&1 || nft add table inet "$table"
+	nft list set inet "$table" "$setname" >/dev/null 2>&1 \
+		|| nft add set inet "$table" "$setname" '{ type ipv4_addr; flags interval; }'
+}
+
+xray_nft_runtime_ready_internal() {
+	local table setname tcp_chain udp_chain
+
+	xray_nft_dns_supported || return 0
+	table="$(xray_nft_table)"
+	setname="$(xray_nft_set)"
+	tcp_chain="$(xray_nft_tcp_chain)"
+	udp_chain="$(xray_nft_udp_chain)"
+	nft list chain inet "$table" "$tcp_chain" 2>/dev/null | grep -q "@${setname}.*redirect" || return 1
+	nft list chain inet "$table" "$udp_chain" 2>/dev/null | grep -q "@${setname}.*tproxy" || return 1
 }
 
 split_rules_internal() {
@@ -245,11 +295,9 @@ build_xray_ipset_internal() {
 	fi
 
 	: > "$tmp_conf"
-	# Some stock OpenWrt dnsmasq-full builds (e.g. 23.05.x mediatek/filogic) are
-	# compiled with no-ipset and crash on `ipset=...` directives. In that case
-	# skip writing the conf — the ipset is already populated by direct DNS
-	# resolution in the build script above, and the periodic sync keeps it
-	# fresh, so the runtime path stays correct.
+	# Use the legacy hook where available. Stock OpenWrt builds may report
+	# no-ipset but still provide nftset; that dynamic hook is essential for
+	# rotating CDN answers and subdomains (DIAGNOSTIC-TREE 4.5a).
 	if [ -f "$domains" ] && dnsmasq --help 2>&1 | grep -q -- '--ipset='; then
 		if ! dnsmasq -v 2>&1 | grep -q 'no-ipset'; then
 			while IFS= read -r value || [ -n "$value" ]; do
@@ -257,6 +305,13 @@ build_xray_ipset_internal() {
 				printf 'ipset=/%s/%s\n' "$value" "$setname" >> "$tmp_conf"
 			done < "$domains"
 		fi
+	fi
+	if [ -f "$domains" ] && ensure_xray_nft_set_internal; then
+		while IFS= read -r value || [ -n "$value" ]; do
+			[ -n "$value" ] || continue
+			printf 'nftset=/%s/4#inet#%s#%s\n' \
+				"$value" "$(xray_nft_table)" "$(xray_nft_set)" >> "$tmp_conf"
+		done < "$domains"
 	fi
 
 	mkdir -p "$(dirname "$conf")"
@@ -420,4 +475,3 @@ restore_lkg_internal() {
 
 	apply_xray_internal
 }
-
