@@ -303,6 +303,36 @@ xray_failsafe_active() {
 	iptables -C FORWARD -i "$lan_if" -j "$VX_FAILSAFE_CHAIN" >/dev/null 2>&1
 }
 
+# Run a command with a wall-clock limit even on minimal OpenWrt images that do
+# not ship the standalone `timeout` applet. Returns 124 when the fallback kills
+# an over-limit command, matching GNU/BusyBox timeout's conventional status.
+vx_run_with_timeout() {
+	local limit="$1" pid elapsed rc
+	shift
+
+	if command -v timeout >/dev/null 2>&1; then
+		timeout "$limit" "$@"
+		return $?
+	fi
+	"$@" &
+	pid=$!
+	elapsed=0
+	while kill -0 "$pid" 2>/dev/null; do
+		if [ "$elapsed" -ge "$limit" ]; then
+			kill "$pid" 2>/dev/null || true
+			sleep 1
+			kill -9 "$pid" 2>/dev/null || true
+			wait "$pid" 2>/dev/null || true
+			return 124
+		fi
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+	rc=0
+	wait "$pid" || rc=$?
+	return "$rc"
+}
+
 # --- Locking ---
 
 with_flock() {

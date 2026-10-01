@@ -52,6 +52,8 @@ for profile in gl-mt3000-glinet asus-tuf-ax4200-openwrt; do
 		|| fail "$profile: vpn-xray-repin-cert must signal a re-pin via exit 10"
 	grep -q 'cmp -s' "$helper" \
 		|| fail "$profile: vpn-xray-repin-cert must be idempotent (only re-pin on a real change)"
+	grep -q 'vx_run_with_timeout 50 env REQUEST_METHOD=GET QUERY_STRING=action=smoke' "$wd" \
+		|| fail "$profile: watchdog smoke must work without a standalone timeout command"
 done
 
 printf 'ok\n'

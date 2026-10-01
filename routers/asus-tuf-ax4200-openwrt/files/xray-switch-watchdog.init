@@ -87,7 +87,7 @@ reset_counter() {
 
 smoke_output() {
 	[ -x "'"$ADMIN_CGI"'" ] || return 1
-	timeout 50 env REQUEST_METHOD=GET QUERY_STRING=action=smoke "'"$ADMIN_CGI"'" 2>/dev/null \
+	vx_run_with_timeout 50 env REQUEST_METHOD=GET QUERY_STRING=action=smoke "'"$ADMIN_CGI"'" 2>/dev/null \
 		| tr -d "\r" \
 		| sed -n "/^{/,\$p" \
 		| sed -n "1p"
@@ -115,7 +115,7 @@ restart_runtime() {
 	xray_failsafe_enable "watchdog restarting Xray runtime"
 	record_timestamp "$LAST_RECOVERY_FILE"
 	if [ -x "'"$ADMIN_CGI"'" ]; then
-		output="$(timeout 30 env REQUEST_METHOD=GET QUERY_STRING=action=restart "'"$ADMIN_CGI"'" 2>/dev/null \
+		output="$(vx_run_with_timeout 30 env REQUEST_METHOD=GET QUERY_STRING=action=restart "'"$ADMIN_CGI"'" 2>/dev/null \
 			| tr -d "\r" \
 			| sed -n "/^{/,\$p" \
 			| sed -n "1p" || true)"

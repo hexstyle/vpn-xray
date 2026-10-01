@@ -270,6 +270,16 @@ curl -m 8 -x http://127.0.0.1:1083 https://api.ipify.org   # expect VPS IP
   `OPENAI_FAILURE_THRESHOLD`), which still requires 4 consecutive misses
   before restarting. `safe` (source-only; a genuine outage still restarts
   within 2 probes, ~90 s — only the false positives stop).
+- 4.7a **Healthy WS traffic but watchdog repeatedly reports `smoke probe
+  unavailable`.** Verify the router-local HTTP/SOCKS probes first, then run
+  `command -v timeout` and the watchdog's exact CGI command. Some OpenWrt
+  images do not ship a standalone `timeout`; an unconditional invocation is
+  suppressed by `2>/dev/null`, produces an empty result, and increments the
+  severe counter even though Xray is healthy. Repair: invoke the CGI through
+  the shared bounded-run helper, which uses `timeout` when installed and a
+  portable TERM/KILL watchdog otherwise. Verify the CGI returns status `ok`,
+  the severe counter clears on the next cycle, and no Xray PID changes. This
+  watchdog-only repair is `safe`; it must not restart the dataplane.
 - 4.8 **Some HTTPS destinations hang while other traffic through the same VPS
   works** (2026-09-29). Symptom: the proxy reports the correct VPS egress IP,
   direct HTTPS from the VPS succeeds, but repeated TLS handshakes to
