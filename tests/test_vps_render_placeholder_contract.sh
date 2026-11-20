@@ -13,6 +13,12 @@ ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 PROFILE="$ROOT/routers/gl-mt3000-glinet"
 CONFIG_TEMPLATE="$ROOT/vps/debian-13/files/xray-vps-config.template.json"
 REMOTE_INSTALL="$ROOT/vps/debian-13/files/install-vps.remote.sh"
+# Inspect the same assembled source delivered by both production renderers.
+. "$ROOT/vps/debian-13/render-template.sh"
+ASSEMBLED_INSTALL="$(mktemp)"
+trap 'rm -f "$ASSEMBLED_INSTALL"' EXIT
+vps_template_source "$REMOTE_INSTALL" > "$ASSEMBLED_INSTALL"
+REMOTE_INSTALL="$ASSEMBLED_INSTALL"
 CGI="$PROFILE/files/xray-vps.cgi"
 # xray-vps.cgi sources its render/apply/inspect logic from shared libs
 # (AGENTS.md 500-line split). Extract the relevant function from the lib that
@@ -97,7 +103,7 @@ printf '%s' "$router_cfg" | grep -q '"security": "reality"' \
 # Node 8.2 guard: applying a router config must refuse when TLS-critical
 # profile fields are empty (empty serverName → cert validated against the IP).
 apply_fn="$(sed -n '/^apply_profile_to_router_internal()/,/^}/p' "$SETUP_LIB")"
-printf '%s' "$apply_fn" | grep -q 'profile is missing required endpoint, SNI, UUID, or port' \
+printf '%s' "$apply_fn" | grep -q 'validate_selected_profile'  \
 	|| fail "apply_profile_to_router_internal must refuse an incomplete profile (empty server_name/address/uuid/port) before overwriting the router config (node 8.2)"
 
 # G8 transport-mismatch detector: xray-vps.cgi must expose the transport

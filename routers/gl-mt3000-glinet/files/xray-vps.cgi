@@ -150,7 +150,9 @@ with_lock_dir() {
 	local lock_dir="$1"
 	local cmd="$2"
 	shift 2
-	with_flock "${lock_dir%.lock.d}.flock" 60 "$cmd" "$@"
+	local wait_seconds
+	wait_seconds="$(vps_time_left 60)" || return 124
+	with_flock "${lock_dir%.lock.d}.flock" "$wait_seconds" "$cmd" "$@"
 }
 
 # Implementation split into sourced libs (AGENTS.md 500-line rule).
@@ -171,7 +173,7 @@ with_lock_dir() {
 if [ -n "${XRAY_VPS_JOB:-}" ]; then
 	case "$XRAY_VPS_JOB" in
 		apply_router)
-			run_router_apply_job "${XRAY_VPS_JOB_PROFILE:-$(active_profile_id)}"
+			run_router_apply_job "${XRAY_VPS_JOB_PROFILE:-}"
 			exit $?
 			;;
 		diagnose_repair)
@@ -183,6 +185,20 @@ if [ -n "${XRAY_VPS_JOB:-}" ]; then
 fi
 
 REQUEST_DATA="$(load_request_data)"
+request_id="$(request_value request_id)"
+case "$request_id" in *[!A-Za-z0-9_-]*) emit_error request 'Invalid request ID'; exit 0;; esac
+[ "${#request_id}" -le 80 ] || { emit_error request 'Invalid request ID'; exit 0; }
+if resume_profile_request; then exit 0; fi
+
+case "$(request_value action)" in
+	''|status|apply_router_status|diagnose_repair_status) ;;
+	*)
+		if ! profile_request_guard; then
+			emit_profile_busy
+			exit 0
+		fi
+		;;
+esac
 
 case "$(request_value action)" in
 	''|status)
@@ -223,22 +239,22 @@ case "$(request_value action)" in
 		adopt_vps_action
 		;;
 	apply_router)
-		ensure_profile_store
+		ensure_profile_store_light
 		schedule_router_apply_action
 		;;
 	apply_router_status)
 		router_apply_status_action
 		;;
 	setup_vps)
-		ensure_profile_store
+		ensure_profile_store_light
 		setup_vps_action
 		;;
 	apply_profile)
-		ensure_profile_store
+		ensure_profile_store_light
 		apply_everything_action
 		;;
 	diagnose_repair)
-		ensure_profile_store
+		ensure_profile_store_light
 		schedule_vps_repair_job_action
 		;;
 	diagnose_repair_status)

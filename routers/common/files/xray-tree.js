@@ -155,7 +155,9 @@
       if (nodes.length) paint(nodes);
       // Does the VPS/config half need work? unknown counts — an uninspected VPS
       // (SSH control plane idle) is exactly what the VPS repair sets up.
-      var vpsNeedsWork = !(data && data.ok) || ["6", "8", "8.5"].some(function (id) {
+      var selected = typeof activeProfile === "function" ? activeProfile() : null;
+      var targetDrift = !selected || !!selected.router_diff;
+      var vpsNeedsWork = targetDrift || !(data && data.ok) || ["6", "8", "8.5"].some(function (id) {
         var s = treeStatusOf(nodes, id);
         return s !== "ok" && s !== "na";
       });

@@ -303,25 +303,49 @@ xray_failsafe_active() {
 	iptables -C FORWARD -i "$lan_if" -j "$VX_FAILSAFE_CHAIN" >/dev/null 2>&1
 }
 
-# Run a command with a wall-clock limit even on minimal OpenWrt images that do
-# not ship the standalone `timeout` applet. Returns 124 when the fallback kills
-# an over-limit command, matching GNU/BusyBox timeout's conventional status.
-vx_run_with_timeout() {
-	local limit="$1" pid elapsed rc
-	shift
-
-	if command -v timeout >/dev/null 2>&1; then
-		timeout "$limit" "$@"
-		return $?
+# Freeze a timeout-owned subtree before discovering/killing its children.
+# The frozen parent cannot reap/reuse a child PID or fork during the walk.
+# No process-group signal: CGI and unrelated services may share a group.
+vx_timeout_kill_tree() {
+	local parent="$1" child stat rest ppid
+	kill -STOP "$parent" 2>/dev/null || return 0
+	if [ -d /proc/self ]; then
+		for stat in /proc/[0-9]*/stat; do
+			[ -r "$stat" ] || continue
+			read -r rest < "$stat" || continue
+			rest="${rest##*) }"; rest="${rest#* }"; ppid="${rest%% *}"
+			[ "$ppid" = "$parent" ] || continue
+			child="${stat#/proc/}"; child="${child%/stat}"
+			vx_timeout_kill_tree "$child"
+		done
+	else
+		# Development hosts without procfs; deployed routers use the branch above.
+		for child in $(ps -axo pid=,ppid= | awk -v p="$parent" '$2==p {print $1}'); do
+			vx_timeout_kill_tree "$child"
+		done
 	fi
-	"$@" &
-	pid=$!
+	kill -KILL "$parent" 2>/dev/null || true
+}
+
+# External commands inherit stdin but never the caller's transaction/helper
+# locks. Native GNU timeout kills its group; minimal firmware uses the owned
+# subtree walk, not a direct-PID kill that leaves descendants holding a lock.
+vx_run_with_timeout() (
+	local limit="$1" pid='' elapsed rc
+	shift
+	if command -v timeout >/dev/null 2>&1 && timeout --help 2>&1 | grep -q -- '--kill-after'; then
+		exec timeout -k 1 "$limit" "$@" 6>&- 9>&-
+	fi
+	# Traps are confined to this subshell; the calling job keeps its own traps.
+	trap '[ -z "$pid" ] || { vx_timeout_kill_tree "$pid"; wait "$pid" 2>/dev/null || true; }; exit 143' TERM INT
+	{
+		"$@" <&7 7<&- 6>&- 9>&- &
+		pid=$!
+	} 7<&0
 	elapsed=0
 	while kill -0 "$pid" 2>/dev/null; do
 		if [ "$elapsed" -ge "$limit" ]; then
-			kill "$pid" 2>/dev/null || true
-			sleep 1
-			kill -9 "$pid" 2>/dev/null || true
+			vx_timeout_kill_tree "$pid"
 			wait "$pid" 2>/dev/null || true
 			return 124
 		fi
@@ -331,7 +355,7 @@ vx_run_with_timeout() {
 	rc=0
 	wait "$pid" || rc=$?
 	return "$rc"
-}
+)
 
 # --- Locking ---
 

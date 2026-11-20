@@ -10,8 +10,8 @@
         }
         clearDirty();
         renderAll(true);
-        document.getElementById("profileActionHint").textContent = "Profile selected. Live Target is unchanged until Apply Profile to Router succeeds.";
-        flash(`Selected profile changed to "${profileId}". Click Apply Profile to Router to change the live Target.`, "good");
+        document.getElementById("profileActionHint").textContent = "Profile selected. Live Target changes when Apply or Check & Configure VPS applies this profile.";
+        flash(`Selected profile changed to "${profileId}". Use Apply or Check & Configure VPS to change the live Target.`, "good");
       } catch (err) {
         flash(`Failed to switch profile: ${err.message}`, "bad");
       } finally {
@@ -42,9 +42,8 @@
       }
     }
 
-    // The old implicit check/apply flow is now an explicit VPS-only
-    // diagnose_repair pipeline. It adopts authoritative VPS metadata and
-    // configures the server, but never cuts over the working router runtime.
+    // Repair adopts the VPS identity, repairs the server, applies the selected
+    // router configuration and reports application separately from health.
 
     // Render the JSON step report from the diagnose_repair backend action
     // into the #repairSteps list. Icons: ok=OK, fixed=FIX, failed=FAIL.
@@ -110,33 +109,17 @@
       }
     }
 
-    // Drives the animated progress panel while a repair request is in
-    // flight. The backend runs the whole pipeline as one request and
-    // returns the per-step report at the end, so we can't stream real
-    // sub-steps; instead we advance a phase label on a timer to show the
-    // user that work is happening and roughly where it is. Cleared when
-    // the request resolves.
+    // Show elapsed work, never invent backend phases from a timer.
     let repairProgressTimer = null;
     function startRepairProgress() {
       const panel = document.getElementById("repairProgress");
       const textEl = document.getElementById("repairProgressText");
       const elapsedEl = document.getElementById("repairProgressElapsed");
       panel.style.display = "";
-      const phases = [
-        [0, "Establishing SSH to the VPS…"],
-        [3, "Uploading config, meta and repair script…"],
-        [6, "Running repair pipeline (binary, perms, certs, config, runtime)…"],
-        [20, "Still working — waiting on the VPS to converge…"],
-        [45, "Taking longer than usual — the VPS may be slow to restart…"],
-      ];
       const started = Date.now();
       const tick = () => {
         const secs = Math.floor((Date.now() - started) / 1000);
-        let label = phases[0][1];
-        for (const [at, txt] of phases) {
-          if (secs >= at) label = txt;
-        }
-        textEl.textContent = label;
+        textEl.textContent = "Working: inspect/repair VPS, apply selected profile, then check live path…";
         elapsedEl.textContent = `${secs}s`;
       };
       tick();
@@ -150,8 +133,8 @@
       document.getElementById("repairProgress").style.display = "none";
     }
 
-    async function waitForVpsRepairJob(jobId) {
-      const deadline = Date.now() + 180000;
+    async function waitForVpsRepairJob(jobId, started = Date.now()) {
+      const deadline = started + 180000;
       while (Date.now() < deadline) {
         await sleep(1000);
         const data = await callApi(vpsApi, "diagnose_repair_status", { job_id: jobId }, { timeoutMs: 10000 });
@@ -159,6 +142,16 @@
         return data;
       }
       throw new Error("VPS check/configure job did not finish within 180 seconds.");
+    }
+
+    // One ID survives a lost scheduling response; the backend rejoins its job.
+    async function scheduleVpsOperation(action, payload = {}) {
+      payload = { ...payload, request_id: `${Date.now()}-${Math.random().toString(16).slice(2)}` };
+      try {
+        return await callApi(vpsApi, action, payload, { timeoutMs: 10000 });
+      } catch (_lostReply) {
+        return await callApi(vpsApi, action, payload, { timeoutMs: 10000 });
+      }
     }
 
     // Schedule the disruptive VPS work outside the CGI request, then poll its
@@ -183,9 +176,10 @@
       document.getElementById("profileActionHint").textContent = "Checking SSH and configuring the VPS in a background job…";
       beginForegroundTask("Checking and configuring the VPS...", 180000);
       try {
-        let data = await callApi(vpsApi, "diagnose_repair", payload, { timeoutMs: 10000 });
-        if (data.job_id && (data.job_state === "scheduled" || data.job_state === "running")) {
-          data = await waitForVpsRepairJob(data.job_id);
+        const started = Date.now();
+        let data = await scheduleVpsOperation("diagnose_repair", payload);
+        if (data.ok !== false && data.job_id) {
+          data = await waitForVpsRepairJob(data.job_id, started);
         }
         if (data.error === "busy") {
           flash("A VPS check/configure job is already in progress — please wait.", "warn");
@@ -210,18 +204,14 @@
           document.getElementById("profileActionHint").textContent = "SSH needs a one-time password. Enter it below and retry.";
           return;
         }
+        document.getElementById("repairCredsForm").style.display = "none";
+        document.getElementById("repairSshPassword").value = "";
         if (data.status) state.vps = data.status;
         renderRepairReport(data.steps || [], data.raw_log || "");
         if (data.ok) {
-          document.getElementById("repairCredsForm").style.display = "none";
-          document.getElementById("repairSshPassword").value = "";
           await refreshAll(false, true, true);
-          if (data.router_apply === "drift_detected") {
-            flash("VPS repaired. The router client config differs from the profile — review it before applying; the repair does NOT change the router config automatically.", "warn");
-          } else {
-            flash("VPS check and configuration completed successfully.", "good");
-          }
-          document.getElementById("profileActionHint").textContent = "VPS verified and configured. The router-managed SSH key is active.";
+          flash(data.path_health === "ok" ? "Selected profile applied; live path checks passed." : "Selected configuration ready; external health not checked (switch off).", "good");
+          document.getElementById("profileActionHint").textContent = `Router: ${data.router_apply}; health: ${data.path_health}.`;
         } else {
           // Show the step tree AND auto-expand the raw log so the operator
           // sees exactly which node failed and why, instead of a bare
@@ -240,11 +230,15 @@
           } else {
             reason = data.reason || data.error || "one or more steps failed — see the report and raw log below.";
           }
-          flash(`Repair finished with issues — ${reason}`, "bad");
+          await refreshAll(false, true, true).catch(() => {});
+          const outcome = `Router: ${data.router_apply || "unknown"}; health: ${data.path_health || "not_checked"}.`;
+          document.getElementById("profileActionHint").textContent = outcome;
+          flash(`Repair finished with issues — ${outcome} ${reason}`, "bad");
         }
       } catch (err) {
-        flash(`VPS check/configuration failed: ${err.message}`, "bad");
+        flash(`VPS job result unavailable; actual application state unknown. Refresh status: ${err.message}`, "bad");
       } finally {
+        document.getElementById("repairSshPassword").value = "";
         state.repairRunning = false;
         stopRepairProgress();
         setBusy(document.getElementById("diagnoseRepairBtn"), false);

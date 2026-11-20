@@ -4,156 +4,169 @@
 # Sourced by /www/cgi-bin/xray-vps after lib-common.sh (shares its scope,
 # constants, and helper functions). Defines functions only; runs no code.
 
-for_each_identity() {
-	local profile_id="$1"
-	local callback="$2"
-	local arg="$3"
-	local managed bootstrap identity used=''
+# The detached recovery has 170s of work inside the UI's 180s wait.
+# Every blocking transport shares that deadline, including upload and retry.
+vps_time_left() {
+	local cap="$1" left
+	if [ -n "${VPS_JOB_DEADLINE:-}" ]; then
+		left=$((VPS_JOB_DEADLINE - $(date +%s)))
+		[ "$left" -gt 0 ] || return 1
+		[ "$left" -ge "$cap" ] || cap="$left"
+	fi
+	printf '%s\n' "$cap"
+}
 
+vps_run_bounded() {
+	local limit
+	limit="$(vps_time_left 170)" || return 124
+	vx_run_with_timeout "$limit" "$@"
+}
+
+# A second identity is safe only after explicit authentication refusal: other
+# failures may follow remote execution, so must never replay a mutation.
+for_each_identity() {
+	local profile_id="$1" callback="$2" arg="$3" managed bootstrap identity used='' rc=1
+	SSH_FAILURE_KIND=missing_key
 	managed="$(profile_get "$profile_id" managed_key_path)"
 	bootstrap="$(profile_get "$profile_id" bootstrap_key_path)"
-
 	for identity in "$managed" "$bootstrap"; do
-		[ -n "$identity" ] || continue
-		[ -f "$identity" ] || continue
+		[ -n "$identity" ] && [ -f "$identity" ] || continue
 		[ "$identity" = "$used" ] && continue
-		"$callback" "$identity" "$arg" && return 0
+		if "$callback" "$identity" "$arg"; then return 0; else rc=$?; fi
+		[ "$SSH_FAILURE_KIND" = auth ] || return "$rc"
 		used="$identity"
 	done
-	return 1
+	return "$rc"
 }
 
 ssh_exec_with_identity() {
-	local identity="$1"
-	local packed="$2"
-	local cmd host port user
-
+	local identity="$1" packed="$2" cmd host port user cap
 	cmd="$(printf '%s' "$packed" | cut -d '|' -f 1)"
 	host="$(printf '%s' "$packed" | cut -d '|' -f 2)"
 	port="$(printf '%s' "$packed" | cut -d '|' -f 3)"
 	user="$(printf '%s' "$packed" | cut -d '|' -f 4)"
+	cap="$(printf '%s' "$packed" | cut -d '|' -f 5)"
+	ssh_control_run "${cap:-170}" key "$identity" "$host" "$port" "$user" "$cmd"
+}
 
-	# ConnectionAttempts=3 handles intermittent SYN loss on WiFi repeater
-	# uplinks (the GL.iNet apcli0 case). ServerAliveInterval keeps the
-	# session alive when the pipeline uploads large files afterwards.
-	# When SSH_RAW_LOG_PATH is set (repair pipeline sets it to a file),
-	# stderr is appended to that file so the CGI can surface the actual
-	# OpenSSH error to the operator instead of hiding it behind a generic
-	# error. We can't use an fd here because fcgiwrap keeps fd 3+ busy
-	# for its FastCGI protocol channel.
-	if [ -n "${SSH_RAW_LOG_PATH:-}" ]; then
-		ssh -i "$identity" \
-			-o BatchMode=yes \
-			-o ConnectTimeout=6 \
-			-o ConnectionAttempts=2 \
-			-o ServerAliveInterval=15 \
-			-o ServerAliveCountMax=4 \
-			-o StrictHostKeyChecking=accept-new \
-			-o UserKnownHostsFile="$KNOWN_HOSTS" \
-			-p "$port" \
-			"$user@$host" "$cmd" 2>>"$SSH_RAW_LOG_PATH"
+# Password bootstrap and key RPC share the same bounded native SSH outcome.
+ssh_control_run() {
+	local cap="$1" auth="$2" identity="$3" host="$4" port="$5" user="$6" cmd="$7"
+	local limit err client_log rc=0 started log_level=ERROR auth_phase=unknown last_client_line
+	if [ "$auth" = password ]; then
+		log_level=DEBUG2
+		set -- sshpass -e ssh -o BatchMode=no -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1
 	else
-		ssh -i "$identity" \
-			-o BatchMode=yes \
-			-o ConnectTimeout=6 \
-			-o ConnectionAttempts=2 \
-			-o ServerAliveInterval=15 \
-			-o ServerAliveCountMax=4 \
-			-o StrictHostKeyChecking=accept-new \
-			-o UserKnownHostsFile="$KNOWN_HOSTS" \
-			-p "$port" \
-			"$user@$host" "$cmd"
+		set -- ssh -i "$identity" -o BatchMode=yes
 	fi
+	SSH_FAILURE_KIND=''
+	limit="$(vps_time_left "${cap:-170}")" || { SSH_FAILURE_KIND=deadline; return 124; }
+	err="$(mktemp)" || { SSH_FAILURE_KIND=local; return 1; }
+	client_log="$(mktemp)" || { rm -f "$err"; SSH_FAILURE_KIND=local; return 1; }
+	chmod 600 "$err" "$client_log" || { rm -f "$err" "$client_log"; SSH_FAILURE_KIND=local; return 1; }
+	started="$(date +%s)"
+	vx_run_with_timeout "$limit" "$@" \
+		-E "$client_log" -o "LogLevel=$log_level" \
+		-o ConnectTimeout=6 -o ConnectionAttempts=1 \
+		-o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+		-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$KNOWN_HOSTS" \
+		-p "$port" "$user@$host" "$cmd" 2>"$err" || rc=$?
+	if [ "$auth" = password ]; then
+		last_client_line="$(tail -n 1 "$client_log" 2>/dev/null | tr -d '\r')"
+		# Missing/failed logging cannot establish a pre-authentication refusal.
+		if [ ! -r "$client_log" ] || ! printf '\n' >> "$client_log"; then
+			SSH_FAILURE_KIND=local; [ "$rc" -ne 0 ] || rc=1
+		elif grep -q '^Authenticated to ' "$client_log"; then
+			auth_phase=authenticated
+		elif [ "$rc" -eq 5 ] &&
+			printf '%s\n' "$last_client_line" | grep -qE '^debug2: input_userauth_info_req: num_prompts [1-9][0-9]*$' &&
+			grep -q '^debug2: we sent a password packet, wait for reply' "$client_log" &&
+			grep -q '^debug1: Next authentication method: keyboard-interactive' "$client_log"; then
+			# sshpass rejected the next prompt before OpenSSH's terminal refusal.
+			auth_phase=password_rejected
+		fi
+	fi
+	if [ "$rc" -ne 0 ] && [ "$SSH_FAILURE_KIND" != local ]; then
+		SSH_FAILURE_KIND=remote
+		# Exit codes overlap remote command results. Only OpenSSH's separate
+		# client log can prove refusal before execution; never parse remote stderr
+		# (or a server-supplied disconnect reason) as permission to replay.
+		if grep -q '^Host key verification failed\.' "$client_log"; then
+			SSH_FAILURE_KIND=host_key
+		elif [ "$auth_phase" = password_rejected ] || { [ "$auth_phase" != authenticated ] && grep -qE '^[^[:space:]]+@[^[:space:]]+: Permission denied \([^)]*\)\.[[:space:]]*$' "$client_log"; }; then
+			SSH_FAILURE_KIND=auth
+		elif [ "$rc" -eq 124 ]; then
+			SSH_FAILURE_KIND=deadline
+		elif [ "$rc" -eq 255 ] && grep -qiE 'timed out|Timeout, server|Connection (reset|closed|refused)|Broken pipe|No route to host|Network is unreachable' "$client_log"; then
+			SSH_FAILURE_KIND=transport
+		fi
+	fi
+	if [ -n "${SSH_RAW_LOG_PATH:-}" ]; then
+		printf 'OpenSSH client diagnostics:\n' >> "$SSH_RAW_LOG_PATH"
+		sed '/^debug[123]:/d; /^Authenticated to /d' "$client_log" | head -c 2048 >> "$SSH_RAW_LOG_PATH"
+		printf 'Command/launcher stderr:\n' >> "$SSH_RAW_LOG_PATH"
+		head -c 2048 "$err" >> "$SSH_RAW_LOG_PATH"
+		printf 'control SSH elapsed=%ss exit=%s kind=%s auth_phase=%s\n' "$(($(date +%s)-started))" "$rc" "${SSH_FAILURE_KIND:-ok}" "$auth_phase" >> "$SSH_RAW_LOG_PATH"
+	else
+		sed '/^debug[123]:/d; /^Authenticated to /d' "$client_log" | head -c 2048 >&2
+		head -c 2048 "$err" >&2
+	fi
+	rm -f "$err" "$client_log"
+	return "$rc"
 }
 
 ssh_stdin_with_identity() {
-	local identity="$1"
-	local packed="$2"
-	local remote_cmd stdin_path host port user
-
+	local identity="$1" packed="$2" remote_cmd stdin_path host port user
 	remote_cmd="$(printf '%s' "$packed" | cut -d '|' -f 1)"
 	stdin_path="$(printf '%s' "$packed" | cut -d '|' -f 2)"
 	host="$(printf '%s' "$packed" | cut -d '|' -f 3)"
 	port="$(printf '%s' "$packed" | cut -d '|' -f 4)"
 	user="$(printf '%s' "$packed" | cut -d '|' -f 5)"
-
-	if [ -n "${SSH_RAW_LOG_PATH:-}" ]; then
-		ssh -i "$identity" \
-			-o BatchMode=yes \
-			-o ConnectTimeout=6 \
-			-o ConnectionAttempts=2 \
-			-o ServerAliveInterval=15 \
-			-o ServerAliveCountMax=4 \
-			-o StrictHostKeyChecking=accept-new \
-			-o UserKnownHostsFile="$KNOWN_HOSTS" \
-			-p "$port" \
-			"$user@$host" "$remote_cmd" < "$stdin_path" 2>>"$SSH_RAW_LOG_PATH"
-	else
-		ssh -i "$identity" \
-			-o BatchMode=yes \
-			-o ConnectTimeout=6 \
-			-o ConnectionAttempts=2 \
-			-o ServerAliveInterval=15 \
-			-o ServerAliveCountMax=4 \
-			-o StrictHostKeyChecking=accept-new \
-			-o UserKnownHostsFile="$KNOWN_HOSTS" \
-			-p "$port" \
-			"$user@$host" "$remote_cmd" < "$stdin_path"
-	fi
+	ssh_exec_with_identity "$identity" "$remote_cmd|$host|$port|$user|170" < "$stdin_path"
 }
 
 ssh_cmd() {
-	local profile_id="$1"
-	local cmd="$2"
-	local host port user packed
-
+	local profile_id="$1" cmd="$2" cap="${3:-170}" host port user
 	host="$(profile_get "$profile_id" ssh_host)"
 	port="$(profile_get "$profile_id" ssh_port)"
 	user="$(profile_get "$profile_id" ssh_user)"
-
-	[ -n "$host" ] || return 1
-	[ -n "$user" ] || user='root'
-	[ -n "$port" ] || port='22'
-	packed="${cmd}|${host}|${port}|${user}"
-	for_each_identity "$profile_id" ssh_exec_with_identity "$packed"
+	[ -n "$host" ] || { SSH_FAILURE_KIND=local; return 1; }
+	for_each_identity "$profile_id" ssh_exec_with_identity "${cmd}|${host}|${port:-22}|${user:-root}|$cap"
 }
 
 ssh_stdin_cmd() {
-	local profile_id="$1"
-	local remote_cmd="$2"
-	local stdin_path="$3"
-	local host port user packed
-
+	local profile_id="$1" remote_cmd="$2" stdin_path="$3" host port user
 	host="$(profile_get "$profile_id" ssh_host)"
 	port="$(profile_get "$profile_id" ssh_port)"
 	user="$(profile_get "$profile_id" ssh_user)"
+	[ -n "$host" ] || { SSH_FAILURE_KIND=local; return 1; }
+	for_each_identity "$profile_id" ssh_stdin_with_identity "${remote_cmd}|${stdin_path}|${host}|${port:-22}|${user:-root}"
+}
 
-	[ -n "$host" ] || return 1
-	[ -n "$user" ] || user='root'
-	[ -n "$port" ] || port='22'
-	packed="${remote_cmd}|${stdin_path}|${host}|${port}|${user}"
-	for_each_identity "$profile_id" ssh_stdin_with_identity "$packed"
+# Explicit read-only call site: retain stdin for one fresh retry, publish only
+# successful output, and never reset the accepted job's deadline (tree 3.4a).
+ssh_read_cmd() {
+	local profile_id="$1" cmd="$2" cap="${3:-35}" input output attempt=1 rc=1
+	input="$(mktemp)" || return 1
+	output="$(mktemp)" || { rm -f "$input"; return 1; }
+	chmod 600 "$input" "$output"
+	cat > "$input"
+	while [ "$attempt" -le 2 ]; do
+		if ssh_cmd "$profile_id" "$cmd" "$cap" < "$input" > "$output"; then
+			cat "$output"; rm -f "$input" "$output"; return 0
+		else rc=$?; fi
+		[ "$SSH_FAILURE_KIND" = transport ] && [ "$attempt" -lt 2 ] || break
+		[ "$(vps_time_left 8)" = 8 ] || break
+		[ -z "${SSH_RAW_LOG_PATH:-}" ] || printf 'read-only SSH retry after transport loss\n' >> "$SSH_RAW_LOG_PATH"
+		sleep 1
+		attempt=$((attempt + 1))
+	done
+	rm -f "$input" "$output"
+	return "$rc"
 }
 
 ssh_works() {
-	# Wrapper retry for the WiFi-repeater burst rate-limit (apcli0 on
-	# GL.iNet, DIAGNOSTIC-TREE 3.4): a rejected/dropped SYN in a burst
-	# looks like a failure, but a spaced retry succeeds. ssh's own
-	# ConnectionAttempts handles in-invocation SYN loss; this wrapper
-	# handles the "refused after too many recent connects" case. Two
-	# attempts with a 2s gap bounds worst-case latency — a broken key
-	# returns Permission denied immediately, so only genuine timeouts
-	# cost the full ConnectTimeout — while still absorbing a single
-	# burst rejection.
-	local i=0
-	while [ "$i" -lt 2 ]; do
-		if ssh_cmd "$1" 'echo ok' >/dev/null 2>&1; then
-			return 0
-		fi
-		i=$((i + 1))
-		[ "$i" -lt 2 ] && sleep 2
-	done
-	return 1
+	ssh_read_cmd "$1" 'echo ok' 15 </dev/null >/dev/null 2>&1
 }
 
 profile_cache_path() {
@@ -180,20 +193,6 @@ private_cache_get() {
 	cat "$cache" 2>/dev/null || true
 }
 
-private_cache_set() {
-	local profile_id="$1"
-	local value="$2"
-	local cache
-
-	cache="$(profile_private_cache_path "$profile_id")"
-	if [ -n "$value" ]; then
-		printf '%s' "$value" > "$cache"
-		chmod 600 "$cache"
-	else
-		rm -f "$cache"
-	fi
-}
-
 profile_cache_fresh() {
 	local profile_id="$1"
 	local max_age="${2:-90}"
@@ -213,9 +212,28 @@ profile_cache_fresh() {
 	[ "$age" -le "$max_age" ]
 }
 
-write_cache() {
-	local profile_id="$1"
-	local content="$2"
-	printf '%s\n' "$content" > "$(profile_cache_path "$profile_id")"
-	chmod 600 "$(profile_cache_path "$profile_id")"
+# Both cache files are one inspection result. Prepare everything before either
+# publication, and restore the old pair if either rename fails (set +e safe).
+publish_inspection_cache() {
+	local id="$1" staged="$2" secret="$3" cache private old_public=0 old_private=0 restored=1
+	cache="$(profile_cache_path "$id")"; private="$(profile_private_cache_path "$id")"
+	[ ! -e "$cache" ] || old_public=1
+	[ ! -e "$private" ] || old_private=1
+	if ! (umask 077
+		printf '%s' "$secret" > "$private.new.$$" &&
+		chmod 600 "$staged" "$private.new.$$" &&
+		{ [ "$old_public" = 0 ] || cp -p "$cache" "$cache.old.$$"; } &&
+		{ [ "$old_private" = 0 ] || cp -p "$private" "$private.old.$$"; }
+	); then
+		rm -f "$private.new.$$" "$cache.old.$$" "$private.old.$$"; return 1
+	fi
+	if mv "$private.new.$$" "$private" && mv "$staged" "$cache"; then
+		rm -f "$cache.old.$$" "$private.old.$$"; return 0
+	fi
+	if [ "$old_public" = 1 ]; then cp -p "$cache.old.$$" "$cache" || restored=0; else rm -f "$cache" || restored=0; fi
+	if [ "$old_private" = 1 ]; then cp -p "$private.old.$$" "$private" || restored=0; else rm -f "$private" || restored=0; fi
+	# Never leave an uncertain mixed pair available for later adoption.
+	[ "$restored" = 1 ] || rm -f "$cache" "$private"
+	rm -f "$private.new.$$" "$cache.old.$$" "$private.old.$$"
+	return 1
 }

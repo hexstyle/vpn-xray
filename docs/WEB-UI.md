@@ -46,16 +46,25 @@ Behavior:
 - `Check & Configure VPS`
   - runs as a detached router job and exposes progress by polling
   - verifies SSH, installs the router-managed key using the one-shot password,
-    inspects the live VPS, then installs or repairs Xray when required
+    inspects the live VPS, installs or repairs Xray when required, then applies
+    that selected configuration to the router and checks the actual live path
 - `Apply Profile to Router`
   - becomes available only after the selected profile matches a successfully
     inspected VPS and differs from the live router target
   - runs a detached cutover, validates the VPS certificate, egress IP and
-    ChatGPT, and restores the previous config and certificate on failure
+    ChatGPT; local write/runtime failures restore the previous config and certificate.
+    External health failure retains the valid selected configuration and reports
+    applied-but-unhealthy
 - every successful VPS inspection refreshes the read-only Xray values from the
   live VPS; only an empty VPS receives newly generated material
 - `Check & Configure VPS` uses that VPS-authoritative identity for remote repair;
-  `Apply Profile to Router` is the separate explicit disruptive operation
+  both Repair and Apply are detached disruptive operations with one shared lock.
+  A lost scheduling reply is retried with the same request ID and rejoins the
+  original job; per-step server failures remain visible in Apply results.
+  Apply polling follows the accepted job ID, so a later request cannot replace
+  the result being displayed; headless requests also receive their own job ID.
+  The one-shot password is cleared after submission independently of health.
+  Save/select alone do not apply; job results separate application from health
 
 ### `Live State`
 

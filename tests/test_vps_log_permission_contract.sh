@@ -4,6 +4,12 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 REMOTE_INSTALL="$ROOT/vps/debian-13/files/install-vps.remote.sh"
+# Inspect the same assembled source delivered by both production renderers.
+. "$ROOT/vps/debian-13/render-template.sh"
+ASSEMBLED_INSTALL="$(mktemp)"
+trap 'rm -f "$ASSEMBLED_INSTALL"' EXIT
+vps_template_source "$REMOTE_INSTALL" > "$ASSEMBLED_INSTALL"
+REMOTE_INSTALL="$ASSEMBLED_INSTALL"
 
 fail() {
 	printf 'FAIL: %s\n' "$1" >&2

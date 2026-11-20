@@ -28,7 +28,7 @@ awk '/init-env.sh/ { init = NR } /adopt-vps-meta.sh/ { adopt = NR }
 grep -q 'VPS_REMOTE_META_PATH' "$ADOPT_SH" \
 	|| fail "adopt-vps-meta must read the VPS managed meta path"
 
-for key in XRAY_UUID XRAY_PRIVATE_KEY XRAY_PUBLIC_KEY XRAY_SHORT_ID XRAY_SERVER_NAME XRAY_PORT; do
+for key in XRAY_UUID XRAY_PRIVATE_KEY XRAY_PUBLIC_KEY XRAY_SHORT_ID XRAY_SERVER_NAME XRAY_PORT XRAY_DIAL_MODE XRAY_WS_PATH; do
 	grep -q "adopt $key " "$ADOPT_SH" \
 		|| fail "adopt-vps-meta must adopt $key from the VPS managed meta"
 done
@@ -61,6 +61,7 @@ EOF
 mkdir -p "$tmpdir/bin"
 cat > "$tmpdir/bin/ssh" <<'EOF'
 #!/bin/sh
+case "$*" in *config.json*) exit 0;; esac
 cat <<'META'
 PROFILE_ID=debian-13
 XRAY_HOST=10.99.0.2

@@ -48,7 +48,18 @@ if ! meta="$(ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" \
 fi
 
 meta_value() {
-  printf '%s\n' "$meta" | sed -n "s/^$1=//p" | sed -n '1p'
+  META_DATA="$meta" python3 - "$1" <<'PYMETA'
+import os, shlex, sys
+raw = next((line.split('=', 1)[1] for line in os.environ['META_DATA'].splitlines()
+            if line.startswith(sys.argv[1] + '=')), '')
+try:
+    values = shlex.split(raw, comments=False)
+except ValueError:
+    raise SystemExit('adopt-vps-meta: invalid quoted metadata field ' + sys.argv[1])
+if len(values) > 1:
+    raise SystemExit('adopt-vps-meta: invalid metadata field ' + sys.argv[1])
+print(values[0] if values else '')
+PYMETA
 }
 
 meta_uuid="$(meta_value XRAY_UUID)"
@@ -63,17 +74,48 @@ if [[ -z "$meta_uuid" || -z "$meta_private_key" || -z "$meta_short_id" ]]; then
   exit 0
 fi
 
+meta_dial_mode="$(meta_value XRAY_DIAL_MODE)"
+meta_dial_mode="${meta_dial_mode:-direct}"
+case "$meta_dial_mode" in direct|ssh_tunnel) ;; *) echo 'adopt-vps-meta: invalid remote XRAY_DIAL_MODE' >&2; exit 1 ;; esac
+meta_ws_path="$(meta_value XRAY_WS_PATH)"
+if [[ -z "$meta_ws_path" ]]; then
+  live_config="$(ssh "${VPS_SSH_OPTS[@]}" "$VPS_SSH" "cat '${VPS_XRAY_CONFIG_PATH:?}' 2>/dev/null || true")"
+  meta_ws_path="$(LIVE_CONFIG="$live_config" python3 - <<'PYPATH'
+import json, os
+raw = os.environ['LIVE_CONFIG']
+try:
+    cfg = json.loads(raw) if raw.strip() else {}
+    print((((cfg.get('inbounds') or [{}])[0].get('streamSettings') or {}).get('wsSettings') or {}).get('path') or '/cdn')
+except (ValueError, AttributeError, TypeError):
+    raise SystemExit('adopt-vps-meta: cannot read live WS path')
+PYPATH
+)"
+fi
+case "$meta_ws_path" in /*) ;; *) echo 'adopt-vps-meta: invalid remote XRAY_WS_PATH' >&2; exit 1 ;; esac
+[[ "$meta_ws_path" != *$'\n'* && "$meta_ws_path" != *$'\r'* ]] || { echo 'adopt-vps-meta: multiline WS path rejected' >&2; exit 1; }
+
 adopted=0
 adopt() {
   local name="$1" value="$2" current
   [[ -n "$value" ]] || return 0
+  # Persist shell syntax only after quoting the data; never source remote meta.
+  value="$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$value")"
   current="$(sed -n "s/^${name}=//p" "$ENV_FILE" | sed -n '1p')"
   if [[ "$current" != "$value" ]]; then
-    persist_env_value "$name" "$value"
+    python3 - "$ENV_FILE" "$name" "$value" <<'PYSAVE'
+import pathlib, sys
+path, key, value = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+lines = path.read_text().splitlines()
+updated = [key + '=' + value if line.startswith(key + '=') else line for line in lines]
+if not any(line.startswith(key + '=') for line in lines): updated.append(key + '=' + value)
+path.write_text('\n'.join(updated) + '\n')
+PYSAVE
     adopted=1
   fi
 }
 
+adopt XRAY_DIAL_MODE "$meta_dial_mode"
+adopt XRAY_WS_PATH "$meta_ws_path"
 adopt XRAY_UUID "$meta_uuid"
 adopt XRAY_PRIVATE_KEY "$meta_private_key"
 adopt XRAY_PUBLIC_KEY "$meta_public_key"
@@ -83,12 +125,7 @@ adopt XRAY_PORT "$meta_port"
 
 if [[ "$adopted" == "1" ]]; then
   echo "adopt-vps-meta: adopted existing VPS keys into $ENV_FILE:"
-  echo "  XRAY_UUID=$meta_uuid"
-  echo "  XRAY_SERVER_NAME=$meta_server_name"
-  echo "  XRAY_PORT=$meta_port"
-  echo "  XRAY_SHORT_ID=$meta_short_id"
-  echo "  XRAY_PUBLIC_KEY=$meta_public_key"
-  echo "  XRAY_PRIVATE_KEY=<taken from VPS managed meta>"
+  echo "  Endpoint identity, dial mode and WS path preserved from VPS."
 else
   echo "adopt-vps-meta: install.env already matches the VPS managed meta."
 fi

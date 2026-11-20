@@ -56,16 +56,19 @@ ensure_profile_store() {
 
 remote_inspect_output() {
 	local profile_id="$1"
-	local vps_profile meta_path config_path expected_server_port
+	local vps_profile meta_path config_path expected_server_port binary_path
 
 	vps_profile="$(selected_vps_profile "$profile_id")"
 	meta_path="$(vps_profile_value "$vps_profile" VPS_REMOTE_META_PATH)"
 	config_path="$(vps_profile_value "$vps_profile" VPS_XRAY_CONFIG_PATH)"
+	binary_path="$(vps_profile_value "$vps_profile" VPS_XRAY_BINARY)"
+	case "$binary_path" in /*) ;; *) return 1;; esac
+	case "$binary_path" in *[!A-Za-z0-9_./-]*) return 1;; esac
 	expected_server_port="$(profile_get "$profile_id" server_port)"
 	[ -n "$meta_path" ] || meta_path='/usr/local/etc/xray/codex-router-meta.env'
 	[ -n "$config_path" ] || config_path='/usr/local/etc/xray/config.json'
 
-	ssh_cmd "$profile_id" "REMOTE_META_PATH='$meta_path' REMOTE_CONFIG_PATH='$config_path' EXPECTED_SERVER_PORT='$expected_server_port' sh -s" <<'EOF'
+	ssh_read_cmd "$profile_id" "REMOTE_META_PATH='$meta_path' REMOTE_CONFIG_PATH='$config_path' EXPECTED_SERVER_PORT='$expected_server_port' PROVISION_BINARY='$binary_path' sh -s" <<'EOF'
 line() {
 	printf '%s=%s\n' "$1" "$2"
 }
@@ -98,17 +101,16 @@ disk_root_v="$(df -h / 2>/dev/null | sed -n '2p' | sed 's/[[:space:]]\+/ /g' || 
 uptime_v="$(uptime 2>/dev/null | sed 's/[[:space:]]\+/ /g' || true)"
 ipinfo_v="$(timeout 10 curl -4fsS --max-time 8 https://ipinfo.io/json 2>/dev/null | tr -d '\n' || true)"
 public_ip_v="$(timeout 10 curl -4fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)"
-xray_bin=''
-for p in /usr/local/bin/xray /usr/bin/xray; do
-	[ -x "$p" ] && {
-		xray_bin="$p"
-		break
-	}
-done
-xray_present='0'
-[ -n "$xray_bin" ] && xray_present='1'
-xray_version_v=''
-[ -n "$xray_bin" ] && xray_version_v="$($xray_bin version 2>/dev/null | sed -n '1p')"
+# This is the executable the selected provisioning script will invoke.
+xray_bin="$PROVISION_BINARY"
+xray_present='0'; xray_runnable='0'; xray_version_v=''
+if [ -x "$xray_bin" ]; then
+	xray_present=1
+	if xray_version_v="$("$xray_bin" version 2>/dev/null)"; then
+		[ -z "$xray_version_v" ] || xray_runnable=1
+	fi
+	xray_version_v="$(printf '%s\n' "$xray_version_v" | sed -n '1p')"
+fi
 xray_service_v=''
 command -v systemctl >/dev/null 2>&1 && xray_service_v="$(systemctl is-active xray 2>/dev/null || true)"
 listener_443_v="$(ss -ltnp 2>/dev/null | grep ':443 ' | tr '\n' ';' || true)"
@@ -124,6 +126,9 @@ remote_flow=''
 remote_dial_mode=''
 remote_transport_net=''
 remote_transport_sec=''
+live_uuid=''
+live_port=''
+live_ws_path=''
 
 # Always read the live transport the VPS serves from its config, even when
 # meta.env supplies the identity fields — meta.env does not carry the
@@ -137,6 +142,10 @@ try:
         cfg = json.load(fh)
     ib = (cfg.get('inbounds') or [{}])[0]
     st = ib.get('streamSettings') or {}
+    client = ((ib.get('settings') or {}).get('clients') or [{}])[0]
+    print('live_uuid=%s' % shlex.quote(str(client.get('id') or '')))
+    print('live_port=%s' % shlex.quote(str(ib.get('port') or '')))
+    print('live_ws_path=%s' % shlex.quote(str((st.get('wsSettings') or {}).get('path') or '')))
     print("remote_transport_net=%s" % shlex.quote(str(st.get('network') or '')))
     print("remote_transport_sec=%s" % shlex.quote(str(st.get('security') or '')))
 except Exception:
@@ -256,6 +265,8 @@ line REMOTE_UPTIME "$uptime_v"
 line REMOTE_PUBLIC_IP "$public_ip_v"
 line REMOTE_IPINFO_JSON "$ipinfo_v"
 line REMOTE_XRAY_PRESENT "$xray_present"
+line REMOTE_XRAY_BINARY "$xray_bin"
+line REMOTE_XRAY_RUNNABLE "$xray_runnable"
 line REMOTE_XRAY_VERSION "$xray_version_v"
 line REMOTE_XRAY_SERVICE "$xray_service_v"
 line REMOTE_LISTENER_PORT "$listener_port_v"
@@ -269,45 +280,60 @@ line REMOTE_private_key "$remote_private_key"
 line REMOTE_short_id "$remote_short_id"
 line REMOTE_flow "$remote_flow"
 line REMOTE_dial_mode "$remote_dial_mode"
+line REMOTE_LIVE_UUID "$live_uuid"
+line REMOTE_LIVE_PORT "$live_port"
+line REMOTE_LIVE_WS_PATH "$live_ws_path"
 line REMOTE_TRANSPORT_NET "$remote_transport_net"
 line REMOTE_TRANSPORT_SEC "$remote_transport_sec"
+line REMOTE_INSPECTION_COMPLETE 1
 EOF
 }
 
 refresh_remote_cache() {
-	local profile_id="$1"
-	local output public_output private_key cache install_profile install_label install_supported install_notes tmp_cache
-
-	output="$(remote_inspect_output "$profile_id" 2>/dev/null || true)"
-	if [ -z "$output" ] || ! printf '%s' "$output" | grep -q '^REMOTE_STATUS=ok'; then
-		return 1
+	local profile_id="$1" output public_output private_key cache tmp_cache started rc=0
+	local install_profile install_label install_supported install_notes old_at old_status
+	INSPECTION_ERROR=''
+	cache="$(profile_cache_path "$profile_id")"
+	tmp_cache="$(mktemp "$cache.inspect.XXXXXX")" || { INSPECTION_ERROR='cannot stage inspection cache'; return 1; }
+	started="$(date +%s)"
+	remote_inspect_output "$profile_id" > "$tmp_cache" 2>/dev/null || rc=$?
+	[ -z "${SSH_RAW_LOG_PATH:-}" ] || printf 'authoritative inspection elapsed=%ss exit=%s kind=%s\n' "$(($(date +%s)-started))" "$rc" "${SSH_FAILURE_KIND:-ok}" >> "$SSH_RAW_LOG_PATH"
+	if [ "$rc" -ne 0 ]; then
+		INSPECTION_ERROR="${SSH_FAILURE_KIND:-control read} (exit $rc)"
+		rm -f "$tmp_cache"; return "$rc"
 	fi
-
+	output="$(cat "$tmp_cache")" || { rm -f "$tmp_cache"; INSPECTION_ERROR='cannot read staged inspection'; return 1; }
+	if ! printf '%s\n' "$output" | grep -qx 'REMOTE_STATUS=ok' ||
+		[ "$(printf '%s\n' "$output" | tail -n 1)" != REMOTE_INSPECTION_COMPLETE=1 ]; then
+		rm -f "$tmp_cache"; INSPECTION_ERROR='incomplete inspection snapshot'; return 1
+	fi
 	private_key="$(printf '%s\n' "$output" | sed -n 's/^REMOTE_private_key=//p' | sed -n '1p')"
 	public_output="$(printf '%s\n' "$output" | grep -v '^REMOTE_private_key=' || true)"
-	private_cache_set "$profile_id" "$private_key"
-	write_cache "$profile_id" "$public_output"
-	cache="$(profile_cache_path "$profile_id")"
-	IFS='|' read -r install_profile install_label install_supported install_notes <<EOF
-$(remote_install_support "$profile_id" "$cache")
+	if printf '%s\n' "$public_output" > "$tmp_cache" &&
+		output="$(remote_install_support "$profile_id" "$tmp_cache")"; then
+		IFS='|' read -r install_profile install_label install_supported install_notes <<EOF
+$output
 EOF
-	tmp_cache="$(mktemp)"
-	cat "$cache" > "$tmp_cache"
-	printf 'REMOTE_INSTALL_PROFILE=%s\n' "$install_profile" >> "$tmp_cache"
-	printf 'REMOTE_INSTALL_LABEL=%s\n' "$install_label" >> "$tmp_cache"
-	printf 'REMOTE_INSTALL_SUPPORTED=%s\n' "$install_supported" >> "$tmp_cache"
-	printf 'REMOTE_INSTALL_NOTES=%s\n' "$install_notes" >> "$tmp_cache"
-	mv "$tmp_cache" "$cache"
-	profile_set "$profile_id" last_inspect_status 'ok'
-	profile_set "$profile_id" last_inspect_at "$(date +%s)"
-	uci commit "$PROFILE_PACKAGE"
-	# Every successful inspection adopts the VPS identity. The actions lib is
-	# sourced before request dispatch, so this function is available at run
-	# time even though its definition appears in the next sourced file.
-	if [ -n "$(cache_get "$cache" REMOTE_uuid)" ]; then
-		adopt_remote_into_profile "$profile_id"
+		if printf 'REMOTE_INSTALL_PROFILE=%s\nREMOTE_INSTALL_LABEL=%s\nREMOTE_INSTALL_SUPPORTED=%s\nREMOTE_INSTALL_NOTES=%s\n' \
+			"$install_profile" "$install_label" "$install_supported" "$install_notes" >> "$tmp_cache" &&
+			publish_inspection_cache "$profile_id" "$tmp_cache" "$private_key"; then
+			if [ -n "$(cache_get "$cache" REMOTE_uuid)" ]; then
+				adopt_remote_into_profile "$profile_id" || { INSPECTION_ERROR='profile adoption failed'; return 1; }
+			fi
+			old_at="$(profile_get "$profile_id" last_inspect_at)"
+			old_status="$(profile_get "$profile_id" last_inspect_status)"
+			profile_set "$profile_id" last_inspect_at "$(date +%s)" &&
+				profile_set "$profile_id" last_inspect_status ok && uci commit "$PROFILE_PACKAGE" && return 0
+			if [ -n "$old_at" ]; then profile_set "$profile_id" last_inspect_at "$old_at"; else profile_del "$profile_id" last_inspect_at; fi
+			if [ -n "$old_status" ]; then profile_set "$profile_id" last_inspect_status "$old_status"; else profile_del "$profile_id" last_inspect_status; fi
+			uci commit "$PROFILE_PACKAGE"
+			INSPECTION_ERROR='inspection freshness update failed'; return 1
+		fi
 	fi
-	return 0
+	rm -f "$tmp_cache"
+	INSPECTION_ERROR='inspection cache publication failed; previous snapshot was not adopted'
+	[ -z "${SSH_RAW_LOG_PATH:-}" ] || printf '%s\n' "$INSPECTION_ERROR" >> "$SSH_RAW_LOG_PATH"
+	return 1
 }
 
 resync_runtime_to_switch() {
@@ -316,7 +342,7 @@ resync_runtime_to_switch() {
 	switch_state="$(current_switch_state)"
 	[ "$switch_state" = 'on' ] || switch_state='off'
 	if [ -x /etc/gl-switch.d/xray.sh ]; then
-		/etc/gl-switch.d/xray.sh "$switch_state" >/dev/null 2>&1 || return 1
+		vx_run_with_timeout 3 /etc/gl-switch.d/xray.sh "$switch_state" >/dev/null 2>&1 || return 1
 	fi
 	tries=0
 	while [ "$tries" -lt "$SWITCH_SYNC_WAIT_SECONDS" ]; do

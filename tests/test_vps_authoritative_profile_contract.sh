@@ -74,22 +74,22 @@ grep -q 'callApi(vpsApi, "save_profile", formPayload()' "$APP7" \
 	|| fail "Save VPS Access must call the save_profile backend"
 grep -q 'diagnose_repair_status' "$ROOT/routers/common/files/xray-app-6.js" \
 	|| fail "Check & Configure VPS must poll the detached repair job"
-grep -q 'callApi(vpsApi, "apply_router"' "$APP7" \
+grep -q 'scheduleVpsOperation("apply_router"' "$APP7" \
 	|| fail "Apply Profile to Router must call the detached apply backend"
 grep -q 'apply_router_status' "$APP7" \
 	|| fail "Apply Profile to Router must poll its detached job"
 grep -A20 '^    async function selectProfile' "$ROOT/routers/common/files/xray-app-6.js" \
 	| grep -A2 'endForegroundTask();' | grep -q 'renderAll(false);' \
 	|| fail "profile selection must re-render Apply after clearing foregroundBusy"
-grep -q 'Live Target is unchanged until Apply Profile to Router succeeds' "$ROOT/routers/common/files/xray-app-6.js" \
-	|| fail "profile selection must explain that Target changes only after Apply"
+grep -q 'Live Target changes when Apply or Check & Configure VPS applies this profile' "$ROOT/routers/common/files/xray-app-6.js" \
+	|| fail "profile selection must explain that selection alone does not apply"
 for html in "$ASUS_HTML" "$GL_HTML"; do
 	grep -q 'xray-app-6.js?v=' "$html" \
 		|| fail "split UI assets must be versioned so browsers cannot retain the broken Apply handler"
 done
 grep -q "XRAY_VPS_JOB='diagnose_repair'" "$ROOT/routers/common/files/xray-vps-setup.sh" \
 	|| fail "VPS repair must be scheduled outside the CGI request"
-grep -q 'start-stop-daemon.*</dev/null >/dev/null 2>&1 9>&-' "$ROOT/routers/common/files/xray-vps-setup.sh" \
+grep -q 'start-stop-daemon.*</dev/null >/dev/null 2>&1 6>&- 9>&-' "$ROOT/routers/common/files/xray-vps-setup.sh" \
 	|| fail "detached VPS/apply jobs must not inherit CGI stdio or the scheduler flock"
 grep -q 'schedule_router_apply_action' "$ROOT/routers/asus-tuf-ax4200-openwrt/files/xray-vps.cgi" \
 	|| fail "the apply_router CGI action must only schedule the cutover"
@@ -159,8 +159,8 @@ grep -q 'XRAY_DIAL_MODE:-direct' "$ROOT/routers/common/files/xray-vps-inspect.sh
 	|| fail "legacy VPS metadata must normalize an absent dial mode to direct"
 grep -q 'for value in server_port server_name uuid public_key short_id flow dial_mode' "$ROOT/routers/common/files/xray-vps-actions.sh" \
 	|| fail "router profile must adopt VPS-authoritative dial mode"
-grep -q 'verify_profile_candidate' "$ROOT/routers/common/files/xray-vps-setup.sh" \
-	|| fail "router apply must verify an isolated candidate before cutover"
+! grep -q 'verify_profile_candidate' "$ROOT/routers/common/files/xray-vps-setup.sh" \
+	|| fail "external candidate health must not block selected configuration application"
 ! grep -q '^[[:space:]]*\. "\$CONFIG"' "$ROOT/routers/common/files/codex-xray-tunnel.init" \
 	|| fail "the supervised tunnel must parse, not source, profile-derived config"
 grep -q 'start-stop-daemon -K -p "\$pidfile"' "$ROOT/routers/common/files/xray-vps-verify.sh" \

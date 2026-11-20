@@ -107,7 +107,7 @@ render_router_config() {
           ]
         },
         "wsSettings": {
-          "path": "${ws_path}",
+          "path": "$(json_escape "$ws_path")",
           "host": "${server_name}"
         }
       },
@@ -144,6 +144,7 @@ render_vps_profile_template() {
 	local vps_xray_binary vps_xray_config_dir vps_xray_config_path vps_xray_log_dir vps_xray_service vps_remote_meta_path
 	local vps_tls_cert_path vps_tls_key_path xray_ws_path
 	local xray_client_flow_block
+	local assembled="$output.source.$$" rc=0
 
 	vps_profile="$(selected_vps_profile "$profile_id")"
 	xray_port="$(profile_get "$profile_id" server_port)"
@@ -181,6 +182,13 @@ render_vps_profile_template() {
 		xray_client_flow_block="$(printf ',\n            "flow": "%s"' "$xray_flow")"
 	fi
 
+	if [ "${template_path##*/}" = install-vps.remote.sh ]; then
+		[ -r "$VPS_PROFILE_ROOT/$vps_profile/render-template.sh" ] || { rm -f "$output"; return 1; }
+		. "$VPS_PROFILE_ROOT/$vps_profile/render-template.sh" || return 1
+		vps_template_source "$template_path" > "$assembled" || { rm -f "$assembled" "$output"; return 1; }
+	else
+		cp "$template_path" "$assembled" || { rm -f "$assembled" "$output"; return 1; }
+	fi
 	sed \
 		-e "s|\${XRAY_PORT}|$(template_escape "$xray_port")|g" \
 		-e "s|\${XRAY_FLOW}|$(template_escape "$xray_flow")|g" \
@@ -197,8 +205,12 @@ render_vps_profile_template() {
 		-e "s|\${VPS_REMOTE_META_PATH}|$(template_escape "$vps_remote_meta_path")|g" \
 		-e "s|\${VPS_TLS_CERT_PATH}|$(template_escape "$vps_tls_cert_path")|g" \
 		-e "s|\${VPS_TLS_KEY_PATH}|$(template_escape "$vps_tls_key_path")|g" \
-		-e "s|\${XRAY_WS_PATH}|$(template_escape "$xray_ws_path")|g" \
-		"$template_path" > "$output"
+		-e "s|\${XRAY_WS_PATH}|$(template_escape "$(json_escape "$xray_ws_path")")|g" \
+		"$assembled" > "$output" || rc=$?
+	rm -f "$assembled"
+	if [ "$rc" -ne 0 ] || grep -q '[$][{][A-Z0-9_]*[}]' "$output"; then
+		rm -f "$output"; return 1
+	fi
 }
 
 render_server_config() {
@@ -210,17 +222,19 @@ render_server_config() {
 	template_rel="$(vps_profile_value "$vps_profile" VPS_SERVER_CONFIG_TEMPLATE)"
 	template_path="$(vps_profile_file_path "$vps_profile" "$template_rel")"
 	[ -f "$template_path" ] || return 1
-	render_vps_profile_template "$profile_id" "$template_path" "$path"
+	render_vps_profile_template "$profile_id" "$template_path" "$path" || return 1
 	chmod 600 "$path"
 }
 
 render_remote_meta() {
 	local path="$1"
 	local profile_id="$2"
-	local dial_mode
+	local dial_mode ws_path
 
 	dial_mode="$(profile_get "$profile_id" dial_mode)"
 	[ -n "$dial_mode" ] || dial_mode='direct'
+	ws_path="$(profile_get "$profile_id" ws_path)"
+	[ -n "$ws_path" ] || ws_path='/cdn'
 
 	cat > "$path" <<EOF
 PROFILE_ID=${profile_id}
@@ -233,6 +247,7 @@ XRAY_PRIVATE_KEY=$(profile_get "$profile_id" private_key)
 XRAY_PUBLIC_KEY=$(profile_get "$profile_id" public_key)
 XRAY_FLOW=$(profile_get "$profile_id" flow)
 XRAY_DIAL_MODE=$dial_mode
+XRAY_WS_PATH='$(printf '%s' "$ws_path" | sed "s/'/'\\\\''/g")'
 EOF
 	chmod 600 "$path"
 }

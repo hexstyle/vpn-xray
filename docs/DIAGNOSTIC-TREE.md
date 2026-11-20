@@ -34,8 +34,9 @@ Meta-rules (enforced by review):
    plus a raw log the operator can expand. Silence is a defect.
 4. `skipped` is for "cannot act safely and existing state is serviceable";
    `failed` is only for "the stack is actually broken here".
-5. A repair never regresses a working layer to fix a broken one
-   (e.g. never restarts the router dataplane to fix a VPS-side issue).
+5. A repair never regresses a working layer to fix a broken one.
+   A requested selected-profile Apply or Repair may replace stale router config
+   through node 8.2; an identical healthy local runtime is not restarted.
 6. A recursive filesystem op (`chown -R`, `rm -rf`, `chmod -R`) must first
    assert its target is a non-empty absolute path under the expected root;
    otherwise skip and report, never act on the fallback (`.` / `/`).
@@ -163,14 +164,64 @@ ip route get <VPS_IP>       # which uplink the VPS pin follows
   the same destination get `Connection refused`/`Operation timed out` from the
   repeater while a single connect succeeds (observed on apcli0, 2026-07-09).
   Environmental constraint, not a fault. Mitigate in code: bound the retry
-  storm — `ConnectTimeout=6`, `ConnectionAttempts=2`, a wrapper retry of 2 with
-  a 2 s gap (see `ssh_works`). This caps worst-case latency so a rate-limited
+  storm — `ConnectTimeout=6`, one connect attempt, and at most two read-only
+  RPC attempts with a 1 s gap (node 3.4a). This caps latency so a rate-limited
   uplink cannot push a request past the UI timeout, while still absorbing a
   single burst rejection. Note: SSH `ControlMaster` multiplexing was tried and
   **reverted** — it left stale control sockets under `/tmp` on the router that
   accumulated and were worse than the burst itself; do not reintroduce it as a
   mitigation. Do **not** diagnose "VPS down" from a burst-context refusal —
   verify with a single isolated probe after a pause first (node 5.2).
+
+- 3.4a **Established control SSH stalls while the managed tunnel works**:
+  R8 Repair spent 81 s on an inspection timeout; another run executed the
+  server pipeline but exhausted its 170 s deadline during re-inspection.
+  The stalled remote shell waited in `pipe_read`, while a fresh SSH flow showed
+  retransmits/cwnd=1; this does not identify a provider or filtering cause.
+  Native control SSH uses ServerAliveInterval=5/ServerAliveCountMax=2, preserving
+  legitimate quiet commands whose SSH peer responds. Read-only auth, inspection
+  and certificate RPCs get at most two attempts, only on classified transport
+  loss, with separate output per attempt and unchanged global deadline.
+  Inspection has a 35 s attempt cap (including its two bounded HTTP inventory
+  probes); auth/certificate reads use 15 s. Command timeout, authentication and
+  host-key errors are distinct, not reasons to prompt for a password on loss.
+  Require successful SSH exit and a final inspection-complete marker before
+  publishing/adopting a cache. Mutating upload/install/key operations never
+  replay after uncertain execution or a lost report, even if stdout is empty.
+  Risk: read-only transport repair is `safe`; provisioning keeps its existing
+  disruptive owner. Verify a quiet command, transport-failed then complete
+  inspection, no partial adoption, authentication refusal, and exactly one
+  mutating pipeline call after response loss. Then repeat only failed Repair.
+  Password key bootstrap uses the same keepalive/classification owner, exactly
+  once; a preceding key refusal must not turn its later transport/host-key
+  failure into a password prompt. Exit 255 can also be the remote command's
+  exit status; sshpass likewise passes through child exits 5/6/7. Neither those
+  codes nor auth-looking remote stderr prove pre-execution authentication
+  refusal. Separate native OpenSSH client diagnostics with `-E` (ERROR level)
+  from remote stderr. Only its terminal `user@host: Permission denied (...)`
+  diagnostic permits identity fallback; remote/disconnect outcomes never do.
+  Verify an executed payload returning auth-looking stderr and 255, loss after
+  execution, password child 5/6/7, and genuine refusal followed by one execution
+  through the bootstrap identity. Preserve stdin, closed lock FDs and log cleanup.
+  With password + keyboard-interactive enabled, sshpass can reject a second
+  password prompt (exit 5) before OpenSSH's terminal refusal. For password RPCs,
+  native DEBUG2 authentication phases distinguish that pre-auth prompt from
+  successful authentication followed by child exit 5/6/7. Require the complete
+  prompt phase and a readable/writable private diagnostic file; missing,
+  incomplete or failed logging is not proof of bad credentials. Keep debug
+  command/key details out of the bounded public raw log. Verify the genuine
+  early exit through the existing stdio protocol fixture, emitter and UI, with
+  remote-child and uncertain-log cases alongside it. No extra SSH connection.
+  Keep the combined diagnostic log through
+  post-provision inspection and serialize its actual failure at the terminal.
+  Validate every pipeline JSONL row (including an incomplete final row) before
+  embedding it in a response; malformed/truncated reports are explicit failures,
+  with bounded escaped raw diagnostics and no mutation replay. Validate the
+  worker's complete JSON response before publishing it for polling.
+  Stage the public/private inspection cache together, check every write and
+  publication, and restore the previous pair on publication failure before
+  allowing adoption/freshness. Verify these errors through the actual worker
+  and polling consumer with controlled SSH/filesystem leaves, under set +e.
 
 **Verify**: `curl --interface <dev> https://api.ipify.org` from the router.
 
@@ -395,9 +446,18 @@ python3 socket connect <VPS>:443                                  # data
   client dials loopback while status/coherence continue to report the VPS
   endpoint. The tunnel uses the profile's managed key, starts before Xray,
   respawns, and is removed automatically for direct profiles. Verify the
-  isolated candidate through that same hop before cutover. A client config
+  live path through that same hop after validated application (node 8.2);
+  an isolated candidate is an optional diagnostic. A client config
   cutover remains `disruptive`; never change the uplink MTU or LAN bridge as a
   shortcut.
+  A similar failure on 2026-11-19 also affected SSH: the selected
+  38.180.11.240 VPS served complete responses locally, but direct candidate
+  responses stalled after HTTP 200 with growing VPS send queues and TCP
+  retransmissions. The SSH candidate also failed. This does **not** establish
+  protocol-specific filtering or justify an automatic SSH fallback. Compare
+  bounded bulk transfers over the actual router and workstation LAN paths,
+  including per-connection MSS, before choosing a repair; never change LAN or
+  uplink MTU based only on a partial response.
   If a listener-port move is still required, change it on the **VPS first**,
   update managed metadata and host firewall in the same transaction, verify
   local TLS, then re-inspect/adopt it on the router with a rollback backup.
@@ -438,7 +498,45 @@ order; all steps always run (report completeness beats fail-fast).
 | 6.8 | `runtime` | unit active AND port bound ≤15s | `reset-failed` + `enable` + `restart` | `reset-failed` is mandatory: a unit failed with `RestartPreventExitStatus` silently ignores plain restart |
 | 6.9 | `tcp_capacity` | kernel log has no recent `TCP: out of memory`; TCP memory watermarks are sane for the host | install bounded TCP memory sysctls derived from RAM and reload them | A live listener and successful one-shot probe can hide intermittent WebSocket/TLS failures when the kernel refuses new TCP allocations. Tell: repeated real proxy requests lose individual connections while `journalctl -k` records `TCP: out of memory` and ordinary userspace RAM is still available. Diagnose socket/slab counts and `net.ipv4.tcp_mem`; do not treat this as Xray config drift. The rendered VPS config also sets an explicit level-0 `connIdle` timeout so abandoned destination sockets cannot accumulate indefinitely. Repair is `safe` when only raising an abnormally low TCP budget within a RAM-bounded ceiling; applying the config remains `disruptive` under 6.8 because it restarts Xray. Verify with a repeated router-proxy request set, bounded socket count, and a clean post-repair kernel log. |
 
+Node 6.9 also owns native BBR availability, runtime selection and boot persistence.
+On 2026-11-19, the actual 38.180.11.240:443 managed SSH-tunnel path with BBR
+completed three router-origin ChatGPT bodies (739300/738603/738523 bytes), with
+matching VPS egress. Direct ports 443/8443/80, CS1 marking, and direct BBR did
+not restore complete transfers. Earlier Cubic SSH had one complete response
+followed by truncation; the evidence supports the working combination, not BBR
+as a proven sole cause or attribution to a provider/filter.
+Probe the native available algorithms; load the already-installed `tcp_bbr`
+module if needed, then verify availability. Never fetch a kernel/package or
+claim success for an unavailable algorithm. BBR is optional: if native support
+is unavailable, preserve the current algorithm, repair memory watermarks, and
+explicitly report BBR skipped/unavailable. This alone must not block profile
+application; strict live-path health still decides connectivity. When BBR is
+available, persistence, application or readback errors remain failures.
+Preserve nondecreasing RAM-derived memory watermarks, persist the selected
+settings and native module loading, and verify runtime values, file contents
+and ownership even when runtime already uses BBR. TCP staging cleanup removes
+only its two known files and its own empty directory, never recursively.
+Changing the default for new TCP connections is `disruptive`: only the existing
+detached repair/install owner performs it; existing qdisc, routes, TOS, MTU,
+IPv6 and SSH management settings stay unchanged. Verify persistence via the
+assembled pipeline and repeat complete router-proxy responses; source tests do
+not prove a reboot or fresh VPS provision.
+The VPS installer remains one self-contained rendered script. Both renderers
+concatenate the declared source parts before placeholder substitution; missing
+parts or unresolved placeholders fail before upload, while JSON rendering stays
+on its existing path.
+
 Whole pipeline runs under `timeout 90` from the caller (meta-rule 1).
+
+The detached router recovery job repairs the VPS, re-inspects authoritative
+identity, then calls the same router apply owner as Apply/settings (node 8.2).
+Server success alone is not path success. The accepted profile and action are
+fixed for the job, with one shared nonblocking mutation lock. Server repair,
+application, and complete-response health have separate results. The existing
+170-second job budget includes SSH and checks (remote pipeline at most 90s,
+UI wait 180s); reserve 120s for bounded transport/runtime/rollback before
+changing files. A slow server repair may therefore refuse a cutover with an
+actionable budget error; an identical healthy local config needs no cutover.
 
 **Verify**: `runtime ok` + TLS probe from router (`curl --resolve <SNI>:443:<VPS_IP>`).
 Steps are ordered so a config/cert defect cannot mask a runtime failure, but
@@ -527,53 +625,73 @@ non-empty; or router dials wrong port/SNI (4.5).
   payload as soon as the detached process starts. Verify both buttons in a real
   browser against a new VPS: save must return without SSH, then configure must
   install the router-managed key, adopt or create VPS-owned Xray metadata, and
-  render the per-step report.
-- 8.2 **Profile authoritative, router stale**: rendering
-  `/etc/xray/codex-xray.json` + runtime restart —
-  `apply_profile_to_router_internal`. **`disruptive`** (hard cutover of the
-  transparent path). **A VPS repair NEVER applies this as a side effect**
-  (meta-rule 5). An earlier build auto-scheduled the apply whenever the
-  profile differed from the router; the profile had an empty `server_name`,
-  the render produced a config with an empty TLS `serverName`, and the
-  router then validated the VPS cert against the dial IP — which has no IP
-  SAN — so every tunnel dial failed (`x509: cannot validate certificate for
-  <IP> because it doesn't contain any IP SANs`, 2026-07-10) and clients lost
-  internet; reboot did not help because the broken config persisted.
-  `diagnose_repair` now only *reports* drift (`router_apply=drift_detected`);
-  the apply is a separate, explicit `Apply Profile to Router` operator action.
-  The control is enabled only after a successful VPS inspection/configuration
-  left no profile↔VPS drift, and it polls the detached router-apply job. Three
-  hard guards were
-  added: (a) `apply_profile_to_router_internal` refuses when
-  `server_name`/`server_address`/`uuid`/`server_port` are empty — `xray
-  -test` does not catch an empty serverName (it is valid syntax); (b) when
-  the apply *is* run explicitly, it stays a deferred background job (never
-  synchronous in a CGI request — that hung the router on 2026-07-09); (c) the
-  job fetches and validates the selected VPS TLS certificate before cutover,
-  then checks proxy egress and ChatGPT through the new runtime. A one-shot
-  success is insufficient: the candidate must first survive a bounded set of
-  real sequential and concurrent proxy requests without replacing the active
-  router config; otherwise an intermittently filtered endpoint can pass the
-  apply check and strand LAN clients seconds later. Any failure
-  restores both the previous router config and certificate before resync.
-  Detached launches must close stdin/stdout/stderr and the scheduler's flock
-  descriptor before `start-stop-daemon` forks. Otherwise the HTTP response
-  remains open and the new long-lived Xray process can inherit the flock,
-  making every later Apply request wait 60 seconds without ever scheduling.
-  UI tell: selecting a different verified profile changes `Profile`, but
-  clicking Apply creates no job and `Target` never changes. The profile-change
-  handler rendered while `foregroundBusy=true`, which disabled Apply, then
-  cleared busy without rendering again. Repair: after `endForegroundTask()`,
-  render once more so eligibility is recalculated from the newly selected
-  profile. Also version the split UI assets in `xray.html`: an already-open or
-  browser-cached old chunk can otherwise keep the broken handler after the
-  router has been updated, making an enabled-looking click create no backend
-  job. The selection confirmation must say explicitly that `Target` remains
-  unchanged until Apply succeeds. These are `safe` UI-state fixes; the
-  eventual apply remains the detached `disruptive` action described above.
-  Recovery when already broken: `scripts/revive-router.sh` (restores the
-  newest good backup or patches `serverName`/`host` to the cert CN, then
-  restarts). See also node R.4.
+  apply the selected configuration through node 8.2 and render the per-step report.
+- 8.2 **Profile authoritative, router stale**: Apply/settings and Repair must
+  apply the accepted selected profile via `apply_profile_to_router_internal`
+  in their detached worker (`disruptive`). The former candidate network gate
+  could preserve the old VPS indefinitely even when the selected identity and
+  local configuration were valid. Probe the actual endpoint before/after the
+  supported HTTP action, not just the selected profile label.
+  Re-inspect the VPS, require matching live/meta identity and listener port,
+  validate required endpoint/SNI/UUID/port, rendered config and certificate
+  before writing. Never generate identity to fill an invalid Apply input.
+  Check backups and writes. Preserve mode/switch intent, management and failsafe.
+  Roll back config/cert/transport only for write or local runtime failure;
+  claim `rolled_back` only after checked restoration, otherwise `unknown`.
+  External network failure alone leaves a valid selected configuration applied.
+  Report `router_apply=applied|unchanged|rolled_back|unknown` separately from
+  `path_health=ok|failed|not_checked|unknown`; applied/unhealthy is `ok:false`.
+  Verify egress and ChatGPT using complete curl bodies: HTTP200 plus timeout
+  is failure. Keep bounded per-request exit/status/bytes/error diagnostics.
+  The isolated candidate remains an optional diagnostic, never a write gate.
+  Serialize settings, Apply and Repair using the same transaction lock; do not
+  nest jobs. Close the transaction FD before daemon creation. Snapshot profile
+  and origin at acceptance, reject concurrent edits, report interrupted jobs
+  as unknown, and release lock/password/temp resources for retry. An identical
+  config/cert/transport with healthy local runtime must not restart services.
+  UI shows application versus health and real working state, with versioned
+  assets. Selection/save alone do not apply; Apply/settings and Repair do.
+  Review regressions: timeout must stop its owned process tree and reap its
+  direct child, with transaction FDs closed in commands; never signal a shared
+  process group. Adopt the inspected WS path before rendering both sides.
+  Skip the bundled binary only when the exact provisioning executable ran
+  successfully. Preserve server step reports in Apply/settings results. Clear
+  one-shot credentials independently of external health. A retried scheduling
+  request with the same request ID rejoins its existing job/result after a lost
+  response; a different request receives busy with the active job reference.
+  A busy request can briefly own the transaction lock during scheduler-to-worker
+  handoff. Both accepted workers retry that lock for at most five seconds within
+  the original job deadline and scheduled grace period; request guards remain
+  nonblocking. Launch/acquisition failure records a terminal result and removes
+  the one-shot request. Verify the actual guard/worker interleave for both jobs,
+  exactly-once execution, bounded failure cleanup and unchanged deadline.
+  Late writers must own an accepted generation, independently of optional UI
+  request IDs. Apply uses the existing job directory store; its current-status
+  pointer is published under the transaction lock. Workers and failure writers
+  atomically claim that generation's request before executing or terminating it;
+  neither may write/delete the next generation's files. Poll the accepted job ID.
+  Verify delayed launch/acquire failures after a new acceptance, for both jobs,
+  and a late launcher failure after its worker has already claimed execution.
+  Verify both public HTTP paths, old-target drift, idempotent retry, incomplete
+  HTTP200, invalid inputs, checked rollback, busy and interrupted-job results.
+- 8.3a **Desktop redeploy drops authoritative transport fields**: adoption
+  omitted `XRAY_DIAL_MODE`/`XRAY_WS_PATH`, and desktop staged metadata erased
+  them when the pipeline installed the config. Later inspection defaulted the
+  missing mode to direct. Preserve both fields through desktop adoption and
+  metadata rendering; decode values as data, never evaluate remote metadata.
+  Legacy absent mode means direct; absent path adopts the live WS path when
+  available, otherwise /cdn. Reject invalid modes explicitly before writes.
+  Quote paths safely in local env, staged metadata and both server/client JSON.
+  Raw insertion in the final client renderer can turn a backslash into a JSON
+  escape or make a quoted path invalid despite successful server provisioning.
+  Use the shared JSON escaping helper and verify the parsed client path too.
+  Risk: adoption is
+  `safe`; applying the resulting config retains node 6.8's `disruptive` owner.
+  Verify stale local direct,/cdn against remote ssh_tunnel,/server-owned through
+  the actual desktop caller, full assembled pipeline and router inspection/
+  adoption and actual client rendering; assert both parsed paths equal the
+  original for plain, backslash, quote and shell-metacharacter inputs. Include
+  legacy defaults.
 - 8.3 **Profile authoritative, VPS stale**: `config` step of the repair
   pipeline installs the staged render (6.6). Guarded: never replaces a valid
   live config with an invalid render.

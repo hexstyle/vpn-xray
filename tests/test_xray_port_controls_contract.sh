@@ -14,6 +14,12 @@ VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
 # moved content; the valid_port definition itself stays in the CGI.
 VPS_IMPL="$VPS_CGI $ROOT/routers/common/files/xray-vps-actions.sh $ROOT/routers/common/files/xray-vps-inspect.sh $ROOT/routers/common/files/xray-vps-render.sh"
 VPS_INSTALL="$ROOT/vps/debian-13/files/install-vps.remote.sh"
+# Inspect the same assembled source delivered by both production renderers.
+. "$ROOT/vps/debian-13/render-template.sh"
+ASSEMBLED_INSTALL="$(mktemp)"
+trap 'rm -f "$ASSEMBLED_INSTALL"' EXIT
+vps_template_source "$VPS_INSTALL" > "$ASSEMBLED_INSTALL"
+VPS_INSTALL="$ASSEMBLED_INSTALL"
 ROUTER_INSTALLERS="$ROOT/routers/gl-mt3000-glinet/install-router.sh $ROOT/routers/asus-tuf-ax4200-openwrt/install-router.sh"
 VPS_WORKSTATION_INSTALLER="$ROOT/vps/debian-13/install-vps.sh"
 ADOPT_VPS_META="$ROOT/common/adopt-vps-meta.sh"

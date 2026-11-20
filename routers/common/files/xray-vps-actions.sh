@@ -126,7 +126,7 @@ save_profile_action() {
 
 ensure_sshpass_available() {
 	command -v sshpass >/dev/null 2>&1 && return 0
-	with_lock_dir "$LOCK_ROOT/opkg.lock.d" sh -c '
+	with_lock_dir "$LOCK_ROOT/opkg.lock.d" vps_run_bounded sh -c '
 		command -v sshpass >/dev/null 2>&1 && exit 0
 		rm -f /var/lock/opkg.lock
 		timeout 60 opkg update >/tmp/xray-vps-opkg-update.log 2>&1 || exit 1
@@ -158,7 +158,7 @@ install_managed_key_with_password() {
 	local profile_id="$1"
 	local host port user password pub tmp_pub
 
-	ensure_sshpass_available || return 1
+	ensure_sshpass_available || { SSH_FAILURE_KIND=local; return 1; }
 	host="$(profile_get "$profile_id" ssh_host)"
 	port="$(profile_get "$profile_id" ssh_port)"
 	user="$(profile_get "$profile_id" ssh_user)"
@@ -186,12 +186,7 @@ install_managed_key_with_password() {
 	# context where we hold write access without the key that is broken.
 	# $HOME is expanded remotely; `id -gn` picks the login user's primary
 	# group so we don't hard-code root.
-	SSHPASS="$password" sshpass -e ssh \
-		-o StrictHostKeyChecking=accept-new \
-		-o UserKnownHostsFile="$KNOWN_HOSTS" \
-		-o ConnectTimeout=6 \
-		-p "$port" \
-		"$user@$host" \
+	SSHPASS="$password" ssh_control_run 170 password '' "$host" "$port" "$user" \
 		"sh -c 'set -e; umask 077; mkdir -p \"\$HOME/.ssh\"; touch \"\$HOME/.ssh/authorized_keys\"; PUB=\$(cat); grep -qxF \"\$PUB\" \"\$HOME/.ssh/authorized_keys\" || printf \"%s\n\" \"\$PUB\" >> \"\$HOME/.ssh/authorized_keys\"; U=\$(id -un); G=\$(id -gn); chown \"\$U:\$G\" \"\$HOME\" \"\$HOME/.ssh\" \"\$HOME/.ssh/authorized_keys\"; chmod 700 \"\$HOME/.ssh\"; chmod 600 \"\$HOME/.ssh/authorized_keys\"'" \
 		< "$tmp_pub" >/dev/null 2>&1 || {
 			rm -f "$tmp_pub"
@@ -215,6 +210,7 @@ ensure_ssh_ready() {
 		return 0
 	fi
 
+	case "${SSH_FAILURE_KIND:-auth}" in auth|missing_key) ;; *) return 1;; esac
 	mode="$(profile_get "$profile_id" auth_mode)"
 	case "$mode" in
 		password)
@@ -237,28 +233,10 @@ inspect_profile_ready() {
 	refresh_remote_cache "$profile_id"
 }
 
-inspect_profile_retry_locked() {
-	local profile_id="$1"
-	local attempts="$2"
-	local delay="$3"
-	local try=1
-
-	while [ "$try" -le "$attempts" ]; do
-		if inspect_profile_ready "$profile_id"; then
-			return 0
-		fi
-		[ "$try" -lt "$attempts" ] && sleep "$delay"
-		try=$((try + 1))
-	done
-	return 1
-}
-
 inspect_profile_with_retry() {
-	local profile_id="$1"
-	local attempts="${2:-3}"
-	local delay="${3:-1}"
-
-	with_lock_dir "$LOCK_ROOT/inspect.lock.d" inspect_profile_retry_locked "$profile_id" "$attempts" "$delay"
+	# The explicit read RPC owns its bounded transport retry; do not multiply
+	# it here or repeat authentication/bootstrap on a failed inspection.
+	with_lock_dir "$LOCK_ROOT/inspect.lock.d" inspect_profile_ready "$1"
 }
 
 adopt_remote_into_profile() {
@@ -268,11 +246,14 @@ adopt_remote_into_profile() {
 	cache="$(profile_cache_path "$profile_id")"
 	for value in server_port server_name uuid public_key short_id flow dial_mode; do
 		remote_value="$(cache_get "$cache" "REMOTE_${value}")"
-		[ -n "$remote_value" ] && profile_set "$profile_id" "$value" "$remote_value"
+		[ -z "$remote_value" ] || profile_set "$profile_id" "$value" "$remote_value" || return 1
 	done
+	remote_value="$(cache_get "$cache" REMOTE_LIVE_WS_PATH)"
+	# Live WS path is authoritative for both client and server renders.
+	[ -z "$remote_value" ] || profile_set "$profile_id" ws_path "$remote_value" || return 1
 	remote_value="$(private_cache_get "$profile_id")"
-	[ -n "$remote_value" ] && profile_set "$profile_id" private_key "$remote_value"
-	profile_set "$profile_id" last_inspect_status 'ok'
+	[ -z "$remote_value" ] || profile_set "$profile_id" private_key "$remote_value" || return 1
+	# Freshness belongs to the completed inspection, not cached adoption.
 	uci commit "$PROFILE_PACKAGE"
 }
 
@@ -407,4 +388,48 @@ check_profile_action() {
 
 	drop_profile_store_backup "$backup"
 	emit_status_response check_profile
+}
+
+# Lost scheduling replies rejoin the existing operation; no second mutation.
+profile_job_reference() {
+	local kind="$1" file
+	JOB_KIND="$kind"; JOB_ID=''; JOB_STATE=''; JOB_REQUEST=''; JOB_ORIGIN=''
+	if [ "$kind" = diagnose_repair ]; then
+		JOB_ID="$(cat "$VPS_REPAIR_JOB_DIR/active" 2>/dev/null)"
+		repair_job_valid_id "$JOB_ID" || return 1
+		file="$VPS_REPAIR_JOB_DIR/$JOB_ID/status"
+	else
+		file="$(router_apply_status_path)"
+		JOB_ID="$(sed -n 's/^accepted=//p' "$file" 2>/dev/null)"
+	fi
+	[ -s "$file" ] || return 1
+	JOB_STATE="$(sed -n 's/^state=//p' "$file")"
+	JOB_REQUEST="$(sed -n 's/^request_id=//p' "$file")"
+	JOB_ORIGIN="$(sed -n 's/^origin=//p' "$file")"
+}
+
+resume_profile_request() {
+	local id action kind
+	id="$(request_value request_id)"; action="$(request_value action)"
+	case "$id" in ''|*[!A-Za-z0-9_-]*) return 1;; esac
+	[ "${#id}" -le 80 ] || return 1
+	case "$action" in
+		diagnose_repair) kind=diagnose_repair;;
+		apply_router|apply_profile|setup_vps) kind=apply_router;;
+		*) return 1;;
+	esac
+	profile_job_reference "$kind" || return 1
+	[ "$id" = "$JOB_REQUEST" ] && [ "$action" = "$JOB_ORIGIN" ] || return 1
+	emit_header
+	printf '{"ok":true,"rejoined":true,"job_kind":"%s","job_id":"%s","job_state":"%s","request_id":"%s"}' \
+		"$kind" "$JOB_ID" "$JOB_STATE" "$id"
+}
+
+emit_profile_busy() {
+	JOB_KIND=''; JOB_ID=''; JOB_STATE=''
+	if repair_job_running; then profile_job_reference diagnose_repair
+	elif router_apply_job_running; then profile_job_reference apply_router; fi
+	emit_header
+	printf '{"ok":false,"error":"busy","reason":"Another profile operation is running.","job_kind":"%s","job_id":"%s","job_state":"%s"}' \
+		"$JOB_KIND" "$JOB_ID" "$JOB_STATE"
 }

@@ -1,3 +1,37 @@
+    // Read-only help/progress markup exists before later chunks bind DOM IDs.
+    document.getElementById("repairProgressMarkup").outerHTML = `<div id="repairProgress" style="margin-top:12px;display:none;padding:10px 12px;background:#141d26;border-radius:4px;border-left:3px solid #e6d34a;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="repair-spinner" style="display:inline-block;width:14px;height:14px;border:2px solid #2c3f52;border-top-color:#e6d34a;border-radius:50%;animation:repairspin 0.8s linear infinite;"></span>
+              <span id="repairProgressText" class="mono" style="font-size:13px;color:#e6d34a;">Starting…</span>
+              <span id="repairProgressElapsed" class="hint" style="margin-left:auto;font-size:12px;"></span>
+            </div>
+          </div>`;
+    document.getElementById("repairReportMarkup").outerHTML = `<div id="repairReport" style="margin-top:12px;display:none;">
+            <div class="label" style="margin-bottom:4px;">Last Repair Run</div>
+            <ul id="repairSteps" class="mono" style="list-style:none;padding:0;margin:0;font-size:13px;line-height:1.5;"></ul>
+            <div id="repairSummary" class="hint" style="margin-top:8px;"></div>
+            <details id="repairRawWrap" style="margin-top:8px;display:none;">
+              <summary style="cursor:pointer;color:#8b98a5;font-size:12px;">Raw log (SSH stderr + pipeline output)</summary>
+              <pre id="repairRawLog" class="mono" style="margin-top:6px;padding:8px;background:#0a1218;border:1px solid #2c3f52;border-radius:4px;font-size:12px;line-height:1.4;white-space:pre-wrap;max-height:320px;overflow:auto;"></pre>
+            </details>
+          </div>`;
+    document.getElementById("setupNoticeMarkup").outerHTML = `<div id="setupNotice" class="readonly-pane" style="margin-top:12px;display:none;">
+          <div class="label">First-Time Setup</div>
+          <div class="hint">
+            The router platform is installed, but there is no active VPS path yet. Fill the VPS SSH details above and click
+            <strong>Check &amp; Configure VPS</strong>. The router will inspect and configure the selected server and apply its configuration to the active client path.
+          </div>
+        </div>`;
+    document.getElementById("liveSnapshotMarkup").outerHTML = `<div class="readonly-pane" style="margin-top:12px;">
+          <div class="label">Live Snapshot</div>
+          <div class="kv" id="remoteInfoGrid">
+            <div>Inspection status</div><div>Loading...</div>
+          </div>
+        </div>`;
+    document.getElementById("ipDetailsMarkup").outerHTML = `<details class="readonly-pane" style="margin-top:12px;">
+          <summary class="label" style="cursor:pointer;">Host Location / IP Details</summary>
+          <pre id="ipinfoOutput" style="margin-top:12px;">No inspection data yet.</pre>
+        </details>`;
     // Live State display cells and the Detailed-Compare tables are rendered from
     // data here (DRY) instead of seven / three near-identical HTML blocks. Runs
     // first so their value/tbody elements exist before any status code fills them.

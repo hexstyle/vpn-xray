@@ -17,6 +17,8 @@ require_supported_profile vps "$ROOT_DIR" "$VPS_PROFILE"
 load_profile_defaults "$VPS_PROFILE_DIR/profile.env"
 XRAY_PORT="${XRAY_PORT:-24443}"
 XRAY_FLOW="${XRAY_FLOW:-}"
+XRAY_DIAL_MODE="${XRAY_DIAL_MODE:-direct}"
+case "$XRAY_DIAL_MODE" in direct|ssh_tunnel) ;; *) echo 'Invalid XRAY_DIAL_MODE' >&2; exit 1 ;; esac
 
 VPS_SSH="${VPS_SSH:-root@${VPS_HOST:-}}"
 VPS_HOST="${VPS_HOST:-$(host_from_ssh_target "$VPS_SSH")}"
@@ -220,22 +222,7 @@ export \
   VPS_XRAY_LOG_DIR \
   VPS_XRAY_SERVICE
 
-render_template() {
-  local input="$1"
-  local output="$2"
-  python3 - <<'PY' "$input" "$output"
-import os, pathlib, re, sys
-template_path = pathlib.Path(sys.argv[1])
-template = template_path.read_text()
-def repl(match):
-    key = match.group(1)
-    try:
-        return os.environ[key]
-    except KeyError:
-        raise SystemExit(f"Template {template_path} requires env variable {key}, but it is missing")
-pathlib.Path(sys.argv[2]).write_text(re.sub(r"\$\{([A-Z0-9_]+)\}", repl, template))
-PY
-}
+source "$VPS_PROFILE_DIR/render-template.sh"
 
 rendered_config="$tmpdir/xray-config.json"
 rendered_meta="$tmpdir/codex-router-meta.env"
@@ -252,6 +239,8 @@ XRAY_SHORT_ID=${XRAY_SHORT_ID}
 XRAY_PRIVATE_KEY=${XRAY_PRIVATE_KEY}
 XRAY_PUBLIC_KEY=${XRAY_PUBLIC_KEY}
 XRAY_FLOW=${XRAY_FLOW:-}
+XRAY_DIAL_MODE=${XRAY_DIAL_MODE}
+XRAY_WS_PATH=$(shell_quote "$XRAY_WS_PATH")
 EOF
 render_template "$VPS_PROFILE_DIR/$VPS_INSTALL_SCRIPT" "$rendered_install"
 

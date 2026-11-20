@@ -27,6 +27,22 @@ The VPS install path may need to fetch Xray once. When the workstation has
 no public internet, pre-stage the Xray archive on the workstation (bundled
 in the repo) and `scp` it to the VPS instead of curling from GitHub.
 
+The Debian VPS pipeline has two source parts: `install-vps.remote.sh` and
+`install-vps-runtime.remote.sh`. Its profile `render-template.sh` declares their
+order. Both workstation install and router Repair assemble them before existing
+placeholder substitution and deliver one self-contained `install-vps.remote.sh`.
+Missing parts or unresolved placeholders must stop before upload; JSON templates
+are not concatenated. Both router profiles bundle the entire VPS profile directory.
+The existing TCP capacity step verifies native BBR and persists module loading
+and TCP sysctls without package downloads or changes to qdisc/topology. If native
+BBR is unavailable, it reports the optional algorithm skipped, preserves the
+current algorithm and still repairs TCP memory settings. Available BBR must pass
+persistence and runtime verification; those errors remain failures.
+Desktop adoption also preserves the managed VPS dial mode and WS path through
+staged metadata and config. Legacy absent mode defaults to direct; absent path
+uses the live WS path, then /cdn if none exists. Invalid modes fail explicitly,
+and metadata values are decoded as data and quoted before local persistence.
+
 ## Required Pre-Install Inputs
 
 The installer must check, **before touching anything**, that all required
@@ -70,10 +86,13 @@ managed-key bootstrap and provisioning. Missing Xray material may be generated
 only after a successful inspection proves that the VPS has no managed/live
 identity; after provisioning, the VPS is inspected again and its metadata
 becomes the value used to render the router client.
-The live router target changes only through the explicit detached `Apply
-Profile to Router` action. That action must validate the selected VPS
-certificate before cutover, verify real proxy egress afterward, and restore
-the previous router config and certificate if verification fails.
+Apply/settings and Repair both apply the selected VPS-derived router configuration
+inside their detached worker. Validate identity, rendered config and certificate,
+back up files, and verify local runtime before reporting application. Roll back
+write/runtime failures with checked restoration. External health failure alone
+must retain the valid selected config and report applied-but-unhealthy; full
+curl completion, matching VPS egress and ChatGPT are required for healthy success.
+Save/select alone remain local operations; mode and switch intent are preserved.
 
 `VPS_SSH_PORT` is part of the access coordinate, not informational metadata.
 Every workstation-to-VPS SSH call made by the top-level, VPS, or router
