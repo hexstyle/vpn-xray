@@ -167,7 +167,7 @@ exit "$rc"
 
     # Inject file-operation failures at the actual publication boundary. The
     # caller remains set +e, as in the real detached repair action.
-    cache_driver = driver.replace('set -eu','set +e').replace('rc=0\nif [ "$TEST_AUTH"', r''' 
+    cache_driver = driver.replace('set -eu','set +e').replace('rc=0\nif [ "$TEST_AUTH"', r'''
 rc=0
 mv() { case "$CACHE_FAULT:$2" in public_mv:"$INSPECT_DIR/default.env"|private_mv:"$INSPECT_DIR/default.private") return 1;; esac; command mv "$@"; }
 chmod() { case "$CACHE_FAULT:$*" in chmod:*.inspect.*) return 1;; esac; command chmod "$@"; }
