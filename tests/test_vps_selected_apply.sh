@@ -8,6 +8,7 @@ trap 'rm -rf "$WORK"' EXIT
 . "$ROOT/routers/common/files/xray-vps-ssh.sh"
 . "$ROOT/routers/common/files/xray-vps-verify.sh"
 . "$ROOT/routers/common/files/xray-vps-setup.sh"
+. "$ROOT/routers/common/files/xray-vps-job-status.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ROUTER_CONFIG="$WORK/config"; ROUTER_CERT="$WORK/cert"
 ROUTER_TUNNEL_CONFIG="$WORK/tunnel"; ROUTER_READY_FILE="$WORK/ready"

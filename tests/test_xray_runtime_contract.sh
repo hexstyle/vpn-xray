@@ -15,7 +15,7 @@ VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
 # from shared libs (AGENTS.md 500-line split); the router-config renderers
 # live in xray-vps-render.sh. Grep the whole set for moved content.
 VPS_RENDER_LIB="$ROOT/routers/common/files/xray-vps-render.sh"
-VPS_IMPL="$VPS_CGI $ROOT/routers/common/files/xray-vps-profile.sh $ROOT/routers/common/files/xray-vps-ssh.sh $VPS_RENDER_LIB $ROOT/routers/common/files/xray-vps-inspect.sh $ROOT/routers/common/files/xray-vps-actions.sh $ROOT/routers/common/files/xray-vps-setup.sh $ROOT/routers/common/files/xray-vps-repair.sh"
+VPS_IMPL="$VPS_CGI $ROOT/routers/common/files/xray-vps-profile.sh $ROOT/routers/common/files/xray-vps-ssh.sh $VPS_RENDER_LIB $ROOT/routers/common/files/xray-vps-inspect.sh $ROOT/routers/common/files/xray-vps-actions.sh $ROOT/routers/common/files/xray-vps-setup.sh $ROOT/routers/common/files/xray-vps-job-status.sh $ROOT/routers/common/files/xray-vps-repair.sh"
 XRAY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-xray.init"
 TRANSPROXY_INIT="$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init"
 INSTALL_PLATFORM="$ROOT/routers/gl-mt3000-glinet/install-platform.sh"

@@ -5,7 +5,7 @@ ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 PATH="$ROOT/tests/fixtures:$PATH"; export PATH
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-for lib in lib-common xray-vps-profile xray-vps-ssh xray-vps-render xray-vps-inspect xray-vps-actions xray-vps-verify xray-vps-setup xray-vps-repair; do
+for lib in lib-common xray-vps-profile xray-vps-ssh xray-vps-render xray-vps-inspect xray-vps-actions xray-vps-verify xray-vps-setup xray-vps-job-status xray-vps-repair; do
  . "$ROOT/routers/common/files/$lib.sh"
 done
 fail() { echo "FAIL: $*" >&2; exit 1; }

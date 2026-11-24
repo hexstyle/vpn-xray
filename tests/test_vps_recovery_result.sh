@@ -9,6 +9,7 @@ trap 'rm -rf "$WORK"' EXIT
 . "$ROOT/routers/common/files/xray-vps-ssh.sh"
 . "$ROOT/routers/common/files/xray-vps-verify.sh"
 . "$ROOT/routers/common/files/xray-vps-setup.sh"
+. "$ROOT/routers/common/files/xray-vps-job-status.sh"
 . "$ROOT/routers/common/files/xray-vps-repair.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 # Exercise the no-timeout firmware branch with real stdin, not a mocked cat.

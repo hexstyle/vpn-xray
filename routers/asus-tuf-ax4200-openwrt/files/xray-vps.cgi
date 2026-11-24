@@ -166,6 +166,7 @@ with_lock_dir() {
 . "${VX_VPS_ACTIONS_LIB:-/usr/share/vpn-xray/xray-vps-actions.sh}"
 . "${VX_VPS_VERIFY_LIB:-/usr/share/vpn-xray/xray-vps-verify.sh}"
 . "${VX_VPS_SETUP_LIB:-/usr/share/vpn-xray/xray-vps-setup.sh}"
+. "${VX_VPS_JOB_STATUS_LIB:-/usr/share/vpn-xray/xray-vps-job-status.sh}"
 . "${VX_VPS_REPAIR_LIB:-/usr/share/vpn-xray/xray-vps-repair.sh}"
 
 # Internal job mode: a detached re-exec of this CGI (no HTTP context).

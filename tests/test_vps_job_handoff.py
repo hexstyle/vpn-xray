@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 os.environ['PATH'] = str(ROOT/'tests/fixtures')+':'+os.environ['PATH']
 FIXTURE = r'''
 set -eu
-for lib in lib-common xray-vps-ssh xray-vps-verify xray-vps-actions xray-vps-setup xray-vps-repair; do
+for lib in lib-common xray-vps-ssh xray-vps-verify xray-vps-actions xray-vps-setup xray-vps-job-status xray-vps-repair; do
  . "$ROOT/routers/common/files/$lib.sh"
 done
 LOCK_ROOT="$WORK/locks"; ROUTER_APPLY_STATUS_FILE="$WORK/apply.status"

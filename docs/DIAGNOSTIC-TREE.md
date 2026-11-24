@@ -692,6 +692,29 @@ non-empty; or router dials wrong port/SNI (4.5).
   adoption and actual client rendering; assert both parsed paths equal the
   original for plain, backslash, quote and shell-metacharacter inputs. Include
   legacy defaults.
+- 8.2a **Initial VPS status returns HTTP200 with truncated JSON**: the UI's
+  300-character preview hides the actual boundary. Capture the complete GET
+  `xray-vps?action=status` body/headers/curl exit from the router and parse it.
+  Observed 363-byte EOF after `router_apply_job:` with CGI exit1: the optional
+  `/tmp/xray-vps-repair-apply.status` was absent, and an unguarded `sed`
+  assignment aborted the CGI under `set -e`. Missing history is idle, not
+  evidence that the active router/VPS configuration failed. Read the status
+  snapshot once with checked failure handling; report unreadable, empty,
+  malformed or interrupted history as failed/unknown without deleting it.
+  Escape status fields and validate embedded step JSON before serialization;
+  corrupt steps must produce an explicit diagnostic, not an invented success.
+  Review fixtures additionally exposed incomplete `done` snapshots turning green
+  in Apply UI, and `[null]` steps crashing the report renderer (separate from the
+  original EOF). Terminal outcomes/health must be present and consistent:
+  `done` permits applied/unchanged with ok/not_checked and its terminal message,
+  as emitted by the worker (not_checked must not become the UI verified fallback).
+  Validate step objects and their display fields with native jsonfilter before
+  publication. Verify full CGI polling responses through the actual Apply/report
+  UI consumers, including unchanged success, switch-off not_checked and retained
+  applied-but-unhealthy failures; absent legacy step reports remain optional.
+  Verify the complete CGI status and accepted-job polling with absent/dangling,
+  empty, completed, active, stale and corrupt fixtures, preserving profile and
+  runtime values. Risk: `safe` read/serialization fix; no daemon restart.
 - 8.3 **Profile authoritative, VPS stale**: `config` step of the repair
   pipeline installs the staged render (6.6). Guarded: never replaces a valid
   live config with an invalid render.

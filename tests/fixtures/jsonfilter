@@ -8,6 +8,12 @@ try:
     value = json.loads(args[args.index('-s')+1]) if '-s' in args else json.load(open(args[args.index('-i')+1]))
     flag = '-t' if '-t' in args else '-e'
     pattern = args[args.index(flag)+1]
+    # Native wildcard type output includes null even though indexed null has
+    # no match. Multiple types are separated by an escaped space.
+    if flag == '-t' and pattern == '@[*]':
+        types = {dict:'object',list:'array',bool:'boolean',str:'string',int:'int',float:'double',type(None):'null'}
+        if value: print('\\ '.join(types[type(item)] for item in value))
+        sys.exit(0 if any(item is not None for item in value) else 1)
     for field, index in re.findall(r'\.([A-Za-z_][A-Za-z_0-9]*)|\[(\d+)\]', pattern):
         value = value[field] if field else value[int(index)]
     if flag == '-t':

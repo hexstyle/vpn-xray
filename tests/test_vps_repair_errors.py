@@ -39,7 +39,7 @@ raise SystemExit('unexpected SSH leaf')
     (binary/'ssh').write_text('#!'+sys.executable+'\n'+ssh);(binary/'ssh').chmod(0o755)
     driver=r'''
 set +e
-for lib in lib-common xray-vps-profile xray-vps-ssh xray-vps-render xray-vps-inspect xray-vps-actions xray-vps-verify xray-vps-setup xray-vps-repair; do . "$ROOT/routers/common/files/$lib.sh"; done
+for lib in lib-common xray-vps-profile xray-vps-ssh xray-vps-render xray-vps-inspect xray-vps-actions xray-vps-verify xray-vps-setup xray-vps-job-status xray-vps-repair; do . "$ROOT/routers/common/files/$lib.sh"; done
 PROFILE_PACKAGE=xray_vps; KNOWN_HOSTS="$WORK/known-hosts"; VPS_PROFILE_ROOT="$WORK/vps"
 INSPECT_DIR="$WORK/inspect"; LOCK_ROOT="$WORK/locks"; VPS_REPAIR_JOB_DIR="$WORK/jobs"
 profile_get() {

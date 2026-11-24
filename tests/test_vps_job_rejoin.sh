@@ -4,7 +4,7 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-for lib in lib-common xray-vps-actions xray-vps-setup xray-vps-repair; do
+for lib in lib-common xray-vps-actions xray-vps-setup xray-vps-job-status xray-vps-repair; do
  . "$ROOT/routers/common/files/$lib.sh"
 done
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -33,6 +33,9 @@ resume_profile_request >/dev/null || fail 'terminal job could not be rejoined'
 REQUEST_DATA="action=diagnose_repair_status&job_id=$job"
 vps_repair_job_status_action > "$WORK/result"
 grep -q 'original-job' "$WORK/result" || fail 'retry did not recover original result'
+# This fixture reuses one shell PID for two HTTP requests. Separate their
+# timestamp IDs; real CGI requests have distinct PIDs even within one second.
+sleep 1
 REQUEST_DATA='action=apply_router&request_id=apply-reply'
 schedule_router_apply_action_for apply_router default >/dev/null
 resume_profile_request > "$WORK/apply-rejoined"

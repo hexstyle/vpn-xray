@@ -61,8 +61,39 @@ vm.runInContext(fs.readFileSync('routers/common/files/xray-app-6.js', 'utf8'), c
   assert.equal(calls.length, 2);
   assert.equal(calls[1].payload.job_id, '123-456');
   console.log('PASS: complete Apply UI polls its accepted job ID');
+  // Full native CGI responses, not reconstructed job objects. The directory
+  // comes from test_vps_status_cgi.sh on OpenWrt; networking is not used here.
+  for (const dir of process.argv.slice(2).filter(p => fs.statSync(p).isDirectory())) {
+    let checked = 0;
+    for (const name of fs.readdirSync(dir).filter(n => n.endsWith('.cgi.json'))) {
+      const data = JSON.parse(fs.readFileSync(require('path').join(dir, name), 'utf8'));
+      const job = data.job || data.router_apply_job;
+      // Call outside Apply's try/catch: a renderer exception must fail the test.
+      context.renderRepairReport(job.steps || [], job.raw_log || '');
+      if (!data.job) continue;
+      const success = /-(success-|polling\.)/.test(name);
+      const flashes = [];
+      context.flash = (message, kind) => flashes.push({message, kind});
+      context.callApi = async (api, action, payload) => {
+        if (action === 'apply_router') return {ok: true, job_id: '42-1'};
+        assert.equal(action, 'apply_router_status');
+        assert.equal(payload.job_id, '42-1');
+        return data;
+      };
+      await context.applyRouterProfile(element('applyRouterProfileBtn'));
+      assert.equal(flashes.some(f => f.kind === 'good'), success, name);
+      assert.equal(flashes.some(f => f.kind === 'bad'), !success, name);
+      assert(!flashes.some(f => /Cannot read|TypeError/.test(f.message)), name);
+      if (name.includes('not_checked')) {
+        assert(!flashes.some(f => /verified through/.test(f.message)), name);
+      }
+      checked++;
+    }
+    assert(checked > 0, 'no native polling responses');
+    console.log(`PASS: ${checked} native CGI polling responses through actual Apply/report UI`);
+  }
   // Optional real worker/status results from the controlled SSH error matrix.
-  for (const resultFile of process.argv.slice(2)) {
+  for (const resultFile of process.argv.slice(2).filter(p => fs.statSync(p).isFile())) {
     for (const data of JSON.parse(fs.readFileSync(resultFile, 'utf8'))) {
       const flashes = [];
       context.flash = message => flashes.push(message);

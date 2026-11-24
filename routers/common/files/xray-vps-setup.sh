@@ -213,47 +213,6 @@ schedule_router_apply_action() {
 	schedule_router_apply_action_for apply_router "$profile_id"
 }
 
-router_apply_status_json() {
-	local state profile message pid applied health origin steps
-	local ROUTER_APPLY_STATUS_FILE="$(router_apply_status_path)"
-	state="$(sed -n 's/^state=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null | sed -n '1p')"
-	profile="$(sed -n 's/^profile=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null | sed -n '1p')"
-	message="$(sed -n 's/^message=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null | sed -n '1p')"
-	pid="$(sed -n 's/^pid=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null | sed -n '1p')"
-	applied="$(sed -n 's/^router_apply=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null)"
-	health="$(sed -n 's/^path_health=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null)"
-	origin="$(sed -n 's/^origin=//p' "$ROUTER_APPLY_STATUS_FILE" 2>/dev/null)"
-	if { [ "$state" = running ] || [ "$state" = scheduled ]; } && ! router_apply_job_running; then
-		state='failed'
-		message='Router apply job ended without a final result; inspect actual target/runtime.'
-		applied=unknown; health=unknown
-	fi
-	[ -n "$state" ] || state='idle'
-	printf '{"router_apply":"%s","path_health":"%s","origin":"%s",' "${applied:-unknown}" "${health:-not_checked}" "$(json_escape "$origin")"
-	printf '"applied":'
-	case "$applied" in applied) printf true;; unknown|'') printf null;; *) printf false;; esac
-	printf ','
-	steps="$(cat "$ROUTER_APPLY_STATUS_FILE.steps" 2>/dev/null || true)"
-	printf '"steps":%s,' "${steps:-[]}"
-	printf '"state":"%s","profile_id":"%s","message":"%s","raw_log":"%s"}' \
-		"$(json_escape "$state")" "$(json_escape "$profile")" "$(json_escape "$message")" \
-		"$(raw_log_payload "$ROUTER_APPLY_STATUS_FILE.log")"
-}
-
-router_apply_status_action() {
-	local job_id="$(request_value job_id)"
-	local ROUTER_APPLY_STATUS_FILE="$ROUTER_APPLY_STATUS_FILE"
-	if [ -n "$job_id" ]; then
-		repair_job_valid_id "$job_id" || { emit_error apply_router_status 'Invalid job ID'; return; }
-		ROUTER_APPLY_STATUS_FILE="$VPS_REPAIR_JOB_DIR/$job_id/status"
-		[ -s "$ROUTER_APPLY_STATUS_FILE" ] || { emit_error apply_router_status 'Unknown job ID'; return; }
-	fi
-	emit_header
-	printf '{"ok":true,"action":"apply_router_status","job":'
-	router_apply_status_json
-	printf '}'
-}
-
 run_router_apply_job() {
 	local profile_id="$1" origin="${XRAY_VPS_JOB_ORIGIN:-apply_router}" rc=0 message request_id
 	local ROUTER_APPLY_STATUS_FILE="$(router_apply_status_path)"

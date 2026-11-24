@@ -9,7 +9,7 @@ VPS_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-vps.cgi"
 # xray-vps.cgi sources profile/ssh/render/inspect/actions/setup/repair logic
 # from shared libs (AGENTS.md 500-line split). Grep the whole set for moved
 # content.
-VPS_IMPL="$VPS_CGI $ROOT/routers/common/files/xray-vps-profile.sh $ROOT/routers/common/files/xray-vps-ssh.sh $ROOT/routers/common/files/xray-vps-render.sh $ROOT/routers/common/files/xray-vps-inspect.sh $ROOT/routers/common/files/xray-vps-actions.sh $ROOT/routers/common/files/xray-vps-setup.sh $ROOT/routers/common/files/xray-vps-repair.sh"
+VPS_IMPL="$VPS_CGI $ROOT/routers/common/files/xray-vps-profile.sh $ROOT/routers/common/files/xray-vps-ssh.sh $ROOT/routers/common/files/xray-vps-render.sh $ROOT/routers/common/files/xray-vps-inspect.sh $ROOT/routers/common/files/xray-vps-actions.sh $ROOT/routers/common/files/xray-vps-setup.sh $ROOT/routers/common/files/xray-vps-job-status.sh $ROOT/routers/common/files/xray-vps-repair.sh"
 ADMIN_CGI="$ROOT/routers/gl-mt3000-glinet/files/xray-admin.cgi"
 # xray-admin.cgi sources its probe/build and status/smoke logic from these
 # shared libs (AGENTS.md 500-line split). Grep the whole implementation set
