@@ -18,7 +18,7 @@ UPLINK_HOTPLUG="$ROOT/routers/gl-mt3000-glinet/files/codex-xray-uplink.hotplug"
 ROUTER_RULES="$ROOT/routers/common/files/router-rules"
 # router-rules split into sourced libs (AGENTS.md 500-line rule); grep the
 # whole implementation set for moved function content.
-ROUTER_RULES_IMPL="$ROUTER_RULES $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-status.sh"
+ROUTER_RULES_IMPL="$ROUTER_RULES $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-mode.sh $ROOT/routers/common/files/router-rules-status.sh"
 AGENTS_FILE="$ROOT/AGENTS.md"
 
 fail() {

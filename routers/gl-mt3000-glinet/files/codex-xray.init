@@ -369,12 +369,17 @@ start() {
 	mkdir -p "$LOG_DIR" /etc/xray /var/run
 	/etc/init.d/codex-xray-tunnel start >/dev/null 2>&1 || true
 	if [ "$(server_address)" = '127.0.0.1' ]; then
+		# Do not block the mode switch on the SSH handshake. Xray can bind its
+		# local listeners while the tunnel is still connecting and retries the
+		# WS dial per connection; a genuinely dead transport is surfaced by the
+		# watchdog smoke and normal recovery.
 		i=0
-		while [ "$i" -lt 12 ]; do
+		while [ "$i" -lt 3 ]; do
 			netstat -lnt 2>/dev/null | grep -q ':18443 ' && break
 			i=$((i + 1)); sleep 1
 		done
-		netstat -lnt 2>/dev/null | grep -q ':18443 ' || { /etc/init.d/codex-xray-tunnel stop >/dev/null 2>&1 || true; echo 'SSH transport unavailable'; return 1; }
+		netstat -lnt 2>/dev/null | grep -q ':18443 ' \
+			|| logger -t codex-xray 'SSH tunnel still connecting; starting Xray listeners anyway' 2>/dev/null || true
 	fi
 
 	"$BIN" run -test -config "$CONFIG" >/dev/null 2>&1 || {

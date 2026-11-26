@@ -225,6 +225,9 @@ fetch_profile_tls_cert() {
 
 verify_applied_profile_path() {
 	local profile_id="$1" expected egress base rc=0
+	# Software OFF (or a real hardware-off state) has no live path to probe.
+	# The VPS identity was already validated from the inspection cache.
+	path_allowed || return 0
 	base="/tmp/codex-xray.applied.$$"
 	expected="$(cache_get "$(profile_cache_path "$profile_id")" REMOTE_PUBLIC_IP)"
 	[ -n "$expected" ] || expected="$(profile_get "$profile_id" server_address)"
@@ -272,13 +275,13 @@ validate_selected_profile() {
 
 local_profile_runtime_ready() {
 	local port
-	if [ "$(current_switch_state)" = on ]; then
+	if path_allowed; then
 		router_config_ready && router_path_active || return 1
 		for port in "$ROUTER_HTTP_PORT" "$ROUTER_SOCKS_PORT" 12345; do
 			netstat -lnt 2>/dev/null | grep -q ":$port " || return 1
 		done
 	else
-		# The real hardware-off state must remain off (ASUS always reports on).
+		# Hardware OFF or software OFF: the runtime must stay down.
 		! router_path_active || return 1
 		for port in "$ROUTER_HTTP_PORT" "$ROUTER_SOCKS_PORT" 12345; do
 			netstat -lnt 2>/dev/null | grep -q ":$port " && return 1

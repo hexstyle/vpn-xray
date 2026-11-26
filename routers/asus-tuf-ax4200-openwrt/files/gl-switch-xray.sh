@@ -95,6 +95,10 @@ cleanup_runner_state() {
 helper_run_on() {
 	trap cleanup_runner_state EXIT INT TERM
 
+	if xray_software_off; then
+		log "software OFF selected; keeping the path down"
+		helper_run_off
+	fi
 	if ! config_ready; then
 		log "helper skipped on action because router config is not ready yet"
 		exit 0
@@ -160,20 +164,20 @@ helper_run_off() {
 }
 
 run_async() {
-	local active_pid active_action
+	local helper_action="$1" action_tag="${2:-$ACTION}" active_pid active_action
 
 	active_pid="$(cat "$RUNNER_PID" 2>/dev/null || true)"
 	active_action="$(cat "$RUNNER_ACTION" 2>/dev/null || true)"
 	if [ -n "$active_pid" ] && kill -0 "$active_pid" 2>/dev/null; then
-		if [ "$active_action" = "$ACTION" ]; then
-			log "helper already processing action=$ACTION"
+		if [ "$active_action" = "$action_tag" ]; then
+			log "helper already processing action=$action_tag"
 			return 0
 		fi
 		start-stop-daemon -K -p "$RUNNER_PID" -x "$0" >/dev/null 2>&1 || true
 	fi
 	rm -f "$RUNNER_PID"
-	printf '%s\n' "$ACTION" > "$RUNNER_ACTION"
-	start-stop-daemon -S -b -m -p "$RUNNER_PID" -x "$0" -- "$1"
+	printf '%s\n' "$action_tag" > "$RUNNER_ACTION"
+	start-stop-daemon -S -b -m -p "$RUNNER_PID" -x "$0" -- "$helper_action"
 }
 
 case "$ACTION" in
@@ -184,6 +188,15 @@ case "$ACTION" in
 		helper_run_off
 		;;
 	on)
+		if xray_software_off; then
+			log "software OFF selected; keeping the path down"
+			if runtime_path_inactive; then
+				xray_failsafe_disable
+				exit 0
+			fi
+			run_async __run_off off
+			exit 0
+		fi
 		if ! config_ready; then
 			log "path requested, but router config is not ready yet; waiting for VPS setup"
 			exit 0
@@ -202,6 +215,10 @@ case "$ACTION" in
 		run_async __run_on
 		;;
 	recover)
+		if xray_software_off; then
+			log "recover ignored: software OFF keeps the path down"
+			exit 0
+		fi
 		if ! config_ready; then
 			log "recover requested, but router config is not ready yet"
 			exit 1

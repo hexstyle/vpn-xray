@@ -13,6 +13,8 @@ config_value() {
 
 start_service() {
 	[ -s "$CONFIG" ] || return 0
+	# Software OFF stops the tunnel with Xray; boot must not resurrect it.
+	[ "$(uci -q get router_rules.global.xray_mode 2>/dev/null)" = 'off' ] && return 0
 	DIAL_MODE="$(config_value DIAL_MODE)"
 	SSH_HOST="$(config_value SSH_HOST)"; SSH_PORT="$(config_value SSH_PORT)"
 	SSH_USER="$(config_value SSH_USER)"; SSH_KEY="$(config_value SSH_KEY)"

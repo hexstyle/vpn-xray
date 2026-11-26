@@ -6,7 +6,7 @@ ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 ROUTER_RULES_FILE="$ROOT/routers/common/files/router-rules"
 # router-rules split into sourced libs (AGENTS.md 500-line rule); grep the
 # whole implementation set for moved function content.
-ROUTER_RULES_IMPL="$ROUTER_RULES_FILE $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-status.sh"
+ROUTER_RULES_IMPL="$ROUTER_RULES_FILE $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-mode.sh $ROOT/routers/common/files/router-rules-status.sh"
 
 grep -q 'ROUTER_RULES_SKIP_EFFECTIVE_COLLAPSE=1 .*apply_xray_internal' $ROUTER_RULES_IMPL || {
 	printf 'FAIL: fast local cutover must skip expensive effective-rules collapse in the foreground path\n' >&2

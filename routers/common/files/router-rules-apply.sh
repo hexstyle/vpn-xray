@@ -7,6 +7,10 @@ apply_xray_internal() {
 	local mode count setname signature resolved_sig need_restart last_mode final_rule conf lan_if
 
 	mode="$(xray_mode)"
+	if [ "$mode" = 'off' ]; then
+		apply_software_off_internal
+		return $?
+	fi
 	if path_requested && xray_failsafe_hold_active; then
 		xray_failsafe_enable "recovery hold active: $(xray_failsafe_state_value reason "$VX_FAILSAFE_HOLD")"
 		set_status_error 'Xray recovery is on fail-safe hold; use manual recovery to retry immediately'
@@ -27,10 +31,12 @@ apply_xray_internal() {
 	if [ "$mode" = 'selective' ]; then
 		build_xray_ipset_internal
 	else
-		clear_xray_dnsmasq_internal
-		ipset create "$setname" hash:net family inet maxelem 65536 -exist
-		ipset flush "$setname"
-		status_set xray_ipset_count '0'
+		# Full mode needs a blanket TCP redirect, not the destination set.
+		# Keep the selective ipset and the dnsmasq snapshot warm so switching
+		# back is a purely local operation (no DNS, no daemon restart).
+		ipset create "$setname" hash:net family inet maxelem 65536 -exist 2>/dev/null || true
+		count="$(ipset list "$setname" 2>/dev/null | sed -n 's/^Number of entries: //p' | sed -n '1p')"
+		status_set xray_ipset_count "${count:-0}"
 	fi
 
 	need_restart=0
@@ -45,7 +51,6 @@ apply_xray_internal() {
 		iptables -t nat -C PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || need_restart=1
 		iptables -t nat -C PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || need_restart=1
 	else
-		[ ! -e "$conf" ] || need_restart=1
 		printf '%s\n' "$final_rule" | grep -q -- "-p tcp -j REDIRECT --to-ports 12345" || need_restart=1
 		iptables -t nat -C PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || need_restart=1
 		iptables -t nat -C PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || need_restart=1
@@ -131,7 +136,9 @@ refresh_resolved_runtime_internal() {
 
 	mode="$(xray_mode)"
 	set_sync_phase drift_detected 'Resolved domain targets changed for selective routing; refreshing runtime targets'
-	apply_xray_internal
+	# The snapshot already changed; apply it without another DNS resolve so
+	# this path stays inside the rules-lock budget.
+	ROUTER_RULES_USE_CACHED_RESOLVED=1 apply_xray_internal
 	status_set last_verified_at "$(date +%s)"
 	set_sync_phase verified "Resolved selective targets refreshed without hard cutover (mode=${mode})"
 }
@@ -169,7 +176,11 @@ sync_apply_xray_internal() {
 			refresh_resolved_runtime_internal
 		elif xray_needs_apply_internal; then
 			set_sync_phase drift_detected 'Found runtime drift against the current ruleset; starting cutover'
-			hard_cutover_xray_internal
+			if [ "$(sync_actor)" = background ]; then
+				ROUTER_RULES_FAST_RESOLVE=1 ROUTER_RULES_USE_CACHED_RESOLVED=1 hard_cutover_xray_internal
+			else
+				hard_cutover_xray_internal
+			fi
 		else
 			status_set last_verified_at "$(date +%s)"
 			set_sync_phase verified 'Git sync is disabled; local router rules are authoritative.'
@@ -191,6 +202,10 @@ sync_apply_xray_internal() {
 		set_sync_phase drift_detected 'Found runtime drift against the current ruleset; starting cutover'
 		if [ "$mode" = 'apply' ] || [ "$mode" = 'push' ]; then
 			ROUTER_RULES_FAST_RESOLVE=1 hard_cutover_xray_internal
+		elif [ "$(sync_actor)" = background ]; then
+			# Background drift must not hold the rules lock for a full DNS
+			# refresh; the detached warm job resolves outside that lock.
+			ROUTER_RULES_FAST_RESOLVE=1 ROUTER_RULES_USE_CACHED_RESOLVED=1 hard_cutover_xray_internal
 		else
 			hard_cutover_xray_internal
 		fi
@@ -216,16 +231,23 @@ save_sync_apply_xray_internal() {
 }
 
 xray_needs_apply_internal() {
-	local mode conf setname final_rule signature last_signature lan_if
+	local mode setname final_rule signature last_signature lan_if
 
 	mode="$(xray_mode)"
-	conf="$(xray_dnsmasq_conf)"
 	setname="$(xray_ipset)"
 	lan_if="$(lan_device)"
 	signature="$(xray_state_signature)"
 	last_signature="$(status_get last_apply_xray_signature)"
 
 	[ "$signature" = "$last_signature" ] || return 0
+
+	if [ "$mode" = 'off' ]; then
+		xray_failsafe_active && return 0
+		xray_failsafe_hold_active && return 1
+		xray_runtime_healthy && return 0
+		transproxy_runtime_healthy && return 0
+		return 1
+	fi
 
 	if path_requested; then
 		xray_failsafe_hold_active && return 1
@@ -242,7 +264,6 @@ xray_needs_apply_internal() {
 		iptables -t nat -C PREROUTING -i "$lan_if" -p udp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || return 0
 		iptables -t nat -C PREROUTING -i "$lan_if" -p tcp --dport 53 -j REDIRECT --to-ports 53 >/dev/null 2>&1 || return 0
 	else
-		[ ! -e "$conf" ] || return 0
 		printf '%s\n' "$final_rule" | grep -q -- "-p tcp -j REDIRECT --to-ports 12345" || return 0
 	fi
 
@@ -442,30 +463,4 @@ ensure_git_key_internal() {
 		mv "${pub}.tmp" "$pub"
 	fi
 	chmod 644 "$pub"
-}
-
-set_xray_mode_internal() {
-	local mode="$1"
-	case "$mode" in
-		full|selective)
-			uci -q set "${CONFIG_PKG}.${CONFIG_SECTION}.xray_mode=${mode}"
-			uci commit "$CONFIG_PKG"
-			;;
-		*)
-			echo "invalid mode: $mode" >&2
-			return 1
-			;;
-	esac
-}
-
-set_mode_cutover_internal() {
-	local mode="$1"
-
-	set_xray_mode_internal "$mode" || return 1
-	# Must be a FULL cutover: switching full->selective has to (re)build the
-	# complete selective ipset. The fast path (REUSE_RESOLVED_CACHE +
-	# INCREMENTAL_IPSET) only adds diffs and leaves the set incomplete after a
-	# mode change, which silently drops listed targets (e.g. 2ip.io) from
-	# selective routing. Correctness over speed here.
-	hard_cutover_xray_internal
 }

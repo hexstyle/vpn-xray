@@ -2,6 +2,8 @@
 
 START=96
 STOP=09
+EXTRA_COMMANDS='apply_mode'
+EXTRA_HELP='apply_mode   Apply the current routing mode firewall/runtime state in place'
 
 REDSOCKS_CONF="/etc/redsocks.conf"
 REDSOCKS_PID="/var/run/redsocks.pid"
@@ -39,9 +41,9 @@ transproxy_runtime_ready() {
 }
 
 wait_for_xray_runtime() {
-	local tries=0
+	local tries=0 max="${1:-8}"
 
-	while [ "$tries" -lt 8 ]; do
+	while [ "$tries" -lt "$max" ]; do
 		if xray_runtime_ready; then
 			return 0
 		fi
@@ -235,6 +237,8 @@ add_source_bypass_filter_rules() {
 add_nat_rules() {
 	local bypass_target mode setname lan_if
 
+	mode="$(xray_rule_mode)"
+	[ "$mode" = 'off' ] && return 0
 	lan_if="$(lan_device)"
 
 	iptables -t nat -N "$TCP_CHAIN" 2>/dev/null || true
@@ -247,7 +251,6 @@ add_nat_rules() {
 
 	bypass_target="$(resolve_vps_bypass)"
 	[ -n "$bypass_target" ] && iptables -t nat -A "$TCP_CHAIN" -d "$bypass_target" -j RETURN
-	mode="$(xray_rule_mode)"
 	setname="$(xray_ipset_name)"
 
 	# Local DNS interception applies to both modes: plaintext DNS from LAN
@@ -296,8 +299,9 @@ del_nat_rules() {
 add_filter_rules() {
 	local lan_if mode setname
 
-	lan_if="$(lan_device)"
 	mode="$(xray_rule_mode)"
+	[ "$mode" = 'off' ] && return 0
+	lan_if="$(lan_device)"
 	setname="$(xray_ipset_name)"
 
 	# UDP transparent forwarding goes through TPROXY into the xray
@@ -328,8 +332,9 @@ del_filter_rules() {
 add_tproxy_rules() {
 	local lan_if mode setname tproxy_port fwmark table
 
-	lan_if="$(lan_device)"
 	mode="$(xray_rule_mode)"
+	[ "$mode" = 'off' ] && return 0
+	lan_if="$(lan_device)"
 	setname="$(xray_ipset_name)"
 	tproxy_port="$(xray_tproxy_udp_port)"
 	fwmark="$(xray_tproxy_fwmark)"
@@ -385,14 +390,21 @@ del_tproxy_rules() {
 }
 
 ensure_codex_xray() {
-	if xray_runtime_ready; then
-		return 0
-	fi
-	/etc/init.d/codex-xray start >/dev/null 2>&1 || return 1
-	if wait_for_xray_runtime; then
-		return 0
-	fi
-	/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+	local attempt=0
+
+	xray_runtime_ready && return 0
+	# A cold start may lose the first SSH-tunnel attempt. Retry once inside
+	# the switch budget instead of reporting failure and letting the watchdog
+	# recover later.
+	while [ "$attempt" -lt 2 ]; do
+		/etc/init.d/codex-xray start >/dev/null 2>&1 || true
+		if wait_for_xray_runtime 6; then
+			return 0
+		fi
+		/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+		attempt=$((attempt + 1))
+		[ "$attempt" -lt 2 ] && sleep 1
+	done
 	return 1
 }
 
@@ -435,4 +447,38 @@ restart() {
 	stop
 	sleep 1
 	start
+}
+
+# In-place mode switch (DIAGNOSTIC-TREE 4.10). Unlike restart() it never
+# restarts a healthy Xray/redsocks; it only starts what is missing when
+# leaving OFF, then replaces the firewall rules for the current mode.
+apply_mode() {
+	local mode rpid
+
+	mode="$(xray_rule_mode)"
+	if [ "$mode" = 'off' ]; then
+		stop
+		/etc/init.d/codex-xray stop >/dev/null 2>&1 || true
+		/etc/init.d/codex-xray-tunnel stop >/dev/null 2>&1 || true
+		xray_failsafe_disable
+		return 0
+	fi
+	ensure_codex_xray || return 1
+	[ -f "$REDSOCKS_CONF" ] || return 1
+	rpid="$(cat "$REDSOCKS_PID" 2>/dev/null || true)"
+	if [ -z "$rpid" ] || ! kill -0 "$rpid" 2>/dev/null ||
+		! netstat -ltnp 2>/dev/null | grep -q ":$TCP_PORT "; then
+		/usr/sbin/redsocks -t -c "$REDSOCKS_CONF" || return 1
+		/etc/init.d/redsocks stop >/dev/null 2>&1 || true
+		/etc/init.d/redsocks start >/dev/null 2>&1 || return 1
+	fi
+	cleanup_legacy_rules
+	add_nat_rules
+	add_filter_rules
+	add_tproxy_rules
+	add_dynamic_nft_rules || return 1
+	if xray_runtime_ready && transproxy_runtime_ready; then
+		xray_failsafe_disable
+	fi
+	return 0
 }

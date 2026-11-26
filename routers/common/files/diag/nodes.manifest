@@ -8,6 +8,9 @@
 4||4|Router Xray runtime up|router|disruptive|restart_runtime|watchdog|path|
 4.1|4|4|Transparent proxy (redsocks + nat)|router|disruptive|transproxy_restart|watchdog|path|
 4.1a|4.1|4|Transparent UDP (QUIC/WebRTC/calls)|router|disruptive|apply_profile|none|path|
+4.9|4.1|4|Software OFF (direct WAN, no redirection)|router|disruptive|mode_off|none|path|
+4.10|4.1|4|Fast routing-mode cutover (5-10s budget)|router|disruptive|mode_cutover|none|path|
+4.11|4.1|4|Rules-lock FD and long-resolve contention|router|disruptive|mode_cutover|none|path|
 5||5|Router to VPS transport (WS+TLS)|router|disruptive|repin_render|watchdog+repin|path|
 5.6|5|5|SSH control plane penalties / external-IP exemption|vps|safe|install|none|config|
 5.7|5|5|SSH control rides the Xray tunnel|router|safe|apply_profile|none|config|

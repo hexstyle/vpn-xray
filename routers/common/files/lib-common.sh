@@ -56,8 +56,38 @@ config_ready() {
 	[ -f "$VX_CONFIG_READY" ] && [ -s "$VX_CONFIG" ]
 }
 
-path_requested() {
+# Software OFF: the operator switched routing mode to "off" from the UI.
+# The hardware switch may still be ON; redirection must stay down and no
+# watchdog/health path may bring it back. uci -q is safe during early boot.
+xray_software_off() {
+	[ "$(uci -q get router_rules.global.xray_mode 2>/dev/null)" = 'off' ]
+}
+
+# True while a UI mode switch is still inside its bounded budget. Watchdogs
+# use this to avoid racing the switch (starting/stopping the same daemons),
+# but resume normal recovery once the budget has elapsed.
+router_mode_switch_running() {
+	local state kind started now max="${1:-30}"
+
+	[ -f /tmp/router-rules.status ] || return 1
+	state="$(grep '^ui_job_state=' /tmp/router-rules.status 2>/dev/null | tail -n 1 | cut -d= -f 2)"
+	kind="$(grep '^ui_job_kind=' /tmp/router-rules.status 2>/dev/null | tail -n 1 | cut -d= -f 2)"
+	[ "$state" = running ] && [ "$kind" = set_mode ] || return 1
+	started="$(grep '^ui_job_started_at=' /tmp/router-rules.status 2>/dev/null | tail -n 1 | cut -d= -f 2)"
+	case "$started" in ''|*[!0-9]*) return 0 ;; esac
+	now="$(date +%s)"
+	[ $((now - started)) -le "$max" ]
+}
+
+# The operator-facing gate without config readiness: switch ON and not OFF.
+path_allowed() {
 	[ "$(current_switch_state)" = 'on' ] || return 1
+	xray_software_off && return 1
+	return 0
+}
+
+path_requested() {
+	path_allowed || return 1
 	config_ready || return 1
 	return 0
 }

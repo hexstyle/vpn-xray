@@ -64,6 +64,9 @@ Meta-rules (enforced by review):
 | 4 | 4 | Router Xray runtime up | router | disruptive | restart_runtime | watchdog | — |
 | 4.1 | 4 | Transparent proxy (redsocks + nat) | router | disruptive | transproxy_restart | watchdog | — |
 | 4.1a | 4 | Transparent UDP (QUIC/WebRTC/calls) | router | disruptive | apply_profile | none | — |
+| 4.9 | 4 | Software OFF (direct WAN, no redirection) | router | disruptive | mode_off | none | — |
+| 4.10 | 4 | Fast routing-mode cutover (5-10s budget) | router | disruptive | mode_cutover | none | — |
+| 4.11 | 4 | Rules-lock FD and long-resolve contention | router | disruptive | mode_cutover | none | — |
 | 5 | 5 | Router to VPS transport (WS+TLS) | router | disruptive | repin_render | watchdog+repin | — |
 | 5.6 | 5 | SSH control plane penalties / external-IP exemption | vps | safe | install | none | — |
 | 5.7 | 5 | SSH control rides the Xray tunnel | router | safe | apply_profile | none | — |
@@ -366,6 +369,62 @@ curl -m 8 -x http://127.0.0.1:1083 https://api.ipify.org   # expect VPS IP
   router proxy complete, and the observed egress IP is the VPS. `disruptive`
   when applied to the live router because Xray must restart; source/template
   changes alone are `safe`.
+
+- 4.9 **Software OFF: an operator wants direct routing without touching the
+  physical switch** (2026-11-26). Symptom: the UI must offer a third routing
+  state; a hand-stopped path is resurrected by the watchdog/health monitor and
+  the repair/verify path treats the intentional outage as a failure. Cause:
+  the stack only had `full` and `selective`, and every guard keyed on the
+  hardware switch alone. Repair: `xray_mode=off` is a first-class state.
+  `path_requested()` returns false in off even when the switch is ON;
+  watchdog, health monitor and the switch helper keep the path down and never
+  enable fail-safe; `codex-transproxy apply_mode` removes NAT/mangle/nft and
+  stops redsocks; `codex-xray` and its tunnel stay stopped; VPS Apply/Repair
+  continue over direct SSH and report `path_health=not_checked`. Selective
+  ipset and DNS snapshots stay warm so leaving OFF is local. `disruptive`
+  (stops the dataplane) but executed from the detached mode job. Verify:
+  `xray_mode=off`, switch ON, no `CODEX_TRANSPROXY`/`CODEX_TPROXY` rules, no
+  1083/1084/12345 listeners, LAN internet works directly, and two watchdog /
+  health cycles do not bring the path back.
+- 4.10 **A routing-mode change takes minutes** (2026-11-26). Symptom: moving
+  the Full/Selective control runs a full cutover — Git, a complete DNS
+  resolve, Xray restart, redsocks restart and dnsmasq restart — and can hold
+  the shared rules lock for a minute or more; LAN sessions drop. Cause:
+  `set-mode-cutover` called `hard_cutover_xray_internal`, which is the
+  sync/apply path, not a dataplane-only switch. Repair: `set-mode-cutover`
+  now persists the mode and calls `codex-transproxy apply_mode`, which
+  replaces only the firewall rules in place, starts a missing daemon only
+  when leaving OFF, and never restarts a healthy one. `full` keeps the
+  selective ipset/DNS snapshot warm; `selective` restores it from the last
+  resolved snapshot (or warms in a detached job when no snapshot exists).
+  Lock wait is 8s, job timeout 25s, UI confirmation 45s. The SSH tunnel
+  handshake is not part of the switch budget: Xray binds its local listeners
+  immediately and retries the WS dial while the tunnel connects; a genuinely
+  dead transport is still surfaced by the watchdog smoke. `disruptive`
+  (firewall rebuild) in the detached mode job. Verify: mode changes complete
+  in a few seconds without Xray/redsocks PID changes, and the selected
+  dataplane works immediately after each switch.
+
+- 4.11 **Every later apply/switch reports `router-rules lock timeout`**
+  (2026-11-26). Symptom: the first mode change succeeds, then all later
+  `Apply`/mode switches wait for the full lock budget and fail; `ps` shows a
+  stale `router-rules set-mode-cutover` or `build-xray-ipset` process and
+  `lsof`/`/proc/*/fd` shows Xray, redsocks, dnsmasq or a detached warm job
+  holding `/tmp/router-rules.flock`; a background DNS resolve can hold the
+  same lock for a minute. Causes: (a) a daemon or detached subshell inherits
+  the `flock` FD9 from the process that started it, so it keeps the lock for
+  its lifetime; (b) `build-xray-ipset` performs the long DNS resolve while
+  holding the main rules lock. Repair: close FD9 (`9>&-`, or `exec 9>&-` in a
+  detached subshell) for every process that starts a daemon or a detached
+  job; resolve under a separate `/tmp/router-rules-resolve.flock` and take
+  the main lock only for the fast ipset/DNS-conf build; publish
+  domains/literals/resolved/map snapshots atomically (sibling temp + `mv`);
+  make background drift use the cached snapshot so it cannot hold the main
+  lock for a DNS refresh. Verify: start `router-rules build-xray-ipset` on a
+  stale snapshot, then switch Full/Selective/Off/Selective through the UI
+  while it runs; every switch completes in 5-10s, the main lock is free
+  except for the brief build, and no daemon or warm job remains a lock
+  holder afterwards.
 
 **Verify** (in order): local proxy probe returns VPS IP → LAN client probe
 returns VPS IP → all three switch states behave per AGENTS.md matrix.

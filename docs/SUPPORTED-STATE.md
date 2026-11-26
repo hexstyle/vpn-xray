@@ -15,7 +15,7 @@ This file describes the supported reference state without embedding personal dat
 - physical switch as the source of truth for path on / off
 - router-side switching between saved VPS profiles
 - router-side provisioning of supported VPS profiles over SSH
-- local `full` / `selective` mode
+- local `full` / `selective` / `off` mode
 - optional GitHub-backed selective rules
 
 ## Operational Caveats

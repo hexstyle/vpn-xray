@@ -176,8 +176,10 @@ split_rules_internal() {
 		}
 	' "$source_file"
 
-	sort -u "$tmp_domains" > "$out_domains"
-	sort -u "$tmp_literals" > "$out_literals"
+	# Atomic publish: a mode switch may read these files while a background
+	# resolve is running. A sibling temp keeps the rename on the same fs.
+	sort -u "$tmp_domains" > "${out_domains}.new.$$" && mv "${out_domains}.new.$$" "$out_domains"
+	sort -u "$tmp_literals" > "${out_literals}.new.$$" && mv "${out_literals}.new.$$" "$out_literals"
 	rm -f "$tmp_domains" "$tmp_literals"
 }
 
@@ -193,18 +195,19 @@ resolve_rules_internal() {
 	out_literals="$(literal_file)"
 	tmp_resolved="$(rr_mktemp)"
 	old_map="$(rr_mktemp)"
+	tmp_map="${out_map}.new.$$"
 	reuse_cache="${ROUTER_RULES_REUSE_RESOLVED_CACHE:-0}"
 
 	split_rules_internal
 	[ -f "$out_map" ] && cp "$out_map" "$old_map"
-	: > "$out_map"
+	: > "$tmp_map"
 	: > "$tmp_resolved"
 
 	if [ -f "$out_literals" ]; then
 		while IFS= read -r line || [ -n "$line" ]; do
 			[ -n "$line" ] || continue
 			printf '%s\n' "$line" >> "$tmp_resolved"
-			printf '%s\tliteral\t%s\n' "$line" "$line" >> "$out_map"
+			printf '%s\tliteral\t%s\n' "$line" "$line" >> "$tmp_map"
 		done < "$out_literals"
 	fi
 
@@ -220,12 +223,13 @@ resolve_rules_internal() {
 		printf '%s\n' "$resolved" | while IFS= read -r resolved || [ -n "$resolved" ]; do
 			[ -n "$resolved" ] || continue
 			printf '%s\n' "$resolved"
-			printf '%s\tdomain\t%s\n' "$resolved" "$line" >> "$out_map"
+			printf '%s\tdomain\t%s\n' "$resolved" "$line" >> "$tmp_map"
 		done >> "$tmp_resolved"
 		done < "$out_domains"
 	fi
 
-	sort -u "$tmp_resolved" > "$out_resolved"
+	sort -u "$tmp_resolved" > "${out_resolved}.new.$$" && mv "${out_resolved}.new.$$" "$out_resolved"
+	mv "$tmp_map" "$out_map"
 	rm -f "$tmp_resolved" "$old_map"
 	status_set last_resolve_at "$(date +%s)"
 	if [ "$reuse_cache" != '1' ]; then
@@ -317,7 +321,7 @@ build_xray_ipset_internal() {
 	mkdir -p "$(dirname "$conf")"
 	if ! cmp -s "$tmp_conf" "$conf" 2>/dev/null; then
 		mv "$tmp_conf" "$conf"
-		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+		/etc/init.d/dnsmasq restart 9>&- >/dev/null 2>&1 || true
 	else
 		rm -f "$tmp_conf"
 	fi
@@ -364,7 +368,7 @@ build_xray_dnsmasq_server_conf_internal() {
 	fi
 
 	if [ "$changed" = '1' ]; then
-		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+		/etc/init.d/dnsmasq restart 9>&- >/dev/null 2>&1 || true
 	fi
 }
 
@@ -387,7 +391,7 @@ clear_xray_dnsmasq_internal() {
 	conf="$(xray_dnsmasq_conf)"
 	if [ -f "$conf" ]; then
 		rm -f "$conf"
-		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+		/etc/init.d/dnsmasq restart 9>&- >/dev/null 2>&1 || true
 	fi
 }
 
@@ -398,7 +402,7 @@ ensure_ipv4_only_dns_internal() {
 	[ "$current" = '1' ] && return 0
 	uci set dhcp.@dnsmasq[0].filter_aaaa='1'
 	uci commit dhcp
-	/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+	/etc/init.d/dnsmasq restart 9>&- >/dev/null 2>&1 || true
 }
 
 save_last_known_good_dir_internal() {
@@ -444,6 +448,12 @@ restore_lkg_internal() {
 
 	mode="$(xray_mode)"
 	case "$mode" in
+		off)
+			# Nothing to restore: the operator asked for direct routing and
+			# the off apply already owns the path.
+			set_status_ok 'software off active; no routing state to restore'
+			return 0
+			;;
 		full|selective)
 			if [ -d "/etc/router-rules/last-known-good-${mode}" ]; then
 				lkg="/etc/router-rules/last-known-good-${mode}"

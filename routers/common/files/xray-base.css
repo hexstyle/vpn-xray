@@ -332,6 +332,44 @@
     }
     .toggle-row.toggle-loading .toggle-label { opacity: 0.55; }
 
+    /* Three-state routing mode segment (Full / Selective / Off). */
+    .mode-title {
+      font-weight: 700;
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .mode-segment {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .mode-seg {
+      appearance: none;
+      border: 1px solid var(--line-strong);
+      background: var(--chip);
+      color: var(--chip-text);
+      border-radius: 10px;
+      padding: 9px 16px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .mode-seg:hover:not(:disabled) { border-color: var(--accent); }
+    .mode-seg.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .mode-seg:disabled { cursor: default; opacity: 0.65; }
+    .mode-seg.active:disabled { opacity: 0.85; }
+    .mode-segment.toggle-loading .mode-seg { opacity: 0.55; }
+
     /* Spinner while the routing mode is loading or being applied — makes it
        obvious the switch is working rather than showing a stale/false state. */
     .toggle-state.loading,

@@ -90,7 +90,7 @@ This block controls the optional GitHub-backed destination list.
 
 It shows:
 
-- current local routing mode
+- current local routing mode (`full`, `selective`, or `off`)
 - shared rules textarea
 - compact GitHub sync / runtime status
 - whether the router runtime already matches the latest verified ruleset

@@ -147,7 +147,6 @@
         "applyRouterProfileBtn",
         "smokeBtn",
         "logsBtn",
-        "rulesModeToggle",
         "rulesSaveConfigBtn",
         "rulesApplyBtn",
         "rulesPullBtn",
@@ -175,6 +174,9 @@
           el.disabled = busy;
         }
       });
+      document.querySelectorAll("[data-rules-mode]").forEach((el) => {
+        el.disabled = busy;
+      });
     }
 
     function setStartupControlsDisabled(disabled) {
@@ -186,7 +188,6 @@
         "diagnoseRepairBtn",
         "applyRouterProfileBtn",
         "smokeBtn",
-        "rulesModeToggle",
         "rulesSaveConfigBtn",
         "rulesApplyBtn",
         "rulesPullBtn",
@@ -214,9 +215,12 @@
           el.disabled = disabled;
         }
       });
+      document.querySelectorAll("[data-rules-mode]").forEach((el) => {
+        el.disabled = disabled;
+      });
     }
 
-    const RULES_MODE_TIMEOUT_MS = 160000;
+    const RULES_MODE_TIMEOUT_MS = 45000;
     const RULES_SAVE_CONFIG_TIMEOUT_MS = 70000;
     const RULES_SYNC_TIMEOUT_MS = 190000;
     const RULES_EXTERNAL_PREVIEW_TIMEOUT_MS = 370000;

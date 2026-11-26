@@ -73,6 +73,22 @@ When asked to fix, add, or change something on the router — the fix goes into 
 - If a config value (UCI, dnsmasq, ipset, rules) needs to change, update the template, profile.env, or install script that sets it — not just the live value.
 - After fixing, verify that a fresh deploy from the repo would produce the correct result without manual intervention.
 
+## Code-Only Repairs and Configuration
+
+Diagnostics may run read-only scripts or one-off probes. **Repairs and configuration
+changes must go through the application's own code paths** — the CGIs, the UI, the
+installer/render/apply libraries, and the normal repair/apply jobs — never through
+ad-hoc shell scripts, manual file writes, or one-off SSH commands against a live
+router or VPS.
+
+- If an emergency workaround was needed to unblock the field, the work is not done
+  until the same behavior is implemented in the application code, deployed by the
+  normal install/repair path, and verified with a clean deploy.
+- A live change that the repo cannot reproduce is a defect, not a fix. Fold it back
+  into the source before continuing.
+- Scripts remain valid for diagnosis, measurement, and reproducing a failure. They
+  are not the delivery path for a repair or a configuration change.
+
 ## Verify Before Reporting
 
 Never report a hypothesis to the user as if it were a conclusion. Before saying "the problem is X" or "try doing Y", verify it yourself first:

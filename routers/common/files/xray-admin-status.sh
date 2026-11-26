@@ -5,7 +5,7 @@
 # constants, and helper functions). Defines functions only; runs no code.
 
 status_json() {
-	local switch_state switch_func xray_running redsocks_running http_listen socks_listen redsocks_listen transproxy
+	local switch_state switch_func xray_mode software_off xray_running redsocks_running http_listen socks_listen redsocks_listen transproxy
 	local server_address server_port server_name public_key short_id flow uuid access_log error_log
 	local path_requested path_active ready path_state path_smoke_checked path_effective path_degraded
 	local last_smoke_at last_smoke_status last_smoke_message last_smoke_http_ok last_smoke_https_ok last_smoke_egress_ok last_smoke_openai_ok
@@ -13,6 +13,9 @@ status_json() {
 
 	switch_state="$(current_switch_state)"
 	switch_func="$(uci -q get switch-button.@main[0].func 2>/dev/null || true)"
+	xray_mode="$(uci -q get router_rules.global.xray_mode 2>/dev/null || echo full)"
+	software_off=0
+	[ "$xray_mode" = 'off' ] && software_off=1
 	config_ready && ready=1 || ready=0
 
 	service_running "$XRAY_PID" && xray_running=1 || xray_running=0
@@ -28,7 +31,7 @@ status_json() {
 	failsafe_hold_until="$(xray_failsafe_state_value until "$VX_FAILSAFE_HOLD")"
 	failsafe_hold_reason="$(xray_failsafe_state_value reason "$VX_FAILSAFE_HOLD")"
 
-	if [ "$switch_state" = 'on' ]; then
+	if [ "$switch_state" = 'on' ] && [ "$software_off" = '0' ]; then
 		path_requested=1
 	else
 		path_requested=0
@@ -92,6 +95,8 @@ status_json() {
 
 	if [ "$switch_state" != 'on' ]; then
 		path_state='switch_off'
+	elif [ "$software_off" = '1' ]; then
+		path_state='mode_off'
 	elif [ "$ready" != '1' ]; then
 		path_state='needs_vps_profile'
 	elif [ "$failsafe_active" = '1' ]; then
@@ -107,6 +112,8 @@ status_json() {
 	printf '{'
 	printf '"switch_state":"%s",' "$(json_escape "$switch_state")"
 	printf '"switch_func":"%s",' "$(json_escape "$switch_func")"
+	printf '"xray_mode":"%s",' "$(json_escape "$xray_mode")"
+	printf '"software_off":'; json_bool "$software_off"; printf ','
 	printf '"config_ready":'; json_bool "$ready"; printf ','
 	printf '"path_state":"%s",' "$(json_escape "$path_state")"
 	printf '"path_requested":'; json_bool "$path_requested"; printf ','

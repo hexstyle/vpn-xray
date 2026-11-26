@@ -274,7 +274,7 @@ If you want them, use these advanced variables:
 If `RULES_REPO_FETCH_URL` is empty:
 
 - the transport still works
-- `full` and local `selective` still work
+- `full`, local `selective`, and software `off` still work
 - Git-backed rules sync stays disabled
 
 Runtime behavior:

@@ -20,8 +20,8 @@ xray_state_signature() {
 	local mode effective_sig
 	mode="$(xray_mode)"
 	case "$mode" in
-		full)
-			printf 'full\n'
+		full|off)
+			printf '%s\n' "$mode"
 			return 0
 			;;
 	esac
@@ -34,8 +34,8 @@ xray_state_signature_quick_internal() {
 
 	mode="$(xray_mode)"
 	case "$mode" in
-		full)
-			printf 'full\n'
+		full|off)
+			printf '%s\n' "$mode"
 			return 0
 			;;
 	esac

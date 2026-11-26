@@ -407,7 +407,7 @@ set_mode_action() {
 
 	mode="$(request_value mode)"
 	case "$mode" in
-		full|selective)
+		full|selective|off)
 			;;
 		*)
 			emit_error set_mode 'Invalid xray mode.'
@@ -423,7 +423,7 @@ set_mode_action() {
 		return 0
 	fi
 
-	job_id="$(ui_job_begin set_mode "Starting hard cutover to ${mode} routing mode" "$mode")"
+	job_id="$(ui_job_begin set_mode "Switching routing mode to ${mode}" "$mode")"
 	(
 		rc=0
 		prev_last_cutover_at="$(status_file_value last_cutover_at)"
@@ -444,5 +444,10 @@ set_mode_action() {
 	) </dev/null >/dev/null 2>&1 &
 	bg_pid="$!"
 	ui_job_attach_pid "$job_id" "$bg_pid"
-	status_action
+	# The job is accepted; the UI confirms through the fast, lock-free
+	# mode_status probe. Running the heavy full status here can lose the
+	# status lock and falsely report "busy" for a job that already started.
+	emit_header
+	printf '{"ok":true,"action":"set_mode","job_state":"scheduled","job_id":"%s","target_mode":"%s"}' \
+		"$(json_escape "$job_id")" "$(json_escape "$mode")"
 }

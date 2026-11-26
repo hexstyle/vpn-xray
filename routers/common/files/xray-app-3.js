@@ -249,7 +249,7 @@
       ].filter(Boolean);
       const chips = [
         `<span class="chip ${gitHealth.chipClass}">Git: ${escapeHtml(gitHealth.label)}</span>`,
-        `<span class="chip ${modePending ? "warn" : mode === "selective" ? "ok" : ""}">Mode: ${escapeHtml(mode)}${modePending ? " (applying)" : ""}</span>`,
+        `<span class="chip ${modePending ? "warn" : mode === "selective" ? "ok" : mode === "off" ? "warn" : ""}">Mode: ${escapeHtml(mode || "unknown")}${modePending ? " (applying)" : ""}</span>`,
         `<span class="chip">Rules: ${escapeHtml(counts)}</span>`,
       ];
       if (externalEnabled) {
@@ -397,7 +397,9 @@
       const hint = document.getElementById("rulesEditorHint");
       const loadButton = document.getElementById("rulesLoadTextBtn");
       const runtimeSwitchOn = state.runtime?.switch_state === "on";
-      const selectiveMode = effectiveRulesMode(state.rules) === "selective";
+      const rulesMode = effectiveRulesMode(state.rules);
+      const selectiveMode = rulesMode === "selective";
+      const offMode = rulesMode === "off";
       const gitSyncEnabled = !!state.rules?.git_sync_enabled;
       const gitConfigured = !!state.rules?.git_configured;
       const gitReadonly = rulesGitReadonlyLive();
@@ -451,7 +453,9 @@
         loadButton.disabled = state.foregroundBusy || backendJobRunning;
       }
       if (hint) {
-        const applyScope = runtimeSwitchOn && selectiveMode
+        const applyScope = offMode
+          ? "Redirection is OFF: these addresses are stored but not used until Routing Mode is set to Full or Selective."
+          : runtimeSwitchOn && selectiveMode
           ? "These addresses are active right now because the GL.iNet VPN switch is ON and Routing Mode is selective."
           : "These addresses will only affect traffic after the GL.iNet VPN switch is ON and Routing Mode is selective.";
         if (!state.rulesTextLoaded) {

@@ -120,7 +120,7 @@ After the first successful sync:
 
 1. Connect your devices to the router.
 2. Put the physical switch in the `ON` position.
-3. Keep the router in `full` mode unless you specifically need selective routing.
+3. Keep the router in `full` mode unless you specifically need selective routing. `off` disables all redirection and sends LAN traffic directly through the WAN; the VPS stays available for management and repair.
 
 Default behavior:
 

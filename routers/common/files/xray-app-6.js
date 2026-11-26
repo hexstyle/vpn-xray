@@ -349,8 +349,11 @@
         hideRulesTextModal();
       }
     });
-    document.getElementById("rulesModeToggle").addEventListener("change", (event) => {
-      setRulesMode(event.currentTarget.checked ? "selective" : "full", event.currentTarget);
+    document.querySelectorAll("[data-rules-mode]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        const target = event.currentTarget;
+        setRulesMode(target.dataset.rulesMode, target);
+      });
     });
     document.getElementById("profileSelect").addEventListener("change", (event) => {
       selectProfile(event.target.value);

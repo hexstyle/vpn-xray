@@ -58,6 +58,7 @@ DEFAULT_RULES_BACKUP_KEEP='20'
 . "$VX_RULES_LIB_DIR/router-rules-external-b.sh"
 . "$VX_RULES_LIB_DIR/router-rules-ipset.sh"
 . "$VX_RULES_LIB_DIR/router-rules-apply.sh"
+. "$VX_RULES_LIB_DIR/router-rules-mode.sh"
 . "$VX_RULES_LIB_DIR/router-rules-status.sh"
 with_lock() {
 	local cmd="$1" max_wait
@@ -144,7 +145,14 @@ case "$cmd" in
 		with_lock resolve_rules_internal
 		;;
 	build-xray-ipset)
-		with_lock build_xray_ipset_internal
+		if [ "${ROUTER_RULES_USE_CACHED_RESOLVED:-0}" = '1' ]; then
+			with_lock build_xray_ipset_internal
+		else
+			# DNS resolution is the long part; run it outside the main rules
+			# lock so an in-budget mode switch can still acquire that lock.
+			with_flock '/tmp/router-rules-resolve.flock' "${ROUTER_RULES_RESOLVE_LOCK_WAIT:-60}" resolve_rules_internal || exit 1
+			ROUTER_RULES_USE_CACHED_RESOLVED=1 with_lock build_xray_ipset_internal
+		fi
 		;;
 	apply-xray)
 		with_lock apply_xray_internal

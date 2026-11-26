@@ -26,7 +26,7 @@ XRAY_UI_IMPL="$XRAY_UI $ROOT/routers/common/files/xray-base.css $ROOT/routers/co
 ROUTER_RULES="$ROOT/routers/common/files/router-rules"
 # router-rules split into sourced libs (AGENTS.md 500-line rule); grep the
 # whole implementation set for moved function content.
-ROUTER_RULES_IMPL="$ROUTER_RULES $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-status.sh"
+ROUTER_RULES_IMPL="$ROUTER_RULES $ROOT/routers/common/files/router-rules-config.sh $ROOT/routers/common/files/router-rules-git.sh $ROOT/routers/common/files/router-rules-repo.sh $ROOT/routers/common/files/router-rules-remote.sh $ROOT/routers/common/files/router-rules-rulestree.sh $ROOT/routers/common/files/router-rules-external-a.sh $ROOT/routers/common/files/router-rules-external-b.sh $ROOT/routers/common/files/router-rules-ipset.sh $ROOT/routers/common/files/router-rules-apply.sh $ROOT/routers/common/files/router-rules-mode.sh $ROOT/routers/common/files/router-rules-status.sh"
 SWITCH_HELPER="$ROOT/routers/gl-mt3000-glinet/files/gl-switch-xray.sh"
 WATCHDOG="$ROOT/routers/gl-mt3000-glinet/files/xray-switch-watchdog.init"
 HEALTH_MONITOR="$ROOT/routers/gl-mt3000-glinet/files/xray-health-monitor.init"
@@ -71,6 +71,9 @@ grep -q 'path_requested' "$XRAY_INIT" \
 
 grep -q 'path_requested || return 0' "$XRAY_INIT" \
 	|| fail "codex-xray.init must no-op when boot startup is not requested"
+
+grep -q 'SSH tunnel still connecting' "$XRAY_INIT" \
+	|| fail "codex-xray.init must not block the mode switch on the SSH tunnel handshake"
 
 grep -q '"sniffing": {' "$ROOT/routers/gl-mt3000-glinet/files/codex-xray.json.template" \
 	|| fail "codex-xray.json template must enable sniffing so transparent traffic can recover hostnames from TLS/HTTP metadata"
@@ -152,6 +155,9 @@ grep -q 'timeout 3 wget' "$HEALTH_MONITOR" \
 grep -q 'ROUTER_RULES_SYNC_ACTOR=boot' "$ROOT/routers/common/files/router-rules-sync.init" \
 	|| fail "router-rules-sync init must run an immediate boot-time apply-xray refresh"
 
+grep -q 'ROUTER_RULES_USE_CACHED_RESOLVED=1 ROUTER_RULES_SYNC_MODE=apply ROUTER_RULES_SYNC_ACTOR=boot' "$ROOT/routers/common/files/router-rules-sync.init" \
+	|| fail "boot restore must use the cached resolution snapshot, not block on a full DNS refresh (AGENTS boot guardrail)"
+
 grep -q 'path_requested' $ROUTER_RULES_IMPL \
 	|| fail "router-rules must gate runtime drift recovery behind the active switch/config state"
 
@@ -164,7 +170,7 @@ grep -q 'transproxy_runtime_healthy || return 0' $ROUTER_RULES_IMPL \
 grep -q 'RUNNER_ACTION=' "$SWITCH_HELPER" \
 	|| fail "gl-switch-xray.sh must persist the in-flight action so repeated watchdog retries do not kill the same helper"
 
-grep -q 'helper already processing action=\$ACTION' "$SWITCH_HELPER" \
+grep -q 'helper already processing action=\$action_tag' "$SWITCH_HELPER" \
 	|| fail "gl-switch-xray.sh must ignore duplicate on/off retries while the same helper action is already running"
 
 grep -q 'runtime_path_active()' "$SWITCH_HELPER" \

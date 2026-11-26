@@ -201,47 +201,58 @@
           return "This editor shows the router working copy of the shared list.";
       }
     }
+    function rulesModeLabel(mode) {
+      switch (mode) {
+        case "selective": return "Selective";
+        case "off": return "Off";
+        default: return "Full";
+      }
+    }
     function renderRulesModeUi(data = state.rules) {
       const mode = effectiveRulesMode(data);
       const applying = !!state.pendingRulesMode
         || (backendPendingRulesMode(data) !== "");
-      const modeToggle = document.getElementById("rulesModeToggle");
+      const segment = document.getElementById("rulesModeSegment");
+      const buttons = document.querySelectorAll("[data-rules-mode]");
       const modeStateText = document.getElementById("rulesModeStateText");
-      const row = modeToggle ? modeToggle.closest(".toggle-row") : null;
       // Unknown/loading: the router's real mode is not known yet (nothing
-      // loaded, or only a busy/error response arrived). Show a loader and an
-      // indeterminate switch instead of a misleading Full/Selective.
+      // loaded, or only a busy/error response arrived). Keep the segment
+      // neutral instead of showing a misleading Full.
+      buttons.forEach((button) => {
+        button.classList.toggle("active", false);
+        button.setAttribute("aria-pressed", "false");
+        button.disabled = true;
+      });
       if (!mode) {
-        if (modeToggle) {
-          modeToggle.indeterminate = true;
-          modeToggle.disabled = true;
-        }
-        if (row) row.classList.add("toggle-loading");
+        if (segment) segment.classList.add("toggle-loading");
         if (modeStateText) {
           modeStateText.textContent = "Loading routing mode…";
           modeStateText.className = "toggle-state loading";
         }
         return;
       }
-      if (row) row.classList.remove("toggle-loading");
-      if (modeToggle) {
-        modeToggle.indeterminate = false;
-        modeToggle.checked = mode === "selective";
-        // While applying, keep the switch on the TARGET mode but locked so it
+      if (segment) segment.classList.remove("toggle-loading");
+      buttons.forEach((button) => {
+        const selected = button.dataset.rulesMode === mode;
+        button.classList.toggle("active", selected);
+        button.setAttribute("aria-pressed", selected ? "true" : "false");
+        // While applying, keep the target mode selected but locked so it
         // cannot bounce back to the old state; otherwise it tracks live state.
-        modeToggle.disabled = applying || state.foregroundBusy || !state.uiReady;
-      }
+        button.disabled = applying || state.foregroundBusy || !state.uiReady;
+      });
       if (modeStateText) {
         if (applying) {
-          modeStateText.textContent = mode === "selective"
-            ? "Applying selective routing on this router…"
-            : "Applying full routing on this router…";
+          modeStateText.textContent = `Applying ${rulesModeLabel(mode)} routing on this router…`;
           modeStateText.className = "toggle-state applying";
+        } else if (mode === "off") {
+          modeStateText.textContent = "Off: redirection disabled; LAN uses the direct WAN.";
+          modeStateText.className = "toggle-state warn";
+        } else if (mode === "selective") {
+          modeStateText.textContent = "Selective routing is active on this router.";
+          modeStateText.className = "toggle-state ok";
         } else {
-          modeStateText.textContent = mode === "selective"
-            ? "Selective routing is active on this router."
-            : "Full routing is active on this router.";
-          modeStateText.className = `toggle-state ${mode === "selective" ? "ok" : ""}`;
+          modeStateText.textContent = "Full routing is active on this router.";
+          modeStateText.className = "toggle-state";
         }
       }
     }
@@ -378,6 +389,10 @@
         pathEl.textContent = "idle";
         pathEl.className = "value warn";
         pathHint.textContent = "The client profile is ready, but the physical switch is OFF, so the path stays down on purpose.";
+      } else if (data.path_state === "mode_off") {
+        pathEl.textContent = "off";
+        pathEl.className = "value warn";
+        pathHint.textContent = "Redirection is disabled in software. LAN traffic goes directly through the WAN; the VPS is kept only for management and repair.";
       } else if (data.path_state === "failsafe") {
         pathEl.textContent = "blocked";
         pathEl.className = "value bad";

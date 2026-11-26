@@ -132,7 +132,11 @@ apply_profile_to_router_internal() {
 		APPLY_ROUTER_PHASE='applied'
 	fi
 	# External reachability is health, never a reason to restore the old target.
-	if [ "$(current_switch_state)" != on ]; then return 0; fi
+	# Hardware OFF and software OFF both leave the path down on purpose.
+	if ! path_allowed; then
+		APPLY_PATH_HEALTH='not_checked'
+		return 0
+	fi
 	APPLY_PATH_HEALTH='failed'
 	verify_applied_profile_path "$profile_id" || return 1
 	APPLY_PATH_HEALTH='ok'

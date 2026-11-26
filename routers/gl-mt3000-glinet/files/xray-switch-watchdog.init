@@ -228,8 +228,16 @@ maybe_smoke_recover() {
 }
 
 while true; do
+	# Let an in-budget UI mode switch own the path; do not start/stop the
+	# same daemons underneath it. After the budget, resume normal recovery.
+	if router_mode_switch_running 30; then
+		sleep 5
+		continue
+	fi
 	state="$(current_switch_state)"
-	if [ "$state" = on ]; then
+	# Software OFF is a first-class state: the switch may still be ON, but
+	# the operator disabled redirection. Never fail-safe or restart the path.
+	if [ "$state" = on ] && ! xray_software_off; then
 		if config_ready && xray_failsafe_hold_active; then
 			xray_failsafe_enable "recovery hold active: $(xray_failsafe_state_value reason "$VX_FAILSAFE_HOLD")"
 			sleep 10

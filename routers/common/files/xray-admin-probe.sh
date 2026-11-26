@@ -224,14 +224,16 @@ probe_cleanup() {
 }
 
 sync_to_hardware_switch() {
-	local switch_state tries
+	local switch_state want_active=1 tries
 
 	switch_state="$(current_switch_state)"
 	[ "$switch_state" = 'on' ] || switch_state='off'
+	# Software OFF keeps the path down even though the hardware switch is on.
+	[ "$switch_state" = 'on' ] && ! xray_software_off || want_active=0
 	/etc/gl-switch.d/xray.sh "$switch_state" >/dev/null 2>&1 || return 1
 	tries=0
 	while [ "$tries" -lt "$SWITCH_SYNC_WAIT_SECONDS" ]; do
-		if [ "$switch_state" = 'on' ]; then
+		if [ "$want_active" = '1' ]; then
 			if runtime_path_active; then
 				return 0
 			fi

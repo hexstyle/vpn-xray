@@ -215,18 +215,15 @@
           </div>
         </div>
         <div class="field field-full" style="margin-top:12px;">
-          <label for="rulesModeToggle">Routing Mode On This Router</label>
-          <div class="toggle-row toggle-loading">
-            <span class="toggle-label">Full</span>
-            <label class="toggle-switch" for="rulesModeToggle">
-              <input type="checkbox" id="rulesModeToggle" aria-label="Selective routing mode" disabled>
-              <span class="toggle-slider"></span>
-            </label>
-            <span class="toggle-label">Selective</span>
+          <div class="mode-title">Routing Mode On This Router</div>
+          <div class="mode-segment toggle-loading" id="rulesModeSegment" role="group" aria-label="Routing mode">
+            <button type="button" class="mode-seg" data-rules-mode="full" aria-pressed="false" disabled>Full</button>
+            <button type="button" class="mode-seg" data-rules-mode="selective" aria-pressed="false" disabled>Selective</button>
+            <button type="button" class="mode-seg" data-rules-mode="off" aria-pressed="false" disabled>Off</button>
             <span class="toggle-state loading" id="rulesModeStateText">Loading routing mode…</span>
           </div>
           <div class="hint" id="rulesModeHint">
-            This switch applies locally on this router only and performs an immediate reset/cutover so the new mode is active right away. Shared addresses affect traffic only when the GL.iNet VPN switch is ON and this mode is set to <code>selective</code>. <code>full</code> keeps the current behavior. <code>selective</code> redirects literal IP/CIDR entries directly and tracks domain entries through <code>dnsmasq -&gt; ipset</code>.
+            Mode changes apply locally in a few seconds without a full reinstall. <code>full</code> routes all LAN traffic through the VPS. <code>selective</code> routes only listed targets and tracks domain entries through <code>dnsmasq -&gt; ipset</code>. <code>off</code> disables redirection completely: LAN goes directly through the WAN and the VPS is used only for management and repair. The physical switch remains an independent ON/OFF control.
           </div>
         </div>
         <div class="field field-full" style="margin-top:12px;">
@@ -487,13 +484,13 @@
     </div>
   </div>
 
-  <script src="xray-app-1.js?v=20261119-selected-apply-r4"></script>
-  <script src="xray-app-2.js?v=20261119-selected-apply-r4"></script>
-  <script src="xray-app-3.js?v=20261119-selected-apply-r4"></script>
-  <script src="xray-app-4.js?v=20261119-selected-apply-r4"></script>
-  <script src="xray-app-5.js?v=20261119-selected-apply-r4"></script>
-  <script src="xray-app-6.js?v=20261119-selected-apply-r4"></script>
-  <script src="xray-app-7.js?v=20261119-selected-apply-r4"></script>
+  <script src="xray-app-1.js?v=20261126-mode-off-r2"></script>
+  <script src="xray-app-2.js?v=20261126-mode-off-r2"></script>
+  <script src="xray-app-3.js?v=20261126-mode-off-r2"></script>
+  <script src="xray-app-4.js?v=20261126-mode-off-r2"></script>
+  <script src="xray-app-5.js?v=20261126-mode-off-r2"></script>
+  <script src="xray-app-6.js?v=20261126-mode-off-r2"></script>
+  <script src="xray-app-7.js?v=20261126-mode-off-r2"></script>
   <script src="xray-tree.js?v=20261119-selected-apply-r4"></script>
 </body>
 </html>

@@ -114,7 +114,7 @@ It handles:
 
 - GitHub sync
 - conflict policy
-- local selective/full mode
+- local selective/full/off mode
 - runtime cutover state
 - `dnsmasq -> ipset` domain tracking
 

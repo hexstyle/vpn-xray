@@ -155,8 +155,8 @@ guard_failsafe_hold() {
 	last_failsafe_tick=$tick
 }
 
-: > "$LOG"
-: > "$ALERTS"
+[ -f "$LOG" ] || : > "$LOG"
+[ -f "$ALERTS" ] || : > "$ALERTS"
 
 while true; do
 	eval $(awk "/MemTotal/{t=\$2}/MemAvailable/{a=\$2}END{printf \"mt=%d ma=%d\",t,a}" /proc/meminfo)
@@ -211,6 +211,17 @@ while true; do
 	now=$(date +%s)
 	printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
 		"$now" "$ma" "$la" "$xrss" "$xfd" "$xth" "$ct" "$rxe" "$xup" "$rup" "$cok" >> "$LOG"
+
+	# Software OFF: redirection is intentionally down. Keep sampling for
+	# forensics, but no alert or guard may restart/fail-safe the path.
+	if xray_software_off; then
+		xpid_prev="$xpid"
+		tick=$((tick + 1))
+		rotate
+		rotate_xray_logs
+		sleep "$INT"
+		continue
+	fi
 
 	# --- Alerts (observational) ---
 	[ "$ma" -lt 80000 ] && alert "LOW_MEM avail=${ma}kB"
