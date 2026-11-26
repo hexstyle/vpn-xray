@@ -132,6 +132,15 @@ grep -q 'ip daddr "@\$NFT_SET" counter redirect' "$TRANSPROXY_INIT" \
 grep -q 'tproxy ip to "127.0.0.1:\$tproxy_port"' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must TPROXY dynamically learned UDP destinations"
 
+# Node 5.6: the control plane rides the existing Xray tunnel to the VPS's
+# loopback instead of new external SSH sessions (which can be penalised).
+grep -q 'ssh_control_proxy_opts' $VPS_IMPL \
+	|| fail "VPS SSH control must expose the tunnel/localhost proxy option (node 5.6)"
+grep -q 'ProxyCommand=' $VPS_IMPL \
+	|| fail "VPS SSH control must pass the ProxyCommand to the native SSH client (node 5.6)"
+[ -x "$ROOT/routers/common/files/xray-ssh-connect.py" ] \
+	|| fail "xray-ssh-connect.py must be executable (node 5.6)"
+
 # Node 4.1a: the health probe must not depend on a standalone `timeout`
 # binary (OpenWrt ships BusyBox without it); the old unconditional call made
 # cok=0 forever while the WAN was fine. wget -T is the portable bound.

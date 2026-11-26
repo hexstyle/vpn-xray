@@ -22,6 +22,27 @@ vps_run_bounded() {
 	vx_run_with_timeout "$limit" "$@"
 }
 
+# Control/inspection sessions ride the existing Xray tunnel to the VPS's
+# loopback when dial_mode=ssh_tunnel. External SSH sessions from the router
+# can be throttled or penalised (OpenSSH >=9.8 PerSourcePenalties, ISP
+# session policies); the tunnel's localhost path is the control plane that
+# is already proven by the data plane.
+ssh_control_proxy_opts() {
+	local profile_id="$1" host="$2" mode script
+
+	SSH_CONTROL_PROXY_CMD=''
+	SSH_CONTROL_HOSTKEY_ALIAS=''
+	mode="$(profile_get "$profile_id" dial_mode)"
+	[ "$mode" = ssh_tunnel ] || return 0
+	script="${XRAY_SSH_CONNECT_PY:-/usr/share/vpn-xray/xray-ssh-connect.py}"
+	[ -x "$script" ] || return 0
+	command -v python3 >/dev/null 2>&1 || return 0
+	netstat -lnt 2>/dev/null | grep -q ':1083 ' || return 0
+	SSH_CONTROL_PROXY_CMD="python3 $script %h %p"
+	SSH_CONTROL_HOSTKEY_ALIAS="$host"
+	return 0
+}
+
 # A second identity is safe only after explicit authentication refusal: other
 # failures may follow remote execution, so must never replay a mutation.
 for_each_identity() {
@@ -58,6 +79,9 @@ ssh_control_run() {
 		set -- sshpass -e ssh -o BatchMode=no -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1
 	else
 		set -- ssh -i "$identity" -o BatchMode=yes
+	fi
+	if [ -n "${SSH_CONTROL_PROXY_CMD:-}" ]; then
+		set -- "$@" -o "ProxyCommand=$SSH_CONTROL_PROXY_CMD" -o "HostKeyAlias=${SSH_CONTROL_HOSTKEY_ALIAS:-$host}"
 	fi
 	SSH_FAILURE_KIND=''
 	limit="$(vps_time_left "${cap:-170}")" || { SSH_FAILURE_KIND=deadline; return 124; }
@@ -131,6 +155,7 @@ ssh_cmd() {
 	port="$(profile_get "$profile_id" ssh_port)"
 	user="$(profile_get "$profile_id" ssh_user)"
 	[ -n "$host" ] || { SSH_FAILURE_KIND=local; return 1; }
+	ssh_control_proxy_opts "$profile_id" "$host"
 	for_each_identity "$profile_id" ssh_exec_with_identity "${cmd}|${host}|${port:-22}|${user:-root}|$cap"
 }
 
@@ -140,6 +165,7 @@ ssh_stdin_cmd() {
 	port="$(profile_get "$profile_id" ssh_port)"
 	user="$(profile_get "$profile_id" ssh_user)"
 	[ -n "$host" ] || { SSH_FAILURE_KIND=local; return 1; }
+	ssh_control_proxy_opts "$profile_id" "$host"
 	for_each_identity "$profile_id" ssh_stdin_with_identity "${remote_cmd}|${stdin_path}|${host}|${port:-22}|${user:-root}"
 }
 

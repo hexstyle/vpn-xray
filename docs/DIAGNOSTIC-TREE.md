@@ -65,6 +65,8 @@ Meta-rules (enforced by review):
 | 4.1 | 4 | Transparent proxy (redsocks + nat) | router | disruptive | transproxy_restart | watchdog | — |
 | 4.1a | 4 | Transparent UDP (QUIC/WebRTC/calls) | router | disruptive | apply_profile | none | — |
 | 5 | 5 | Router to VPS transport (WS+TLS) | router | disruptive | repin_render | watchdog+repin | — |
+| 5.6 | 5 | SSH control plane penalties / external-IP exemption | vps | safe | install | none | — |
+| 5.7 | 5 | SSH control rides the Xray tunnel | router | safe | apply_profile | none | — |
 | 6 | 6 | VPS Xray runtime | vps | disruptive | repair_pipeline | none | — |
 | 7 | 7 | End-to-end: LAN client to internet via VPS | router | disruptive | walk | none | — |
 | 8 | 8 | Config coherence (profile = router = VPS) | router | disruptive | apply_profile | none | — |
@@ -434,6 +436,36 @@ python3 socket connect <VPS>:443                                  # data
 - 5.4 **Both closed** → VPS is down/rebuilding or its provider firewall
   changed; nothing the router can repair. Surface reachability + last-known
   state to the operator. `safe`
+- 5.6 **SSH control plane locks itself out after timeouts** (2026-11-26).
+  Symptom: `Apply`, `Repair` and the UI inspection fail with `SSH` exit
+  255 after ~17 s, while the router's proxy/tunnel data plane stays healthy;
+  the VPS sshd journal shows `Accepted publickey` for the router's external
+  IP but the session never returns. OpenSSH >=9.8 enables
+  `PerSourcePenalties`; bounded control sessions that hit their timeout are
+  counted as `grace-exceeded`/`noauth` and later connections are delayed or
+  dropped. Probes: `sshd -T | grep -i persource`, the sshd journal for the
+  router's external IP, and a direct `ssh` from the router (it prints the
+  first command output, then stalls). Cause: penalties configured without
+  an exempt list, plus password authentication left enabled (the same
+  journal shows `Failed password` brute force). Repair: the VPS installer
+  derives the router's external IP from `SSH_CLIENT` (never the VPS's own IP)
+  and writes `PerSourcePenaltyExemptList <client-ip>` together with
+  `PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
+  `PermitRootLogin prohibit-password`; validate with `sshd -t` and reload.
+  `safe`. Verify: `sshd -T` shows the dynamic exempt and password auth off;
+  a fresh router control command returns its full output; Apply/Repair pass.
+- 5.7 **External SSH session stalls after authentication** (2026-11-26).
+  Symptom: with the tunnel healthy, a new external SSH command from the
+  router returns its first line and then hangs; the same command through
+  the Xray tunnel's VPS-localhost path works. Cause: the ISP/VPS path
+  throttles or stalls new external interactive SSH sessions, while the
+  established tunnel is unaffected. Repair: when `dial_mode=ssh_tunnel`,
+  `ssh_cmd`/`ssh_stdin_cmd` use `xray-ssh-connect.py` as the SSH
+  `ProxyCommand` (HTTP CONNECT via the router's Xray proxy to the VPS's
+  `127.0.0.1:22`) so control/inspection reuse the tunnel; keep the direct
+  path as a fallback when the tunnel/Xray proxy is down. `safe`. Verify:
+  the router's inspection/Apply completes through the tunnel-localhost path
+  and the VPS journal records the session from `127.0.0.1`.
 - 5.5 **TCP :443 opens but TLS stalls only for selected SNI values.** Tell:
   plaintext sent to `:443` receives the server's HTTP-on-HTTPS rejection and
   TLS without SNI (or with a neutral control SNI) completes, while the

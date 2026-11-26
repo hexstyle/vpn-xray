@@ -260,6 +260,36 @@ step_runtime() {
 	return 1
 }
 
+# OpenSSH >=9.8 enables PerSourcePenalties. Short-lived router control
+# sessions that time out are counted as abuse and lock the router out; the
+# router's external IP is dynamic, so derive it from the current SSH client
+# (never the VPS's own IP) and regenerate the policy on every install/repair.
+step_ssh_control_policy() {
+	local client_ip dropin='/etc/ssh/sshd_config.d/99-vpn-xray-control.conf'
+
+	client_ip="${SSH_CLIENT%% *}"
+	case "$client_ip" in
+		''|*[!0-9.]*) client_ip='' ;;
+	esac
+	command -v sshd >/dev/null 2>&1 || return 0
+	mkdir -p /etc/ssh/sshd_config.d || return 1
+	{
+		printf '%s\n' '# Managed by vpn-xray; regenerated on every install/repair.'
+		printf '%s\n' 'PasswordAuthentication no'
+		printf '%s\n' 'KbdInteractiveAuthentication no'
+		printf '%s\n' 'PermitRootLogin prohibit-password'
+		if [ -n "$client_ip" ]; then
+			printf 'PerSourcePenaltyExemptList %s\n' "$client_ip"
+		fi
+	} > "$dropin" || return 1
+	if ! sshd -t; then
+		report ssh_control failed 'sshd rejected the control policy drop-in'
+		return 1
+	fi
+	systemctl reload ssh >/dev/null 2>&1 || true
+	report ssh_control ok "control policy applied (external client ${client_ip:-unknown}, password auth off)"
+}
+
 # -------- NTP pre-flight --------
 
 # Reality (XTLS) auth fails silently when VPS clock is skewed >30s.
@@ -287,6 +317,7 @@ step_permissions  || true
 step_certs        || true
 step_config       || true
 step_tcp_capacity || true
+step_ssh_control_policy || true
 step_firewall     || true
 step_runtime      || true
 

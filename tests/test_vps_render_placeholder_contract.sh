@@ -89,6 +89,20 @@ grep -q "file='/etc/sysctl.d/99-vpn-xray-tcp.conf'" "$REMOTE_INSTALL" \
 grep -q '^step_tcp_capacity || true' "$REMOTE_INSTALL" \
 	|| fail "VPS repair main sequence must run tcp_capacity (node 6.9)"
 
+# Node 5.6: the VPS control policy must derive the per-source penalty
+# exemption from the connecting client's external IP (never a hardcoded
+# address or the VPS's own IP) and must disable password authentication.
+grep -q '^step_ssh_control_policy()' "$REMOTE_INSTALL" \
+	|| fail "VPS repair must define step_ssh_control_policy (node 5.6)"
+grep -q '^step_ssh_control_policy || true' "$REMOTE_INSTALL" \
+	|| fail "VPS repair main sequence must run step_ssh_control_policy (node 5.6)"
+grep -q 'PerSourcePenaltyExemptList' "$REMOTE_INSTALL" \
+	|| fail "VPS control policy must exempt the router source from per-source penalties (node 5.6)"
+grep -q 'PasswordAuthentication no' "$REMOTE_INSTALL" \
+	|| fail "VPS control policy must disable password authentication (node 5.6)"
+grep -q 'SSH_CLIENT' "$REMOTE_INSTALL" \
+	|| fail "VPS control policy must derive the external client IP from SSH_CLIENT, not a static value (node 5.6)"
+
 # Node R.4 / 8.5: the CGI router-config generator must emit the same
 # transport the VPS serves (WS+TLS), not the legacy raw/reality — else an
 # apply produces a config that cannot talk to the VPS.

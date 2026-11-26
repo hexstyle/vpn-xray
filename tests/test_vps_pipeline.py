@@ -52,7 +52,15 @@ with tempfile.TemporaryDirectory() as td:
     baseline = subprocess.check_output(['git', 'show', '40e4401^:vps/debian-13/files/install-vps.remote.sh'],
                                        cwd=ROOT, text=True)
     without_capacity = lambda s: re.sub(r'^step_tcp_capacity\(\) \{.*?^\}\n', '', s, flags=re.M | re.S)
-    assert without_capacity(assembled) == without_capacity(baseline), 'unrelated pipeline behavior/order changed'
+
+    def without_control_policy(text):
+        text = re.sub(
+            r'^# OpenSSH >=9\.8 enables PerSourcePenalties\..*?^step_ssh_control_policy\(\) \{.*?^\}\n\n',
+            '', text, flags=re.M | re.S)
+        return text.replace('step_ssh_control_policy || true\n', '')
+
+    assert without_capacity(without_control_policy(assembled)) == without_capacity(baseline), \
+        'unrelated pipeline behavior/order changed'
 
     def render(kind, source, out):
         command = ('. "$VPS_PROFILE_ROOT/debian-13/render-template.sh"; render_template "$INPUT" "$OUTPUT"'
