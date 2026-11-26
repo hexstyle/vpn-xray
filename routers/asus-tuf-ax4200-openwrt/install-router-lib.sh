@@ -378,6 +378,7 @@ RULES_EXTERNAL_SOURCE_INTERVAL=$(shell_quote "${RULES_EXTERNAL_SOURCE_INTERVAL:-
 RULES_GIT_USER_NAME=$(shell_quote "${RULES_GIT_USER_NAME:-router-rules}") \
 RULES_GIT_USER_EMAIL=$(shell_quote "${RULES_GIT_USER_EMAIL:-router-rules@example.invalid}") \
 RULES_DNS_RESOLVER=$(shell_quote "${RULES_DNS_RESOLVER:-9.9.9.9 208.67.222.222}") \
+XRAY_TCP_MSS=$(shell_quote "${XRAY_TCP_MSS:-}") \
 XRAY_RULES_MODE=$(shell_quote "${XRAY_RULES_MODE:-full}") \
 ISOLATE_WIFI_LAN_ONLY=$(shell_quote "${ISOLATE_WIFI_LAN_ONLY:-0}") \
 VPN_XRAY_REPO_SLUG=$(shell_quote "local-source-bundle") \

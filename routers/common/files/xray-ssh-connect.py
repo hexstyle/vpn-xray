@@ -47,10 +47,22 @@ def _relay(sock):
                 sock.sendall(data)
 
 
+def _connect():
+    # python3-light on OpenWrt ships without encodings.idna, so getaddrinfo()
+    # on a str host raises LookupError ("unknown encoding: idna"). A bytes
+    # host skips IDNA encoding entirely; the proxy is a fixed IPv4 literal.
+    info = socket.getaddrinfo(PROXY_HOST.encode("ascii"), PROXY_PORT,
+                              socket.AF_INET, socket.SOCK_STREAM)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(10)
+    sock.connect(info[0][4])
+    return sock
+
+
 def main():
     if len(sys.argv) < 3:
         return 2
-    sock = socket.create_connection((PROXY_HOST, PROXY_PORT), 10)
+    sock = _connect()
     try:
         request = "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n" % (
             TARGET_HOST, TARGET_PORT, TARGET_HOST, TARGET_PORT)

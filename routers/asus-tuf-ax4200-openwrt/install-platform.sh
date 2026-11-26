@@ -178,8 +178,15 @@ install_platform() {
 		cp "$router_rules_rendered" /etc/config/router_rules
 		chmod 600 /etc/config/router_rules
 	fi
+	tcp_mss_line=''
+	case "${XRAY_TCP_MSS:-}" in
+		''|*[!0-9]*) ;;
+		*) [ "$XRAY_TCP_MSS" -ge 536 ] && [ "$XRAY_TCP_MSS" -le 65495 ] \
+			&& tcp_mss_line="set router_rules.global.xray_tcp_mss='$XRAY_TCP_MSS'" ;;
+	esac
 	uci -q batch <<EOF
 set router_rules.global=global
+$tcp_mss_line
 set router_rules.global.git_sync_enabled='$(effective_router_rules_bool_value git_sync_enabled "${RULES_GIT_SYNC_ENABLED:-}")'
 set router_rules.global.repo_fetch_url='$(effective_router_rules_text_value repo_fetch_url "${RULES_REPO_FETCH_URL:-}")'
 set router_rules.global.repo_push_url='$(effective_router_rules_text_value repo_push_url "${RULES_REPO_PUSH_URL:-}")'

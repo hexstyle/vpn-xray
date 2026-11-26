@@ -72,6 +72,20 @@ grep -q 'path_requested' "$XRAY_INIT" \
 grep -q 'path_requested || return 0' "$XRAY_INIT" \
 	|| fail "codex-xray.init must no-op when boot startup is not requested"
 
+# Node 5.9: PMTU discovery can be blackholed upstream; the local MSS clamp
+# must support a fixed override from UCI, and the GL profile ships a safe
+# default while a plain install leaves it unset.
+grep -q 'tcp_mss_value()' "$XRAY_INIT" \
+	|| fail "codex-xray.init must expose a fixed MSS override helper (node 5.9)"
+grep -q -- '--set-mss "\$mss"' "$XRAY_INIT" \
+	|| fail "codex-xray.init must apply the configured fixed MSS instead of relying on PMTU (node 5.9)"
+grep -q 'mss:%s' "$XRAY_INIT" \
+	|| fail "the uplink signature must include the MSS choice so changes re-apply (node 5.9)"
+grep -q 'xray_tcp_mss' "$INSTALL_PLATFORM" \
+	|| fail "the installer must persist router_rules.global.xray_tcp_mss (node 5.9)"
+grep -q 'XRAY_TCP_MSS' "$ROOT/routers/gl-mt3000-glinet/profile.env" \
+	|| fail "the GL profile must ship a safe MSS default for blackholed PMTU (node 5.9)"
+
 grep -q 'SSH tunnel still connecting' "$XRAY_INIT" \
 	|| fail "codex-xray.init must not block the mode switch on the SSH tunnel handshake"
 
@@ -143,6 +157,10 @@ grep -q 'ProxyCommand=' $VPS_IMPL \
 	|| fail "VPS SSH control must pass the ProxyCommand to the native SSH client (node 5.6)"
 [ -x "$ROOT/routers/common/files/xray-ssh-connect.py" ] \
 	|| fail "xray-ssh-connect.py must be executable (node 5.6)"
+grep -q 'encode("ascii")' "$ROOT/routers/common/files/xray-ssh-connect.py" \
+	|| fail "xray-ssh-connect.py must resolve the proxy with a bytes host (python3-light has no idna codec, node 5.6)"
+grep -q 'create_connection' "$ROOT/routers/common/files/xray-ssh-connect.py" \
+	&& fail "xray-ssh-connect.py must not call create_connection on OpenWrt"
 
 # Node 4.1a: the health probe must not depend on a standalone `timeout`
 # binary (OpenWrt ships BusyBox without it); the old unconditional call made

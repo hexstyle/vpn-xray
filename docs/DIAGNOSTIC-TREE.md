@@ -71,6 +71,7 @@ Meta-rules (enforced by review):
 | 5.6 | 5 | SSH control plane penalties / external-IP exemption | vps | safe | install | none | — |
 | 5.7 | 5 | SSH control rides the Xray tunnel | router | safe | apply_profile | none | — |
 | 5.8 | 5 | SSH data-tunnel concurrency limit | router | disruptive | save_profile | none | — |
+| 5.9 | 5 | PMTU blackhole / MTU MSS clamp | router | disruptive | apply_profile | none | — |
 | 6 | 6 | VPS Xray runtime | vps | disruptive | repair_pipeline | none | — |
 | 7 | 7 | End-to-end: LAN client to internet via VPS | router | disruptive | walk | none | — |
 | 8 | 8 | Config coherence (profile = router = VPS) | router | disruptive | apply_profile | none | — |
@@ -516,6 +517,30 @@ python3 socket connect <VPS>:443                                  # data
   `PermitRootLogin prohibit-password`; validate with `sshd -t` and reload.
   `safe`. Verify: `sshd -T` shows the dynamic exempt and password auth off;
   a fresh router control command returns its full output; Apply/Repair pass.
+- 5.9 **Large proxied responses stall while small ones work** (2026-11-26).
+  Symptom: TCP connect and TLS complete, but a big HTTPS body stops after
+  roughly one segment (observed exactly 1360 bytes, then a 30s timeout);
+  several simultaneous requests return 503 while single ones pass. Cause and
+  repair, in order:
+  (a) **Blackholed PMTU** (CGNAT/4G/PPPoE). `--clamp-mss-to-pmtu` clamps to
+  the local 1500 MTU, the peer sends larger segments, and they vanish. Repair:
+  set `router_rules.global.xray_tcp_mss` (536-65495); `codex-xray.init`
+  installs `TCPMSS --set-mss <n>` for the VPS route instead of the PMTU clamp,
+  and the uplink signature includes the value so a change re-applies on the
+  next refresh. The installer persists it from `XRAY_TCP_MSS`; the GL profile
+  defaults to 1240. `disruptive`.
+  (b) **Per-destination filtering of TLS to one VPS** (the GL case,
+  2026-11-27). Discriminator: the same router bulk-transfers 5 MB over SSH to
+  the same VPS IP in 5 s, direct WAN downloads are fast, but only TLS/443 to
+  that VPS stalls; the VPS `ss -tin` shows the client's connection with
+  `cwnd:1`, growing backoff and lost segments, while another client IP is
+  healthy. This is ISP-side filtering of that destination, not MTU and not a
+  VPS fault. Repair: switch the selected profile to another healthy VPS
+  through the normal `save_profile` + `apply_router`/installer path (the user
+  may nominate one); keep the old profile for rollback. `disruptive`.
+  Verify: a single chatgpt.com request returns the full ~774 KB body in
+  ~1.2 s, 10 concurrent HTTPS and SOCKS requests all succeed, and a LAN UDP
+  echo traverses the transparent path.
 - 5.8 **Concurrent requests collapse through the SSH data tunnel** (2026-11-26).
   Symptom: interactive calls and page loads stutter; ten simultaneous requests
   through the router proxy return mostly `503` while sequential requests all

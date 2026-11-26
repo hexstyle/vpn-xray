@@ -36,6 +36,22 @@ server_address() {
 	config_value '@.outbounds[0].settings.vnext[0].address'
 }
 
+# Optional fixed MSS clamp. PMTU discovery is blackholed on some ISP uplinks
+# (notably CGNAT/mobile paths): SYNs are clamped to the local 1500 MTU, large
+# segments are silently dropped, and proxied responses stall after the first
+# ~1.3 KB (QUIC/UDP calls and WS+TLS handshakes suffer first). Operators set
+# router_rules.global.xray_tcp_mss to cap every TCP handshake to the VPS.
+tcp_mss_value() {
+	local mss
+
+	mss="$(uci -q get router_rules.global.xray_tcp_mss 2>/dev/null || true)"
+	case "$mss" in
+		''|*[!0-9]*) return 0 ;;
+	esac
+	[ "$mss" -ge 536 ] && [ "$mss" -le 65495 ] || return 0
+	printf '%s\n' "$mss"
+}
+
 resolve_server_ipv4s() {
 	local addr resolved
 
@@ -126,7 +142,9 @@ current_uplink_signature() {
 	[ -n "$iface" ] || return 1
 	dev="$(iface_device "$iface")"
 	gateway="$(iface_gateway "$iface")"
-	printf '%s|%s|%s\n' "$iface" "$dev" "$gateway"
+	# Include the MSS choice so changing it re-runs configure_local_tcpmss on
+	# the next refresh instead of leaving the old clamp until reboot.
+	printf '%s|%s|%s|mss:%s\n' "$iface" "$dev" "$gateway" "$(tcp_mss_value)"
 }
 
 record_uplink_signature() {
@@ -278,22 +296,32 @@ clear_local_tcpmss() {
 }
 
 configure_local_tcpmss() {
-	local port addr added=0
+	local port addr added=0 mss
 
 	port="$(server_port)"
 	[ -n "$port" ] || return 0
+	mss="$(tcp_mss_value)"
 
 	iptables -t mangle -N "$LOCAL_MANGLE_CHAIN" 2>/dev/null || true
 	iptables -t mangle -F "$LOCAL_MANGLE_CHAIN"
 
 	while IFS= read -r addr; do
 		[ -n "$addr" ] || continue
-		iptables -t mangle -A "$LOCAL_MANGLE_CHAIN" \
-			-p tcp \
-			-d "$addr" \
-			--dport "$port" \
-			--tcp-flags SYN,RST SYN \
-			-j TCPMSS --clamp-mss-to-pmtu
+		if [ -n "$mss" ]; then
+			iptables -t mangle -A "$LOCAL_MANGLE_CHAIN" \
+				-p tcp \
+				-d "$addr" \
+				--dport "$port" \
+				--tcp-flags SYN,RST SYN \
+				-j TCPMSS --set-mss "$mss"
+		else
+			iptables -t mangle -A "$LOCAL_MANGLE_CHAIN" \
+				-p tcp \
+				-d "$addr" \
+				--dport "$port" \
+				--tcp-flags SYN,RST SYN \
+				-j TCPMSS --clamp-mss-to-pmtu
+		fi
 		added=1
 	done <<EOF
 $(resolve_server_ipv4s || true)
