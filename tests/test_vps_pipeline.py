@@ -293,7 +293,7 @@ exit "$rc"
 
     # Lost upload response must not replay a mutation, even with another key.
     ssh_leaf = work/'ssh-loss'; ssh_leaf.mkdir()
-    (ssh_leaf/'ssh').write_text('#!/bin/sh\ncat >/dev/null\necho read >> "$UPLOAD_COUNT"\nwhile [ "$1" != -E ]; do shift; done; shift\necho "Timeout, server fixture not responding." > "$1"\nexit 255\n')
+    (ssh_leaf/'ssh').write_text('#!/bin/sh\nbytes="$(wc -c)"\nif [ "$bytes" -gt 0 ]; then echo called >> "$UPLOAD_COUNT"; else echo read >> "$UPLOAD_COUNT"; fi\nwhile [ "$1" != -E ]; do shift; done; shift\necho "Timeout, server fixture not responding." > "$1"\nexit 255\n')
     (ssh_leaf/'ssh').chmod(0o755)
     for name in ('managed-key','bootstrap-key'): (work/name).write_text('fixture')
     loss_owner = good_owner.replace('ssh_stdin_cmd() { "$PYTHON" "$TRANSPORT" "$2" "$3"; }', r'''
