@@ -102,6 +102,10 @@ grep -q 'PasswordAuthentication no' "$REMOTE_INSTALL" \
 	|| fail "VPS control policy must disable password authentication (node 5.6)"
 grep -q 'SSH_CLIENT' "$REMOTE_INSTALL" \
 	|| fail "VPS control policy must derive the external client IP from SSH_CLIENT, not a static value (node 5.6)"
+grep -q 'VPS_CONTROL_CLIENT_IP' "$REMOTE_INSTALL" \
+	|| fail "VPS control policy must accept the router-supplied external IP (tunnel control makes SSH_CLIENT 127.0.0.1) (node 5.6)"
+grep -q '127\.\*' "$REMOTE_INSTALL" \
+	|| fail "VPS control policy must reject loopback SSH_CLIENT values (node 5.6)"
 
 # Node R.4 / 8.5: the CGI router-config generator must emit the same
 # transport the VPS serves (WS+TLS), not the legacy raw/reality — else an

@@ -59,7 +59,12 @@ with tempfile.TemporaryDirectory() as td:
             '', text, flags=re.M | re.S)
         return text.replace('step_ssh_control_policy || true\n', '')
 
-    assert without_capacity(without_control_policy(assembled)) == without_capacity(baseline), \
+    def without_runtime_skip(text):
+        return re.sub(
+            r'^\t# A healthy listener needs no restart\..*?^\tfi\n\n',
+            '', text, flags=re.M | re.S)
+
+    assert without_capacity(without_control_policy(without_runtime_skip(assembled))) == without_capacity(baseline), \
         'unrelated pipeline behavior/order changed'
 
     def render(kind, source, out):

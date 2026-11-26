@@ -143,12 +143,13 @@ run_repair_pipeline() {
 	# rather than a truncated response with no body.
 	#
 	# A lost report does not prove non-execution. Never replay this mutation.
-	local exec_cmd remote_limit
+	local exec_cmd remote_limit control_client_ip
 	ssh_rc=124
+	control_client_ip="$(router_external_ip)"
 	remote_limit="$(vps_time_left 170)" || remote_limit=0
 	if [ "$remote_limit" -gt 15 ]; then
 		remote_limit=$((remote_limit - 15))
-		exec_cmd="timeout $remote_limit sh -c 'cd /tmp && tar -xf - && chmod 755 /tmp/install-vps.remote.sh && rm -f $report_remote && { VPS_REMOTE_META_PATH=\"\$1\" REPAIR_REPORT_PATH=\"$report_remote\" timeout 90 sh /tmp/install-vps.remote.sh >/dev/null 2>&1; ec=\$?; cat $report_remote 2>/dev/null; exit \$ec; }' sh '$remote_meta_path'"
+		exec_cmd="timeout $remote_limit sh -c 'cd /tmp && tar -xf - && chmod 755 /tmp/install-vps.remote.sh && rm -f $report_remote && { VPS_CONTROL_CLIENT_IP=\"\$2\" VPS_REMOTE_META_PATH=\"\$1\" REPAIR_REPORT_PATH=\"$report_remote\" timeout 90 sh /tmp/install-vps.remote.sh >/dev/null 2>&1; ec=\$?; cat $report_remote 2>/dev/null; exit \$ec; }' sh '$remote_meta_path' '$control_client_ip'"
 		if ssh_stdin_cmd "$profile_id" "$exec_cmd" "$bundle_tar" > "$report_local"; then
 			ssh_rc=0
 		else
@@ -156,6 +157,14 @@ run_repair_pipeline() {
 		fi
 	fi
 	rm -rf "$stage"; rm -f "$bundle_tar"
+	if [ ! -s "$report_local" ]; then
+		# The installer may still restart the VPS xray (config change or a
+		# failed health check). A tunnel-riding control session then loses
+		# transport before the report is read, although the report file on
+		# the VPS is complete. Re-read it over a fresh session before
+		# declaring the pipeline incomplete; never replay the mutation.
+		ssh_read_cmd "$profile_id" "cat '$report_remote' 2>/dev/null" 20 </dev/null > "$report_local" 2>/dev/null || true
+	fi
 	log_step "repair pipeline finished with exit=$ssh_rc"
 
 	# A lost report cannot distinguish failed delivery from remote execution

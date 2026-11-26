@@ -211,6 +211,15 @@ runtime_try_start() {
 # before giving up with the real journal reason. Each escalation is
 # idempotent and bounded.
 step_runtime() {
+	# A healthy listener needs no restart. Restarting here kills a
+	# tunnel-riding control session mid-repair: the VPS xray carries both
+	# the data plane and the router's proxy path to the VPS loopback.
+	if systemctl is-active "$XRAY_SERVICE" >/dev/null 2>&1 \
+		&& ss -ltn 2>/dev/null | grep -q ":${XRAY_PORT} "; then
+		report runtime ok "xray is already active and listening on :${XRAY_PORT}; restart not needed"
+		return 0
+	fi
+
 	# Attempt 1: normal restart.
 	if runtime_try_start 15; then
 		report runtime ok "xray is active and listening on :${XRAY_PORT}"
@@ -267,10 +276,19 @@ step_runtime() {
 step_ssh_control_policy() {
 	local client_ip dropin='/etc/ssh/sshd_config.d/99-vpn-xray-control.conf'
 
-	client_ip="${SSH_CLIENT%% *}"
+	# The router passes its own public address because control may ride the
+	# Xray tunnel, where SSH_CLIENT is 127.0.0.1. Never use 127.* or the
+	# VPS's own address; fall back to SSH_CLIENT only for a real client.
+	client_ip="${VPS_CONTROL_CLIENT_IP:-}"
 	case "$client_ip" in
-		''|*[!0-9.]*) client_ip='' ;;
+		''|*[!0-9.]*|127.*|0.*) client_ip='' ;;
 	esac
+	if [ -z "$client_ip" ]; then
+		client_ip="${SSH_CLIENT%% *}"
+		case "$client_ip" in
+			''|*[!0-9.]*|127.*|0.*) client_ip='' ;;
+		esac
+	fi
 	command -v sshd >/dev/null 2>&1 || return 0
 	mkdir -p /etc/ssh/sshd_config.d || return 1
 	{

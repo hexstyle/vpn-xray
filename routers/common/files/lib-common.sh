@@ -88,6 +88,22 @@ uplink_internet_ok() {
 	return 1
 }
 
+# Resolve the router's public address for the VPS control-plane exemption.
+# Control may ride the Xray tunnel, so the VPS sees SSH_CLIENT=127.0.0.1;
+# never derive the exemption from that, and never use the VPS's own IP.
+router_external_ip() {
+	local cache="${VX_ROUTER_EXTERNAL_IP_CACHE:-/tmp/vpn-xray-router-external-ip}" ip=''
+
+	[ -s "$cache" ] && ip="$(sed -n '1p' "$cache" 2>/dev/null)"
+	case "$ip" in ''|*[!0-9.]*|127.*|0.*) ip='' ;; esac
+	if [ -z "$ip" ] && command -v curl >/dev/null 2>&1; then
+		ip="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+		case "$ip" in ''|*[!0-9.]*|127.*|0.*) ip='' ;; esac
+		[ -z "$ip" ] || printf '%s\n' "$ip" > "$cache" 2>/dev/null || true
+	fi
+	printf '%s\n' "$ip"
+}
+
 # --- JSON helpers ---
 
 json_escape() {
