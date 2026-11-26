@@ -158,7 +158,11 @@ grep -q 'REMOTE_dial_mode' "$ROOT/routers/common/files/xray-vps-inspect.sh" \
 grep -q 'XRAY_DIAL_MODE:-direct' "$ROOT/routers/common/files/xray-vps-inspect.sh" \
 	|| fail "legacy VPS metadata must normalize an absent dial mode to direct"
 grep -q 'for value in server_port server_name uuid public_key short_id flow dial_mode' "$ROOT/routers/common/files/xray-vps-actions.sh" \
-	|| fail "router profile must adopt VPS-authoritative dial mode"
+	&& fail "adoption must not overwrite the router-side dial mode"
+printf '%s' "$save_fn" | grep -q 'request_value dial_mode' \
+	|| fail "save_profile_from_request must accept an operator-selected dial mode"
+printf '%s' "$save_fn" | grep -q 'direct|ssh_tunnel' \
+	|| fail "save_profile_from_request must validate the dial mode"
 ! grep -q 'verify_profile_candidate' "$ROOT/routers/common/files/xray-vps-setup.sh" \
 	|| fail "external candidate health must not block selected configuration application"
 ! grep -q '^[[:space:]]*\. "\$CONFIG"' "$ROOT/routers/common/files/codex-xray-tunnel.init" \

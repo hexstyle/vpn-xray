@@ -100,6 +100,10 @@ set_mode_cutover_internal() {
 	local mode="$1" started signature resolved_sig warm_note=''
 
 	started="$(date +%s)"
+	# Tell the watchdog to stay off the path while the switch and transport
+	# are warming; it resumes normal recovery after this window.
+	mkdir -p /var/run 2>/dev/null || true
+	date +%s > /var/run/router-rules-mode-settled 2>/dev/null || true
 	set_xray_mode_internal "$mode" || return 1
 	set_sync_phase cutover_in_progress "Switching routing mode to ${mode} (in-place)"
 	if [ "$mode" = 'off' ]; then

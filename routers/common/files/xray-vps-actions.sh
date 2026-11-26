@@ -5,7 +5,7 @@
 # constants, and helper functions). Defines functions only; runs no code.
 
 save_profile_from_request() {
-	local current requested_id profile_id label vps_profile auth_mode ssh_host ssh_port ssh_user bootstrap_key managed_key_path
+	local current requested_id profile_id label vps_profile auth_mode ssh_host ssh_port ssh_user bootstrap_key managed_key_path dial_mode
 
 	SAVE_PROFILE_ERROR=''
 	SAVE_PROFILE_ID=''
@@ -21,6 +21,7 @@ save_profile_from_request() {
 	ssh_port="$(request_value ssh_port)"
 	ssh_user="$(request_value ssh_user)"
 	bootstrap_key="$(request_value bootstrap_private_key)"
+	dial_mode="$(request_value dial_mode)"
 	[ -n "$label" ] || label='VPS Profile'
 	[ -n "$vps_profile" ] || vps_profile="$(normalize_vps_profile "$(profile_get "$profile_id" vps_profile)")"
 	[ -n "$auth_mode" ] || auth_mode="$(profile_get "$profile_id" auth_mode)"
@@ -48,6 +49,15 @@ save_profile_from_request() {
 	profile_set "$profile_id" ssh_host "$ssh_host"
 	profile_set "$profile_id" ssh_port "$ssh_port"
 	profile_set "$profile_id" ssh_user "$ssh_user"
+	# Dial mode is a router-side transport choice, not VPS identity: the
+	# operator may select direct WS+TLS or the managed SSH tunnel. Never
+	# let remote meta silently overwrite it on the next inspection.
+	if [ -n "$dial_mode" ]; then
+		case "$dial_mode" in
+			direct|ssh_tunnel) profile_set "$profile_id" dial_mode "$dial_mode" || return 1 ;;
+			*) save_profile_fail 'Invalid dial mode.'; return 1 ;;
+		esac
+	fi
 	# The Xray identity is VPS-authoritative (DIAGNOSTIC-TREE 8.1). The
 	# Xray address is the SSH host; port/SNI/UUID/keys are never accepted
 	# from browser form state and are refreshed by remote inspection.
@@ -244,7 +254,11 @@ adopt_remote_into_profile() {
 	local cache value remote_value
 
 	cache="$(profile_cache_path "$profile_id")"
-	for value in server_port server_name uuid public_key short_id flow dial_mode; do
+	# dial_mode is deliberately excluded: it is the router's transport choice
+	# (direct vs managed SSH tunnel), not a VPS identity field. Adopting the
+	# VPS meta here would undo an operator's direct-mode switch on the next
+	# inspection.
+	for value in server_port server_name uuid public_key short_id flow; do
 		remote_value="$(cache_get "$cache" "REMOTE_${value}")"
 		[ -z "$remote_value" ] || profile_set "$profile_id" "$value" "$remote_value" || return 1
 	done

@@ -70,6 +70,7 @@ Meta-rules (enforced by review):
 | 5 | 5 | Router to VPS transport (WS+TLS) | router | disruptive | repin_render | watchdog+repin | — |
 | 5.6 | 5 | SSH control plane penalties / external-IP exemption | vps | safe | install | none | — |
 | 5.7 | 5 | SSH control rides the Xray tunnel | router | safe | apply_profile | none | — |
+| 5.8 | 5 | SSH data-tunnel concurrency limit | router | disruptive | save_profile | none | — |
 | 6 | 6 | VPS Xray runtime | vps | disruptive | repair_pipeline | none | — |
 | 7 | 7 | End-to-end: LAN client to internet via VPS | router | disruptive | walk | none | — |
 | 8 | 8 | Config coherence (profile = router = VPS) | router | disruptive | apply_profile | none | — |
@@ -399,8 +400,10 @@ curl -m 8 -x http://127.0.0.1:1083 https://api.ipify.org   # expect VPS IP
   resolved snapshot (or warms in a detached job when no snapshot exists).
   Lock wait is 8s, job timeout 25s, UI confirmation 45s. The SSH tunnel
   handshake is not part of the switch budget: Xray binds its local listeners
-  immediately and retries the WS dial while the tunnel connects; a genuinely
-  dead transport is still surfaced by the watchdog smoke. `disruptive`
+  immediately and retries the WS dial while the transport connects; a genuinely
+  dead transport is still surfaced by the watchdog smoke. The switch publishes
+  a 45-second settle window (`/var/run/router-rules-mode-settled`) so the
+  watchdog does not smoke/restart the path while it is warming. `disruptive`
   (firewall rebuild) in the detached mode job. Verify: mode changes complete
   in a few seconds without Xray/redsocks PID changes, and the selected
   dataplane works immediately after each switch.
@@ -513,18 +516,38 @@ python3 socket connect <VPS>:443                                  # data
   `PermitRootLogin prohibit-password`; validate with `sshd -t` and reload.
   `safe`. Verify: `sshd -T` shows the dynamic exempt and password auth off;
   a fresh router control command returns its full output; Apply/Repair pass.
+- 5.8 **Concurrent requests collapse through the SSH data tunnel** (2026-11-26).
+  Symptom: interactive calls and page loads stutter; ten simultaneous requests
+  through the router proxy return mostly `503` while sequential requests all
+  succeed; `codex-xray-error.log` shows bursts of
+  `failed to dial to 127.0.0.1:18443 > EOF`; the VPS journal logs TLS
+  handshake timeouts from `127.0.0.1`. Cause: the *data plane* was running
+  over one SSH `-L` forward. Many simultaneous TLS/WS handshakes share a single
+  TCP connection, so high RTT (≈180 ms) and any loss head-of-line-block the
+  handshakes past the server's timeout. The SSH tunnel was introduced for
+  the control plane, not for user traffic. Repair: set the router profile to
+  `dial_mode=direct` (WS+TLS straight to the VPS `:443`) and apply it through
+  `save_profile` + `apply_router`. Keep VPS control on the Xray proxy
+  (`xray-ssh-connect.py`, port 1083) regardless of dial mode, and never adopt
+  `dial_mode` from VPS metadata — it is a router-side transport choice. The
+  direct data plane removes the 18443 forward and its EOF bursts. Risk:
+  `disruptive` (runtime restart on apply). Verify: 10 and 20 concurrent proxy
+  requests all return 204; ChatGPT returns a complete body with VPS egress;
+  no `18443` listener/tunnel process remains; inspection/Apply/Repair still
+  complete through 1083.
 - 5.7 **External SSH session stalls after authentication** (2026-11-26).
   Symptom: with the tunnel healthy, a new external SSH command from the
   router returns its first line and then hangs; the same command through
   the Xray tunnel's VPS-localhost path works. Cause: the ISP/VPS path
   throttles or stalls new external interactive SSH sessions, while the
-  established tunnel is unaffected. Repair: when `dial_mode=ssh_tunnel`,
-  `ssh_cmd`/`ssh_stdin_cmd` use `xray-ssh-connect.py` as the SSH
-  `ProxyCommand` (HTTP CONNECT via the router's Xray proxy to the VPS's
-  `127.0.0.1:22`) so control/inspection reuse the tunnel; keep the direct
-  path as a fallback when the tunnel/Xray proxy is down. `safe`. Verify:
-  the router's inspection/Apply completes through the tunnel-localhost path
-  and the VPS journal records the session from `127.0.0.1`.
+  established data path is unaffected. Repair: whenever the Xray proxy on
+  `127.0.0.1:1083` is listening, `ssh_cmd`/`ssh_stdin_cmd` use
+  `xray-ssh-connect.py` as the SSH `ProxyCommand` (HTTP CONNECT via the
+  router's Xray proxy to the VPS's `127.0.0.1:22`) so control/inspection
+  ride the data path. This works for both `direct` and `ssh_tunnel` dial
+  modes; fall back to direct SSH only when Xray is down (software OFF).
+  `safe`. Verify: the router's inspection/Apply completes through the Xray
+  proxy path and the VPS journal records the session from `127.0.0.1`.
 - 5.5 **TCP :443 opens but TLS stalls only for selected SNI values.** Tell:
   plaintext sent to `:443` receives the server's HTTP-on-HTTPS rejection and
   TLS without SNI (or with a neutral control SNI) completes, while the
@@ -548,9 +571,13 @@ python3 socket connect <VPS>:443                                  # data
   while direct WS+TLS and raw/REALITY both stall, VPS capacity, destination
   blocking, Xray transport choice, Mux and profile drift are excluded. Also
   test a smaller `tcpMaxSeg`; do not keep it when loss is unchanged.
-  Repair for this confirmed case: set `XRAY_DIAL_MODE=ssh_tunnel` in the
-  authoritative VPS metadata, re-inspect/adopt it, and have a supervised
-  router SSH local-forward carry only the Xray server hop. The rendered Xray
+  Repair for this confirmed case (legacy workaround): set
+  `XRAY_DIAL_MODE=ssh_tunnel` on the router profile and have a supervised
+  router SSH local-forward carry only the Xray server hop. Note
+  (2026-11-26): on the current VPS the direct path was re-tested and carried
+  20 concurrent requests; the supervisor's single SSH connection is itself a
+  concurrency bottleneck (node 5.8), so prefer `direct` after re-testing.
+  The rendered Xray
   client dials loopback while status/coherence continue to report the VPS
   endpoint. The tunnel uses the profile's managed key, starts before Xray,
   respawns, and is removed automatically for direct profiles. Verify the

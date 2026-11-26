@@ -22,18 +22,15 @@ vps_run_bounded() {
 	vx_run_with_timeout "$limit" "$@"
 }
 
-# Control/inspection sessions ride the existing Xray tunnel to the VPS's
-# loopback when dial_mode=ssh_tunnel. External SSH sessions from the router
-# can be throttled or penalised (OpenSSH >=9.8 PerSourcePenalties, ISP
-# session policies); the tunnel's localhost path is the control plane that
-# is already proven by the data plane.
+# Control/inspection sessions ride the running Xray data path to the VPS's
+# loopback whenever the proxy is listening. This works for both dial modes:
+# direct WS+TLS and the managed SSH tunnel. Fall back to direct SSH when Xray
+# is down (for example software OFF).
 ssh_control_proxy_opts() {
-	local profile_id="$1" host="$2" mode script
+	local profile_id="$1" host="$2" script
 
 	SSH_CONTROL_PROXY_CMD=''
 	SSH_CONTROL_HOSTKEY_ALIAS=''
-	mode="$(profile_get "$profile_id" dial_mode)"
-	[ "$mode" = ssh_tunnel ] || return 0
 	script="${XRAY_SSH_CONNECT_PY:-/usr/share/vpn-xray/xray-ssh-connect.py}"
 	[ -x "$script" ] || return 0
 	command -v python3 >/dev/null 2>&1 || return 0

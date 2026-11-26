@@ -63,6 +63,19 @@ xray_software_off() {
 	[ "$(uci -q get router_rules.global.xray_mode 2>/dev/null)" = 'off' ]
 }
 
+# True for a short settle window after a mode switch. The watchdog must not
+# smoke/restart the path while Xray is binding listeners and the transport is
+# still warming, or it turns a normal switch into a self-inflicted outage.
+router_mode_switch_settling() {
+	local file='/var/run/router-rules-mode-settled' ts now max="${1:-45}"
+
+	[ -f "$file" ] || return 1
+	ts="$(cat "$file" 2>/dev/null || true)"
+	case "$ts" in ''|*[!0-9]*) return 1 ;; esac
+	now="$(date +%s)"
+	[ $((now - ts)) -le "$max" ]
+}
+
 # True while a UI mode switch is still inside its bounded budget. Watchdogs
 # use this to avoid racing the switch (starting/stopping the same daemons),
 # but resume normal recovery once the budget has elapsed.

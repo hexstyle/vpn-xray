@@ -14,6 +14,7 @@
 5||5|Router to VPS transport (WS+TLS)|router|disruptive|repin_render|watchdog+repin|path|
 5.6|5|5|SSH control plane penalties / external-IP exemption|vps|safe|install|none|config|
 5.7|5|5|SSH control rides the Xray tunnel|router|safe|apply_profile|none|config|
+5.8|5|5|SSH data-tunnel concurrency limit|router|disruptive|save_profile|none|path|
 6||6|VPS Xray runtime|vps|disruptive|repair_pipeline|none|vps|
 7||7|End-to-end: LAN client to internet via VPS|router|disruptive|walk|none|path|
 8||8|Config coherence (profile = router = VPS)|router|disruptive|apply_profile|none|config|

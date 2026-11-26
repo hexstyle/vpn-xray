@@ -238,6 +238,12 @@ while true; do
 	# Software OFF is a first-class state: the switch may still be ON, but
 	# the operator disabled redirection. Never fail-safe or restart the path.
 	if [ "$state" = on ] && ! xray_software_off; then
+		# A just-completed mode switch owns the path while Xray binds and the
+		# transport warms; smoking now would restart a healthy transition.
+		if router_mode_switch_settling 45; then
+			sleep 10
+			continue
+		fi
 		if config_ready && xray_failsafe_hold_active; then
 			xray_failsafe_enable "recovery hold active: $(xray_failsafe_state_value reason "$VX_FAILSAFE_HOLD")"
 			sleep 10

@@ -122,6 +122,9 @@ exit "$rc"
     for mode, expected_calls, success in [('first_loss',2,True),('always_loss',2,False),('partial_success',1,False),('auth',1,False),('host_key',1,False),('deadline',1,False)]:
         for name in ('inspect','profile'):
             shutil.rmtree(work/name,ignore_errors=True); (work/name).mkdir()
+        # dial_mode is a router-side choice: seed it and verify inspection
+        # does not overwrite it from VPS metadata.
+        (work/'profile/dial_mode').write_text('ssh_tunnel')
         cache=work/'inspect/default.env'; cache.write_text('old-valid-cache\n')
         private=work/'inspect/default.private'; private.write_text('old-private\n')
         (work/'calls').unlink(missing_ok=True)

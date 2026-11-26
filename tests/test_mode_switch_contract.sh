@@ -121,6 +121,10 @@ grep -q 'xray_software_off' "$WATCHDOG" \
 	|| fail "the watchdog must never resurrect a software-OFF path"
 grep -q 'router_mode_switch_running 30' "$WATCHDOG" \
 	|| fail "the watchdog must stand down while an in-budget mode switch owns the path"
+grep -q 'router_mode_switch_settling 45' "$WATCHDOG" \
+	|| fail "the watchdog must not smoke/restart while a switched path is warming"
+grep -q 'router-rules-mode-settled' "$MODE_LIB" \
+	|| fail "a mode switch must publish its settle window for the watchdog"
 grep -q 'wait_for_xray_runtime 6' "$ROOT/routers/gl-mt3000-glinet/files/codex-transproxy.init" \
 	|| fail "a cold mode switch must retry the Xray/tunnel start inside its budget"
 grep -q 'exec 9>&-' "$MODE_LIB" \

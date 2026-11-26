@@ -407,6 +407,7 @@ profile_cache_path() { echo "$FIXTURE_FS/inspected"; }
 profile_set() { printf '%s' "$3" > "$FIXTURE_FS/adopted-$2"; }
 private_cache_get() { :; }
 uci() { :; }
+printf 'ssh_tunnel' > "$FIXTURE_FS/adopted-dial_mode"
 remote_inspect_output default > "$FIXTURE_FS/inspected"
 adopt_remote_into_profile default
 ROUTER_ACCESS_LOG="$FIXTURE_FS/access.log"; ROUTER_ERROR_LOG="$FIXTURE_FS/error.log"
