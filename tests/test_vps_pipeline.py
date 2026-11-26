@@ -293,7 +293,7 @@ exit "$rc"
 
     # Lost upload response must not replay a mutation, even with another key.
     ssh_leaf = work/'ssh-loss'; ssh_leaf.mkdir()
-    (ssh_leaf/'ssh').write_text('#!/bin/sh\ncat >/dev/null\necho called >> "$UPLOAD_COUNT"\nwhile [ "$1" != -E ]; do shift; done; shift\necho "Timeout, server fixture not responding." > "$1"\nexit 255\n')
+    (ssh_leaf/'ssh').write_text('#!/bin/sh\ncat >/dev/null\necho read >> "$UPLOAD_COUNT"\nwhile [ "$1" != -E ]; do shift; done; shift\necho "Timeout, server fixture not responding." > "$1"\nexit 255\n')
     (ssh_leaf/'ssh').chmod(0o755)
     for name in ('managed-key','bootstrap-key'): (work/name).write_text('fixture')
     loss_owner = good_owner.replace('ssh_stdin_cmd() { "$PYTHON" "$TRANSPORT" "$2" "$3"; }', r'''
@@ -311,7 +311,9 @@ KNOWN_HOSTS="$CONTROL_KEYS/known-hosts"
     r = subprocess.run(['sh','-c',loss_owner], env=dict(env, CONTROL_KEYS=str(work),
         PATH=str(ssh_leaf)+':'+os.environ['PATH'],UPLOAD_COUNT=str(loss_count)),
         capture_output=True,text=True,timeout=15)
-    assert r.returncode==1 and loss_count.read_text().splitlines()==['called'], r
+    lost_lines = loss_count.read_text().splitlines()
+    assert r.returncode == 1 and lost_lines.count('called') == 1, r
+    assert all(line == 'read' for line in lost_lines if line != 'called'), r
     assert 'report=[]' in r.stdout
     Path(next(l[4:] for l in r.stdout.splitlines() if l.startswith('log='))).unlink()
     print('PASS: actual mutation pipeline/SSH wrapper execute once after lost response with two available keys')
