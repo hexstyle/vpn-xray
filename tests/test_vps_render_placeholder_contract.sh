@@ -100,6 +100,17 @@ printf '%s' "$router_cfg" | grep -q '"security": "tls"' \
 printf '%s' "$router_cfg" | grep -q '"security": "reality"' \
 	&& fail "render_router_config still emits reality — transport mismatch with the WS+TLS VPS (node 8.5)"
 
+# Node 4.1a: the selected-profile renderer must emit the UDP TPROXY inbound
+# that the transproxy firewall targets. The legacy install template had it;
+# omitting it in the renderer blackholes selected QUIC/WebRTC/call datagrams
+# into a closed 127.0.0.1:1086 (Udp NoPorts grows) and forces apps onto TCP.
+printf '%s' "$router_cfg" | grep -q '"protocol": "dokodemo-door"' \
+	|| fail "render_router_config must emit the dokodemo-door UDP TPROXY inbound (node 4.1a)"
+printf '%s' "$router_cfg" | grep -q '"tproxy": "tproxy"' \
+	|| fail "render_router_config UDP inbound must enable the tproxy sockopt (node 4.1a)"
+printf '%s' "$router_cfg" | grep -q 'transparent-udp' \
+	|| fail "render_router_config UDP inbound must carry the transparent-udp tag (node 4.1a)"
+
 # Node 8.2 guard: applying a router config must refuse when TLS-critical
 # profile fields are empty (empty serverName → cert validated against the IP).
 apply_fn="$(sed -n '/^apply_profile_to_router_internal()/,/^}/p' "$SETUP_LIB")"

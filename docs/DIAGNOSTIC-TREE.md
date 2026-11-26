@@ -63,6 +63,7 @@ Meta-rules (enforced by review):
 | 3 | 3 | Router uplink has internet | router | disruptive | uplink_reselect | hotplug | G2 |
 | 4 | 4 | Router Xray runtime up | router | disruptive | restart_runtime | watchdog | — |
 | 4.1 | 4 | Transparent proxy (redsocks + nat) | router | disruptive | transproxy_restart | watchdog | — |
+| 4.1a | 4 | Transparent UDP (QUIC/WebRTC/calls) | router | disruptive | apply_profile | none | — |
 | 5 | 5 | Router to VPS transport (WS+TLS) | router | disruptive | repin_render | watchdog+repin | — |
 | 6 | 6 | VPS Xray runtime | vps | disruptive | repair_pipeline | none | — |
 | 7 | 7 | End-to-end: LAN client to internet via VPS | router | disruptive | walk | none | — |
@@ -247,6 +248,22 @@ curl -m 8 -x http://127.0.0.1:1083 https://api.ipify.org   # expect VPS IP
 **Causes / Repair**:
 - 4.1 **xray-core down / not listening** → `/etc/init.d/codex-xray restart`.
   `disruptive`
+- 4.1a **Selected UDP destinations are blackholed** (2026-11-26). Symptom:
+  TCP browsing still works, but QUIC/WebRTC and call media to selectively
+  routed destinations stall or fall back to TCP; `/proc/net/snmp` shows
+  `Udp: ... NoPorts` growing; `nft list chain inet vpn_xray_dynamic
+  udp_prerouting` and `iptables -t mangle -S CODEX_TPROXY` both TPROXY to
+  `127.0.0.1:1086`, while `netstat -lnup | grep 1086` is empty and the
+  effective `/etc/xray/codex-xray.json` has only the 1083/1084 inbounds.
+  Cause: the selected-profile renderer (`render_router_config`) emitted the
+  HTTP and SOCKS inbounds but dropped the legacy template's
+  `dokodemo-door` `transparent-udp` inbound, so every selected UDP datagram
+  was delivered to a closed local port. Repair: render the UDP inbound with
+  the UCI tproxy port (default 1086) and `sockopt.tproxy=tproxy`, then apply
+  the selected profile (disruptive, detached). Verify: 1086 is listening,
+  the rendered JSON contains the inbound, a LAN UDP probe to a selected
+  destination is relayed (NoPorts stops growing), and the TCP path still
+  returns the VPS egress IP. `disruptive` (Xray restart).
 - 4.2 **transproxy chains missing** (`CODEX_TRANSPROXY` absent from
   PREROUTING) → `/etc/init.d/codex-transproxy restart`. `disruptive`
 - 4.3 **Failsafe stuck on** (`/var/run/codex-xray-failsafe` exists, clients

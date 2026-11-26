@@ -132,6 +132,14 @@ grep -q 'ip daddr "@\$NFT_SET" counter redirect' "$TRANSPROXY_INIT" \
 grep -q 'tproxy ip to "127.0.0.1:\$tproxy_port"' "$TRANSPROXY_INIT" \
 	|| fail "codex-transproxy.init must TPROXY dynamically learned UDP destinations"
 
+# Node 4.1a: the health probe must not depend on a standalone `timeout`
+# binary (OpenWrt ships BusyBox without it); the old unconditional call made
+# cok=0 forever while the WAN was fine. wget -T is the portable bound.
+grep -q 'wget -T 3' "$HEALTH_MONITOR" \
+	|| fail "xray-health-monitor WAN probe must use wget -T (node 4.7a/4.1a)"
+grep -q 'timeout 3 wget' "$HEALTH_MONITOR" \
+	&& fail "xray-health-monitor must not invoke the missing timeout binary for the WAN probe (node 4.7a)"
+
 grep -q 'ROUTER_RULES_SYNC_ACTOR=boot' "$ROOT/routers/common/files/router-rules-sync.init" \
 	|| fail "router-rules-sync init must run an immediate boot-time apply-xray refresh"
 

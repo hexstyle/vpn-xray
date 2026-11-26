@@ -46,7 +46,10 @@ with tempfile.TemporaryDirectory() as td:
     template = profile / 'files/install-vps.remote.sh'
     runtime = profile / 'files/install-vps-runtime.remote.sh'
     assembled = template.read_text() + runtime.read_text()
-    baseline = subprocess.check_output(['git', 'show', 'HEAD:vps/debian-13/files/install-vps.remote.sh'],
+    # Baseline = the pre-split installer (parent of the commit that split it
+    # into template + runtime parts). HEAD now holds the split template part,
+    # so `HEAD:...install-vps.remote.sh` is no longer the full baseline.
+    baseline = subprocess.check_output(['git', 'show', '40e4401^:vps/debian-13/files/install-vps.remote.sh'],
                                        cwd=ROOT, text=True)
     without_capacity = lambda s: re.sub(r'^step_tcp_capacity\(\) \{.*?^\}\n', '', s, flags=re.M | re.S)
     assert without_capacity(assembled) == without_capacity(baseline), 'unrelated pipeline behavior/order changed'
@@ -394,6 +397,7 @@ adopt_remote_into_profile default
 ROUTER_ACCESS_LOG="$FIXTURE_FS/access.log"; ROUTER_ERROR_LOG="$FIXTURE_FS/error.log"
 ROUTER_HTTP_PORT=1083; ROUTER_SOCKS_PORT=1084
 render_router_config "$FIXTURE_FS/client.json" default
+python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); u=[i for i in c["inbounds"] if i.get("protocol")=="dokodemo-door"]; assert len(u)==1 and u[0]["port"]==1086 and u[0]["streamSettings"]["sockopt"]["tproxy"]=="tproxy", c["inbounds"]' "$FIXTURE_FS/client.json"
 '''
     marker = work/'metadata-must-not-execute'
     quoted_path = '/server\'s "quoted" \\path/$(touch '+str(marker)+')'

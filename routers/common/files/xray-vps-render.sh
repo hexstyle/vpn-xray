@@ -16,10 +16,24 @@ effective_server_name() {
 	printf '%s' "$v"
 }
 
+# The UDP TPROXY hook in codex-transproxy sends selected UDP to this port.
+# Keep the renderer and the firewall on one source of truth (UCI, default
+# 1086); an omitted UDP inbound blackholes QUIC/WebRTC/call datagrams
+# (Udp NoPorts grows) and forces apps onto the much slower TCP tunnel.
+router_tproxy_udp_port() {
+	local port
+
+	port="$(uci -q get router_rules.global.xray_tproxy_udp_port 2>/dev/null)"
+	case "$port" in
+		''|*[!0-9]*) port=1086 ;;
+	esac
+	printf '%s\n' "$port"
+}
+
 render_router_config() {
 	local path="$1"
 	local profile_id="$2"
-	local server_address server_port server_name uuid public_key short_id flow user_flow_line ws_path dial_mode
+	local server_address server_port server_name uuid public_key short_id flow user_flow_line ws_path dial_mode tproxy_udp_port
 
 	server_address="$(profile_get "$profile_id" server_address)"
 	server_port="$(profile_get "$profile_id" server_port)"
@@ -35,6 +49,7 @@ render_router_config() {
 	flow="$(profile_get "$profile_id" flow)"
 	ws_path="$(profile_get "$profile_id" ws_path)"
 	[ -n "$ws_path" ] || ws_path='/cdn'
+	tproxy_udp_port="$(router_tproxy_udp_port)"
 	user_flow_line=''
 	if [ -n "$flow" ]; then
 		user_flow_line="$(printf ',\n                "flow": "%s"' "$flow")"
@@ -74,6 +89,27 @@ render_router_config() {
         "destOverride": [
           "http",
           "tls"
+        ]
+      }
+    },
+    {
+      "tag": "transparent-udp",
+      "listen": "0.0.0.0",
+      "port": ${tproxy_udp_port},
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "udp",
+        "followRedirect": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "quic"
         ]
       }
     }

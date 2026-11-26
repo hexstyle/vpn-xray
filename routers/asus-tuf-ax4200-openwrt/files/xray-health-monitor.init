@@ -178,7 +178,7 @@ while true; do
 	rpid=$(cat /var/run/redsocks.pid 2>/dev/null) || rpid=""
 	[ -n "$rpid" ] && kill -0 "$rpid" 2>/dev/null && rup=1 || rup=0
 
-	if timeout 3 wget -q -O /dev/null http://connectivitycheck.gstatic.com/generate_204 2>/dev/null; then
+	if wget -T 3 -q -O /dev/null http://connectivitycheck.gstatic.com/generate_204 2>/dev/null; then
 		cok=1
 	else
 		cok=0
